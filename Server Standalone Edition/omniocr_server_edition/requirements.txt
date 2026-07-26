@@ -1,0 +1,15 @@
+# Core Dependencies (Same as Master Edition)
+numpy
+opencv-python
+pytesseract
+torch
+Pillow
+reportlab
+python-docx
+
+# Server/API/Queue
+fastapi
+uvicorn
+redis
+rq # Redis Queue for local async tasks
+python-multipart # For file uploads

@@ -1,0 +1,36 @@
+version: '3.8'
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    command: redis-server --requirepass your_strong_redis_password
+
+  frontend:
+    build: ./frontend_ui
+    ports: ["8501:8501"]
+    environment:
+      - REDIS_URL=redis://:your_strong_redis_password@redis:6379/0
+
+  backend_api:
+    build: ./backend_worker
+    command: uvicorn worker_api:app --host 0.0.0.0 --port 8000
+    depends_on: [redis]
+
+  ocr_worker:
+    build: ./backend_worker
+    # Enable GPU access for the worker
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on: [redis, backend_api]
+    # Command to run Celery worker (defined in Dockerfile)
+    environment:
+      - REDIS_URL=redis://:your_strong_redis_password@redis:6379/0
+      - TESSERACT_PATH=/usr/bin/tesseract
+      # Mount custom models
+    volumes:
+      - ./data/models:/app/data/models:ro
