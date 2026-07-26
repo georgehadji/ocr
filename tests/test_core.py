@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from omniocr.application.pipeline import (
     InMemoryPage,
+    NullRouter,
     PipelineOrchestrator,
     SuggestOnlyCorrector,
     SetLexicon,
@@ -10,6 +11,7 @@ from omniocr.application.pipeline import (
 from omniocr.domain.models import (
     BBox,
     Confidence,
+    OCRBlock,
     OCRLine,
     PipelineEvent,
     Script,
@@ -233,3 +235,39 @@ def test_pipeline_publishes_terminal_page_events() -> None:
 
     assert result.is_ok()
     assert events == [PipelineEvent("page_completed", 1)]
+
+
+def test_pipeline_extracts_each_engine_once_and_assigns_blocks_to_segments() -> None:
+    class TwoLineLayout:
+        def segment(self, page, context):
+            return Ok(
+                (
+                    OCRLine("segment-1", "", Confidence(0), BBox(0, 0, 50, 20)),
+                    OCRLine("segment-2", "", Confidence(0), BBox(0, 30, 50, 20)),
+                )
+            )
+
+    class PageEngine:
+        name = "page-engine"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def extract(self, page, context):
+            self.calls += 1
+            return Ok(
+                (
+                    OCRBlock("top", "top", Confidence(90), BBox(2, 2, 20, 10)),
+                    OCRBlock("bottom", "bottom", Confidence(80), BBox(2, 32, 20, 10)),
+                )
+            )
+
+    engine = PageEngine()
+    result = PipelineOrchestrator(
+        layout_analyzer=TwoLineLayout(),
+        router=NullRouter(engine),
+    ).run(b"page")
+
+    assert result.is_ok()
+    assert engine.calls == 1
+    assert [line.text for line in result.value.pages[0].lines] == ["top", "bottom"]

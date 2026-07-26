@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Sequence
+from typing import TypeVar
 
 
-def _edit_distance(reference: str, hypothesis: str) -> int:
+Token = TypeVar("Token")
+
+
+def _edit_distance(reference: Sequence[Token], hypothesis: Sequence[Token]) -> int:
     previous = list(range(len(hypothesis) + 1))
     for reference_index, reference_character in enumerate(reference, start=1):
         current = [reference_index]

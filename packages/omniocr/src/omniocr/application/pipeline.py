@@ -10,6 +10,7 @@ from omniocr.domain.models import (
     DocumentPage,
     DocumentStructure,
     OCRLine,
+    OCRBlock,
     PageFailure,
     PipelineEvent,
     Script,
@@ -273,14 +274,19 @@ class PipelineOrchestrator:
 
         page_lines: list[OCRLine] = []
         suggestions: list[Suggestion] = []
+        engine_results: dict[int, Sequence[OCRBlock]] = {}
         for segment in segments.value:
             engines = self._router.route(segment, context)
             candidate_lines: list[OCRLine] = []
             for engine in engines:
-                extracted = engine.extract(processed.value, context)
-                if extracted.is_err():
-                    continue
-                for block in extracted.value:
+                engine_key = id(engine)
+                if engine_key not in engine_results:
+                    extracted = engine.extract(processed.value, context)
+                    engine_results[engine_key] = extracted.value if extracted.is_ok() else ()
+                blocks = engine_results[engine_key]
+                for block in blocks:
+                    if not self._boxes_overlap(segment.bbox, block.bbox):
+                        continue
                     candidate_lines.append(
                         OCRLine(
                             id=f"{segment.id}-{block.id}",
@@ -309,6 +315,15 @@ class PipelineOrchestrator:
             height=getattr(raw_page, "height", 1),
             lines=tuple(page_lines),
             suggestions=tuple(suggestions),
+        )
+
+    @staticmethod
+    def _boxes_overlap(first: BBox, second: BBox) -> bool:
+        return (
+            first.x < second.right
+            and second.x < first.right
+            and first.y < second.bottom
+            and second.y < first.bottom
         )
 
     def export(

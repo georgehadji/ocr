@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 import hashlib
 from time import monotonic
 
@@ -22,12 +22,13 @@ class RetryingEngine(IOCREngine):
 
     def extract(
         self, page: RawPage, context: TenantContext
-    ) -> Result[tuple[OCRBlock, ...], EngineError]:
+    ) -> Result[Sequence[OCRBlock], EngineError]:
         last_error: EngineError | None = None
         for _ in range(self.attempts):
             result = self.engine.extract(page, context)
-            if result.is_ok():
+            if isinstance(result, Ok):
                 return Ok(tuple(result.value))
+            assert isinstance(result, Err)
             last_error = result.error
         return Err(last_error or EngineError(f"{self.name} failed"))
 
@@ -56,7 +57,7 @@ class CircuitBreakerEngine(IOCREngine):
 
     def extract(
         self, page: RawPage, context: TenantContext
-    ) -> Result[tuple[OCRBlock, ...], EngineError]:
+    ) -> Result[Sequence[OCRBlock], EngineError]:
         now = self._clock()
         if self._opened_at is not None:
             if now - self._opened_at < self._reset_timeout:
@@ -64,10 +65,11 @@ class CircuitBreakerEngine(IOCREngine):
             self._opened_at = None
 
         result = self.engine.extract(page, context)
-        if result.is_ok():
+        if isinstance(result, Ok):
             self._failures = 0
             return Ok(tuple(result.value))
 
+        assert isinstance(result, Err)
         self._failures += 1
         if self._failures >= self._failure_threshold:
             self._opened_at = now
@@ -84,7 +86,7 @@ class CachingEngine(IOCREngine):
 
     def extract(
         self, page: RawPage, context: TenantContext
-    ) -> Result[tuple[OCRBlock, ...], EngineError]:
+    ) -> Result[Sequence[OCRBlock], EngineError]:
         digest = hashlib.sha256(page.content).hexdigest()
         key = "|".join(
             (
@@ -97,10 +99,11 @@ class CachingEngine(IOCREngine):
         if cached is not None:
             return Ok(cached)
         result = self.engine.extract(page, context)
-        if result.is_ok():
+        if isinstance(result, Ok):
             cached_result = tuple(result.value)
             self._cache[key] = cached_result
             return Ok(cached_result)
+        assert isinstance(result, Err)
         return Err(result.error)
 
 

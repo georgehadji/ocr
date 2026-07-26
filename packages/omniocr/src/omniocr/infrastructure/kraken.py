@@ -41,7 +41,9 @@ class KrakenLayoutAnalyzer(ILayoutAnalyzer):
 
             segmenter = self._segmenter
             if segmenter is None:
-                from kraken.pageseg import segment as segmenter
+                from kraken.pageseg import segment as kraken_segment
+
+                segmenter = kraken_segment
 
             image = Image.open(io.BytesIO(page.content))
             segmentation = segmenter(image)
