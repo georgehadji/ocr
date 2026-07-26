@@ -15,6 +15,7 @@ from omniocr.domain.models import (
     ModelRef,
     OCRBlock,
     OCRLine,
+    RegionType,
     Script,
     TenantContext,
 )
@@ -55,6 +56,8 @@ class KrakenLayoutAnalyzer(ILayoutAnalyzer):
                     confidence=Confidence(0.0),
                     bbox=BBox(*self._bounds(record, page.width, page.height)),
                     script=self._script,
+                    region_type=self._region_type(record),
+                    reading_order=index + 1,
                 )
                 for index, record in enumerate(records)
             )
@@ -75,6 +78,19 @@ class KrakenLayoutAnalyzer(ILayoutAnalyzer):
                 x, y = min(xs), min(ys)
                 return x, y, max(1, max(xs) - x), max(1, max(ys) - y)
         return 0, 0, max(1, page_width), max(1, page_height)
+
+    @staticmethod
+    def _region_type(record: Any) -> RegionType:
+        """Map a Kraken record's category attribute to a RegionType value."""
+        raw = getattr(record, "category", None)
+        if raw is None and isinstance(record, dict):
+            raw = record.get("category")
+        if raw is None:
+            return RegionType.UNKNOWN
+        try:
+            return RegionType(raw.lower().replace("-", "_"))
+        except ValueError:
+            return RegionType.UNKNOWN
 
 
 class KrakenEngine(IOCREngine):

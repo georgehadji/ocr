@@ -14,8 +14,14 @@ def test_kraken_layout_analyzer_preserves_order_and_line_geometry() -> None:
     def segmenter(image):
         return SimpleNamespace(
             lines=(
-                SimpleNamespace(boundary=((20, 40), (120, 40), (120, 60), (20, 60))),
-                SimpleNamespace(boundary=((10, 10), (100, 10), (100, 30), (10, 30))),
+                SimpleNamespace(
+                    boundary=((20, 40), (120, 40), (120, 60), (20, 60)),
+                    category="main",
+                ),
+                SimpleNamespace(
+                    boundary=((10, 10), (100, 10), (100, 30), (10, 30)),
+                    category="apparatus",
+                ),
             )
         )
 
@@ -31,3 +37,7 @@ def test_kraken_layout_analyzer_preserves_order_and_line_geometry() -> None:
     assert result.value[0].bbox.x == 20
     assert result.value[0].bbox.y == 40
     assert result.value[1].script == Script.POLYTONIC
+    assert result.value[0].region_type.value == "main"
+    assert result.value[1].region_type.value == "apparatus"
+    assert result.value[0].reading_order == 1
+    assert result.value[1].reading_order == 2

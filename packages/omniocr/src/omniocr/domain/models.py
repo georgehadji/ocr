@@ -46,6 +46,21 @@ class Script(str, Enum):
     UNKNOWN = "unknown"
 
 
+class RegionType(str, Enum):
+    """Page region classification for critical-edition layout.
+
+    Kraken pageseg returns these as the ``category`` attribute on each record.
+    """
+
+    MAIN_TEXT = "main"
+    APPARATUS = "apparatus"
+    SCHOLIA = "scholia"
+    RUNNING_HEAD = "running_head"
+    FOOTNOTE = "footnote"
+    MARGIN = "margin"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class ModelRef:
     engine: str
@@ -106,6 +121,8 @@ class OCRLine:
     confidence: Confidence
     bbox: BBox
     script: Script = Script.UNKNOWN
+    region_type: RegionType = RegionType.UNKNOWN
+    reading_order: int = 0
     blocks: Tuple[OCRBlock, ...] = field(default_factory=tuple)
     provenance: EngineRun | None = None
 

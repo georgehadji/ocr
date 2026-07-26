@@ -73,6 +73,8 @@ class AltoXmlExporter(IExporter):
                         "HEIGHT": str(line.bbox.h),
                         "WC": f"{line.confidence.value / 100:.6f}",
                         "SCRIPT": line.script.value,
+                        "REGION_TYPE": line.region_type.value,
+                        "READING_ORDER": str(line.reading_order),
                     }
                     if line.provenance is not None:
                         attrs.update(
@@ -128,7 +130,9 @@ class PageXmlExporter(IExporter):
                         f"{line.bbox.right},{line.bbox.bottom} "
                         f"{line.bbox.x},{line.bbox.bottom}"
                     )
-                    text_line = ET.SubElement(text_region, "TextLine", {"id": line.id})
+                    text_line = ET.SubElement(
+                        text_region, "TextLine", {"id": line.id, "regionType": line.region_type.value}
+                    )
                     ET.SubElement(text_line, "Coords", {"points": points})
                     if line.provenance is not None:
                         user_defined = ET.SubElement(text_line, "UserDefined")
