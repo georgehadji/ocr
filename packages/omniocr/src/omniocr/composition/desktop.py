@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from omniocr.application.pipeline import PipelineOrchestrator, SingleLineLayoutAnalyzer
+from omniocr.application.pipeline import PipelineOrchestrator
 from omniocr.infrastructure.tesseract import TesseractEngine
 from omniocr.infrastructure.ingest import DocumentPageSource
 from omniocr.infrastructure.preprocess import GrayscaleProcessor
@@ -14,8 +14,16 @@ from omniocr.infrastructure.jobs import InMemoryJobStore
 from omniocr.ports.interfaces import IExporter, IJobStore
 
 
-def create_desktop_pipeline() -> PipelineOrchestrator:
-    return PipelineOrchestrator(exporter=MarkdownExporter(), job_store=InMemoryJobStore())
+def create_desktop_pipeline(
+    script: Script = Script.UNKNOWN,
+    exporter: IExporter | None = None,
+    job_store: IJobStore | None = None,
+) -> PipelineOrchestrator:
+    return PipelineOrchestrator(
+        layout_analyzer=KrakenLayoutAnalyzer(script),
+        exporter=exporter or MarkdownExporter(),
+        job_store=job_store or InMemoryJobStore(),
+    )
 
 
 def create_tesseract_pipeline(
@@ -58,7 +66,7 @@ def create_ensemble_pipeline(
     return PipelineOrchestrator(
         page_source=DocumentPageSource(),
         image_processor=GrayscaleProcessor(),
-        layout_analyzer=SingleLineLayoutAnalyzer(script),
+        layout_analyzer=KrakenLayoutAnalyzer(script),
         router=router,
         reconciler=ConfidenceWeightedReconciler(),
         exporter=exporter or MarkdownExporter(),

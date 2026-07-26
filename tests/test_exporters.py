@@ -127,7 +127,8 @@ def test_searchable_pdf_export_adds_text_layer_to_original_pdf() -> None:
     output.close()
 
 
-def test_searchable_pdf_export_requires_explicit_font_for_unicode_text() -> None:
+def test_searchable_pdf_auto_detects_or_requires_unicode_font() -> None:
+    """Auto-detect a system font for Greek; fail only when none is available."""
     fitz = __import__("pytest").importorskip("fitz")
     source = fitz.open()
     source.new_page(width=100, height=100)
@@ -148,5 +149,9 @@ def test_searchable_pdf_export_requires_explicit_font_for_unicode_text() -> None
         TenantContext("o", "u", "desktop"),
     )
 
-    assert result.is_err()
-    assert "font_path" in str(result.error)
+    if result.is_ok():
+        output = fitz.open(stream=result.value, filetype="pdf")
+        assert "ἄνθρωπος" in output[0].get_text()
+        output.close()
+    else:
+        assert "font_path" in str(result.error)

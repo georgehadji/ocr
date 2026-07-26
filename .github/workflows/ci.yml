@@ -6,10 +6,11 @@ on:
 
 jobs:
   test:
-    name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +32,12 @@ jobs:
         run: python scripts/check_license_isolation.py
       - name: Test CER regression gate
         run: python -m pytest tests/test_regression.py -v
+      - name: Check security (bandit)
+        run: python -m bandit -r packages/omniocr/src/omniocr -s B101
+        if: runner.os == 'ubuntu'
+      - name: Check dependency vulnerabilities (pip-audit)
+        run: python -m pip_audit
+        if: runner.os == 'ubuntu'
 
   package:
     name: Build package

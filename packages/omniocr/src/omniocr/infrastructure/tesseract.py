@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from omniocr.domain.errors import EngineError
 from omniocr.domain.models import BBox, Confidence, EngineRun, ModelRef, OCRBlock, TenantContext
 from omniocr.domain.result import Err, Ok, Result
+from omniocr.infrastructure.models import sha256_file
 from omniocr.ports.interfaces import IOCREngine, RawPage
 
 
@@ -15,13 +17,28 @@ class TesseractEngine(IOCREngine):
 
     Imports for Pillow and pytesseract are intentionally lazy so the core package
     remains importable when the optional ``tesseract`` extra is not installed.
+
+    When ``model_path`` is given, the engine hashes the traineddata file at init
+    and embeds the digest in every ``EngineRun`` for reproducibility (§1.6).
+    Desktop callers that lack a known path should leave it ``None`` — the hash
+    will be recorded as ``"unknown"``, which is acceptable for development.
     """
 
     name = "tesseract"
 
-    def __init__(self, language: str = "eng", config: str = "") -> None:
+    def __init__(
+        self,
+        language: str = "eng",
+        config: str = "",
+        model_path: str | Path | None = None,
+    ) -> None:
         self.language = language
         self.config = config
+        self._model_hash: str = "unknown"
+        if model_path is not None:
+            resolved = Path(model_path)
+            if resolved.is_file():
+                self._model_hash = sha256_file(resolved)
 
     def extract(
         self, page: RawPage, context: TenantContext
@@ -50,10 +67,10 @@ class TesseractEngine(IOCREngine):
             model_ref=ModelRef(
                 engine=self.name,
                 model_name=self.language,
-                model_hash="unknown",
+                model_hash=self._model_hash,
                 params=(self.config,),
             ),
-            model_hash="unknown",
+            model_hash=self._model_hash,
             params=(self.config,),
             timestamp=timestamp,
         )
