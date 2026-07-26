@@ -102,3 +102,28 @@ def test_searchable_pdf_export_adds_text_layer_to_original_pdf() -> None:
     output = fitz.open(stream=result.value, filetype="pdf")
     assert "searchable text" in output[0].get_text()
     output.close()
+
+
+def test_searchable_pdf_export_requires_explicit_font_for_unicode_text() -> None:
+    fitz = __import__("pytest").importorskip("fitz")
+    source = fitz.open()
+    source.new_page(width=100, height=100)
+    source_pdf = source.tobytes()
+    source.close()
+
+    result = SearchablePdfExporter(source_pdf).export(
+        DocumentStructure(
+            (
+                DocumentPage(
+                    1,
+                    100,
+                    100,
+                    (OCRLine("line-1", "ἄνθρωπος", Confidence(90), BBox(10, 10, 80, 20)),),
+                ),
+            )
+        ),
+        TenantContext("o", "u", "desktop"),
+    )
+
+    assert result.is_err()
+    assert "font_path" in str(result.error)

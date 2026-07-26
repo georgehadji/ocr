@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from omniocr.domain.errors import ExportError
@@ -99,8 +100,9 @@ class AltoXmlExporter(IExporter):
 class SearchablePdfExporter(IExporter):
     """Overlay invisible OCR text on the original PDF page images."""
 
-    def __init__(self, source_pdf: bytes) -> None:
+    def __init__(self, source_pdf: bytes, font_path: str | Path | None = None) -> None:
         self._source_pdf = source_pdf
+        self._font_path = Path(font_path) if font_path is not None else None
 
     def export(
         self, document: DocumentStructure, context: TenantContext
@@ -112,6 +114,11 @@ class SearchablePdfExporter(IExporter):
             try:
                 if len(pdf) < len(document.pages):
                     return Err(ExportError("OCR document has more pages than the source PDF"))
+                font_name = "helv"
+                if self._font_path is not None:
+                    if not self._font_path.is_file():
+                        return Err(ExportError(f"Unicode PDF font not found: {self._font_path}"))
+                    font_name = "omniocr-unicode"
                 for index, ocr_page in enumerate(document.pages):
                     page = pdf[index]
                     x_scale = page.rect.width / max(1, ocr_page.width)
@@ -119,6 +126,14 @@ class SearchablePdfExporter(IExporter):
                     for line in ocr_page.lines:
                         if not line.text:
                             continue
+                        if any(ord(character) > 127 for character in line.text):
+                            if self._font_path is None:
+                                return Err(
+                                    ExportError(
+                                        "Unicode OCR text requires a font_path with Greek glyph coverage"
+                                    )
+                                )
+                            page.insert_font(fontname=font_name, fontfile=str(self._font_path))
                         rect = fitz.Rect(
                             line.bbox.x * x_scale,
                             line.bbox.y * y_scale,
@@ -130,7 +145,7 @@ class SearchablePdfExporter(IExporter):
                             (rect.x0, rect.y1 - max(2.0, fontsize * 0.2)),
                             line.text,
                             fontsize=fontsize,
-                            fontname="helv",
+                            fontname=font_name,
                             render_mode=3,
                             overlay=True,
                         )
