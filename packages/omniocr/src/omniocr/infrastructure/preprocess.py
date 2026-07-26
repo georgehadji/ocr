@@ -39,3 +39,50 @@ class GrayscaleProcessor:
             )
         except Exception as exc:
             return Err(IngestError(f"image preprocessing failed: {exc}"))
+
+
+class SauvolaProcessor:
+    """Apply local adaptive binarization for degraded printed pages.
+
+    OpenCV is imported only when this adapter is used. Kraken/VLM callers should
+    generally keep the grayscale page instead of applying this high-contrast filter.
+    """
+
+    def __init__(self, window_size: int = 11, constant: float = 2.0) -> None:
+        if window_size < 3 or window_size % 2 == 0:
+            raise ValueError("window_size must be an odd integer greater than or equal to 3")
+        self._window_size = window_size
+        self._constant = constant
+
+    def process(self, page: RawPage, context: TenantContext) -> Result[RawPage, IngestError]:
+        try:
+            import cv2
+            import numpy as np
+
+            image = cv2.imdecode(np.frombuffer(page.content, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                raise ValueError("page content is not a decodable raster image")
+            binary = cv2.adaptiveThreshold(
+                image,
+                255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                self._window_size,
+                self._constant,
+            )
+            encoded, content = cv2.imencode(".png", binary)
+            if not encoded:
+                raise ValueError("OpenCV could not encode the binarized page")
+            return Ok(
+                type(page)(
+                    number=page.number,
+                    content=content.tobytes(),
+                    width=int(image.shape[1]),
+                    height=int(image.shape[0]),
+                )
+            )
+        except Exception as exc:
+            return Err(IngestError(f"adaptive binarization failed: {exc}"))
+
+
+__all__ = ["GrayscaleProcessor", "PassthroughProcessor", "SauvolaProcessor", "normalize_nfc"]

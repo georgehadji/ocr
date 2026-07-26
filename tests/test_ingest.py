@@ -4,7 +4,7 @@ from PIL import Image
 
 from omniocr.domain.models import TenantContext
 from omniocr.infrastructure.ingest import DocumentPageSource
-from omniocr.infrastructure.preprocess import GrayscaleProcessor
+from omniocr.infrastructure.preprocess import GrayscaleProcessor, SauvolaProcessor
 
 
 def _png_bytes() -> bytes:
@@ -23,3 +23,15 @@ def test_grayscale_processor_emits_png_with_same_dimensions() -> None:
     processed = GrayscaleProcessor().process(page, TenantContext("org", "user", "desktop"))
     assert processed.is_ok()
     assert (processed.value.width, processed.value.height) == (12, 8)
+
+
+def test_sauvola_processor_emits_binarized_png_with_same_dimensions() -> None:
+    pytest = __import__("pytest")
+    pytest.importorskip("cv2")
+    page = next(DocumentPageSource().stream(_png_bytes()))
+
+    processed = SauvolaProcessor().process(page, TenantContext("org", "user", "desktop"))
+
+    assert processed.is_ok()
+    assert (processed.value.width, processed.value.height) == (12, 8)
+    assert processed.value.content != page.content
