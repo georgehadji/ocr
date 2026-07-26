@@ -9,6 +9,7 @@ from omniocr.infrastructure.preprocess import GrayscaleProcessor
 from omniocr.infrastructure.resilience import RetryingEngine
 from omniocr.infrastructure.events import InMemoryEventBus
 from omniocr.infrastructure.models import sha256_file, verify_model_hash
+from omniocr.infrastructure.security import validate_upload
 
 __all__ = [
     "DocumentPageSource",
@@ -19,4 +20,5 @@ __all__ = [
     "sha256_file",
     "TesseractEngine",
     "verify_model_hash",
+    "validate_upload",
 ]
