@@ -3,6 +3,7 @@ from __future__ import annotations
 import unicodedata
 
 from omniocr.domain.models import TenantContext
+from omniocr.infrastructure.ingest import ImagePage
 import io
 
 from omniocr.domain.result import Err, Ok, Result
@@ -30,7 +31,7 @@ class GrayscaleProcessor:
             output = io.BytesIO()
             image.save(output, format="PNG")
             return Ok(
-                type(page)(
+                ImagePage(
                     number=page.number,
                     content=output.getvalue(),
                     width=image.width,
@@ -74,7 +75,7 @@ class SauvolaProcessor:
             if not encoded:
                 raise ValueError("OpenCV could not encode the binarized page")
             return Ok(
-                type(page)(
+                ImagePage(
                     number=page.number,
                     content=content.tobytes(),
                     width=int(image.shape[1]),

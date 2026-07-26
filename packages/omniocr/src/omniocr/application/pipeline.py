@@ -221,12 +221,12 @@ class PipelineOrchestrator:
             organization_id="default", user_id="system", subscription_tier="desktop"
         )
         checkpoint_id = job_id or resume_job_id
-        checkpoint = (
-            self._job_store.load(resume_job_id or job_id)
-            if self._job_store is not None and (resume_job_id or job_id) is not None
-            else None
+        loaded_checkpoint = None
+        if self._job_store is not None and checkpoint_id is not None:
+            loaded_checkpoint = self._job_store.load(checkpoint_id)
+        pages: list[DocumentPage] = (
+            list(loaded_checkpoint.pages) if loaded_checkpoint is not None else []
         )
-        pages: list[DocumentPage] = list(checkpoint.pages) if checkpoint is not None else []
         completed_numbers = {page.number for page in pages}
         try:
             page_stream = self._page_source.stream(document)
@@ -253,11 +253,11 @@ class PipelineOrchestrator:
                 completed_numbers.add(raw_page.number)
 
                 if self._job_store is not None and checkpoint_id is not None:
-                    checkpoint = self._job_store.checkpoint(
+                    checkpoint_result = self._job_store.checkpoint(
                         checkpoint_id, DocumentStructure(pages=tuple(pages))
                     )
-                    if checkpoint.is_err():
-                        return Err(checkpoint.error)
+                    if isinstance(checkpoint_result, Err):
+                        return Err(checkpoint_result.error)
         except PipelineError as exc:
             return Err(exc)
 
@@ -265,24 +265,30 @@ class PipelineOrchestrator:
 
     def _process_page(self, raw_page: RawPage, context: TenantContext) -> DocumentPage:
         processed = self._image_processor.process(raw_page, context)
-        if processed.is_err():
+        if isinstance(processed, Err):
             raise processed.error
+        assert isinstance(processed, Ok)
+        processed_page = processed.value
 
-        segments = self._layout_analyzer.segment(processed.value, context)
-        if segments.is_err():
+        segments = self._layout_analyzer.segment(processed_page, context)
+        if isinstance(segments, Err):
             raise segments.error
+        assert isinstance(segments, Ok)
+        segment_values = segments.value
 
         page_lines: list[OCRLine] = []
         suggestions: list[Suggestion] = []
         engine_results: dict[int, Sequence[OCRBlock]] = {}
-        for segment in segments.value:
+        for segment in segment_values:
             engines = self._router.route(segment, context)
             candidate_lines: list[OCRLine] = []
             for engine in engines:
                 engine_key = id(engine)
                 if engine_key not in engine_results:
-                    extracted = engine.extract(processed.value, context)
-                    engine_results[engine_key] = extracted.value if extracted.is_ok() else ()
+                    extracted = engine.extract(processed_page, context)
+                    engine_results[engine_key] = (
+                        extracted.value if isinstance(extracted, Ok) else ()
+                    )
                 blocks = engine_results[engine_key]
                 for block in blocks:
                     if not self._boxes_overlap(segment.bbox, block.bbox):
@@ -301,12 +307,15 @@ class PipelineOrchestrator:
             if not candidate_lines:
                 candidate_lines.append(segment)
             chosen = self._reconciler.reconcile(candidate_lines, context)
-            if chosen.is_err():
+            if isinstance(chosen, Err):
                 raise chosen.error
-            corrections = self._post_corrector.correct(chosen.value, context)
-            if corrections.is_err():
+            assert isinstance(chosen, Ok)
+            chosen_line = chosen.value
+            corrections = self._post_corrector.correct(chosen_line, context)
+            if isinstance(corrections, Err):
                 raise corrections.error
-            page_lines.append(chosen.value)
+            assert isinstance(corrections, Ok)
+            page_lines.append(chosen_line)
             suggestions.extend(corrections.value)
 
         return DocumentPage(
@@ -333,6 +342,7 @@ class PipelineOrchestrator:
             organization_id="default", user_id="system", subscription_tier="desktop"
         )
         result = self._exporter.export(document, ctx)
-        if result.is_err():
+        if isinstance(result, Err):
             return Err(result.error)
+        assert isinstance(result, Ok)
         return Ok(result.value)

@@ -8,10 +8,17 @@ from omniocr.domain.errors import EngineError, ExportError, IngestError, LayoutE
 
 
 class RawPage(Protocol):
-    number: int
-    content: bytes
-    width: int
-    height: int
+    @property
+    def number(self) -> int: ...
+
+    @property
+    def content(self) -> bytes: ...
+
+    @property
+    def width(self) -> int: ...
+
+    @property
+    def height(self) -> int: ...
 
 
 class IPageSource(Protocol):
