@@ -4,12 +4,75 @@ import hashlib
 import io
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Iterable, Sequence
 
-from omniocr.domain.errors import EngineError
-from omniocr.domain.models import BBox, Confidence, EngineRun, ModelRef, OCRBlock, TenantContext
+from omniocr.domain.errors import EngineError, LayoutError
+from omniocr.domain.models import (
+    BBox,
+    Confidence,
+    EngineRun,
+    ModelRef,
+    OCRBlock,
+    OCRLine,
+    Script,
+    TenantContext,
+)
 from omniocr.domain.result import Err, Ok, Result
-from omniocr.ports.interfaces import IOCREngine, RawPage
+from omniocr.ports.interfaces import ILayoutAnalyzer, IOCREngine, RawPage
+
+
+class KrakenLayoutAnalyzer(ILayoutAnalyzer):
+    """Convert Kraken's ordered line segmentation into immutable OCR lines."""
+
+    def __init__(
+        self,
+        script: Script = Script.UNKNOWN,
+        segmenter: Callable[[Any], Any] | None = None,
+    ) -> None:
+        self._script = script
+        self._segmenter = segmenter
+
+    def segment(
+        self, page: RawPage, context: TenantContext
+    ) -> Result[Sequence[OCRLine], LayoutError]:
+        try:
+            from PIL import Image
+
+            segmenter = self._segmenter
+            if segmenter is None:
+                from kraken.pageseg import segment as segmenter
+
+            image = Image.open(io.BytesIO(page.content))
+            segmentation = segmenter(image)
+            records = getattr(segmentation, "lines", segmentation)
+            lines = tuple(
+                OCRLine(
+                    id=f"line-{index + 1}",
+                    text="",
+                    confidence=Confidence(0.0),
+                    bbox=BBox(*self._bounds(record, page.width, page.height)),
+                    script=self._script,
+                )
+                for index, record in enumerate(records)
+            )
+            return Ok(lines)
+        except Exception as exc:
+            return Err(LayoutError(f"Kraken layout segmentation failed: {exc}"))
+
+    @staticmethod
+    def _bounds(record: Any, page_width: int, page_height: int) -> tuple[int, int, int, int]:
+        geometry = getattr(record, "boundary", None) or getattr(record, "polygon", None)
+        if geometry is None and isinstance(record, dict):
+            geometry = record.get("boundary") or record.get("polygon")
+        if geometry:
+            points = list(geometry)
+            if points and isinstance(points[0], (tuple, list)):
+                xs = [int(point[0]) for point in points]
+                ys = [int(point[1]) for point in points]
+                x, y = min(xs), min(ys)
+                return x, y, max(1, max(xs) - x), max(1, max(ys) - y)
+        return 0, 0, max(1, page_width), max(1, page_height)
 
 
 class KrakenEngine(IOCREngine):
@@ -97,4 +160,4 @@ class KrakenEngine(IOCREngine):
             return "unavailable"
 
 
-__all__ = ["KrakenEngine"]
+__all__ = ["KrakenEngine", "KrakenLayoutAnalyzer"]

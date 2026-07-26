@@ -8,7 +8,7 @@ from omniocr.infrastructure.resilience import RetryingEngine
 from omniocr.application.reconcile import ConfidenceWeightedReconciler
 from omniocr.domain.models import OCRLine, Script, TenantContext
 from omniocr.application.router import ScriptRouter
-from omniocr.infrastructure.kraken import KrakenEngine
+from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
 from omniocr.infrastructure.exporters import MarkdownExporter
 from omniocr.infrastructure.jobs import InMemoryJobStore
 from omniocr.ports.interfaces import IExporter, IJobStore
@@ -28,7 +28,7 @@ def create_tesseract_pipeline(
     return PipelineOrchestrator(
         page_source=DocumentPageSource(),
         image_processor=GrayscaleProcessor(),
-        layout_analyzer=SingleLineLayoutAnalyzer(script),
+        layout_analyzer=KrakenLayoutAnalyzer(script),
         router=_TesseractRouter(TesseractEngine(language)),
         reconciler=ConfidenceWeightedReconciler(),
         exporter=exporter or MarkdownExporter(),
