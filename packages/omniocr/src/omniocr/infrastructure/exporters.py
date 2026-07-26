@@ -97,6 +97,73 @@ class AltoXmlExporter(IExporter):
             return Err(ExportError(f"ALTO export failed: {exc}"))
 
 
+class PageXmlExporter(IExporter):
+    """Export positional OCR as PAGE-XML for archival and training workflows."""
+
+    def export(
+        self, document: DocumentStructure, context: TenantContext
+    ) -> Result[bytes, ExportError]:
+        try:
+            root = ET.Element(
+                "PcGts",
+                {"xmlns": "http://schema.primaresearch.org/PAGE/gts/pagecontent/2019-07-15"},
+            )
+            for page in document.pages:
+                page_element = ET.SubElement(
+                    root,
+                    "Page",
+                    {
+                        "imageWidth": str(page.width),
+                        "imageHeight": str(page.height),
+                        "imageFilename": f"page-{page.number}",
+                    },
+                )
+                text_region = ET.SubElement(
+                    page_element, "TextRegion", {"id": f"region-{page.number}"}
+                )
+                for line in page.lines:
+                    points = (
+                        f"{line.bbox.x},{line.bbox.y} "
+                        f"{line.bbox.right},{line.bbox.y} "
+                        f"{line.bbox.right},{line.bbox.bottom} "
+                        f"{line.bbox.x},{line.bbox.bottom}"
+                    )
+                    text_line = ET.SubElement(text_region, "TextLine", {"id": line.id})
+                    ET.SubElement(text_line, "Coords", {"points": points})
+                    if line.provenance is not None:
+                        user_defined = ET.SubElement(text_line, "UserDefined")
+                        ET.SubElement(
+                            user_defined,
+                            "UserAttribute",
+                            {"name": "engine", "value": line.provenance.engine},
+                        )
+                        ET.SubElement(
+                            user_defined,
+                            "UserAttribute",
+                            {
+                                "name": "model",
+                                "value": line.provenance.model_ref.model_name,
+                            },
+                        )
+                        ET.SubElement(
+                            user_defined,
+                            "UserAttribute",
+                            {"name": "modelHash", "value": line.provenance.model_hash},
+                        )
+                    unicode_element = ET.SubElement(text_line, "TextEquiv")
+                    ET.SubElement(
+                        unicode_element,
+                        "Unicode",
+                        {
+                            "conf": f"{line.confidence.value / 100:.6f}",
+                            "script": line.script.value,
+                        },
+                    ).text = line.text
+            return Ok(ET.tostring(root, encoding="utf-8", xml_declaration=True))
+        except (TypeError, ValueError, ET.ParseError) as exc:
+            return Err(ExportError(f"PAGE-XML export failed: {exc}"))
+
+
 class SearchablePdfExporter(IExporter):
     """Overlay invisible OCR text on the original PDF page images."""
 
@@ -194,4 +261,10 @@ class DocxExporter(IExporter):
             return Err(ExportError(f"DOCX export failed: {exc}"))
 
 
-__all__ = ["AltoXmlExporter", "DocxExporter", "MarkdownExporter", "SearchablePdfExporter"]
+__all__ = [
+    "AltoXmlExporter",
+    "DocxExporter",
+    "MarkdownExporter",
+    "PageXmlExporter",
+    "SearchablePdfExporter",
+]

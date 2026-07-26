@@ -13,7 +13,6 @@ from omniocr.domain.models import (
     Confidence,
     OCRBlock,
     OCRLine,
-    PipelineEvent,
     Script,
     Suggestion,
     TenantContext,
@@ -234,7 +233,10 @@ def test_pipeline_publishes_terminal_page_events() -> None:
     result = PipelineOrchestrator(event_bus=bus).run(b"document")
 
     assert result.is_ok()
-    assert events == [PipelineEvent("page_completed", 1)]
+    assert len(events) == 1
+    assert events[0].event_type == "page_completed"
+    assert events[0].page_number == 1
+    assert events[0].duration_ms >= 0
 
 
 def test_pipeline_extracts_each_engine_once_and_assigns_blocks_to_segments() -> None:

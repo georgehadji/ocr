@@ -2,10 +2,23 @@ from __future__ import annotations
 
 import unicodedata
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TypeVar
 
 
 Token = TypeVar("Token")
+
+
+@dataclass(frozen=True, slots=True)
+class RegressionBaseline:
+    """Reviewed CER/WER values for one engine and script fixture."""
+
+    cer: float
+    wer: float
+
+    def __post_init__(self) -> None:
+        if self.cer < 0 or self.wer < 0:
+            raise ValueError("regression metrics must not be negative")
 
 
 def _edit_distance(reference: Sequence[Token], hypothesis: Sequence[Token]) -> int:
@@ -41,4 +54,24 @@ def word_error_rate(reference: str, hypothesis: str) -> float:
     return _edit_distance(reference_words, hypothesis_words) / len(reference_words)
 
 
-__all__ = ["character_error_rate", "word_error_rate"]
+def regression_exceeded(
+    reference: str,
+    hypothesis: str,
+    baseline: RegressionBaseline,
+    tolerance: float = 0.0,
+) -> bool:
+    """Return whether either error rate exceeds its reviewed baseline."""
+    if tolerance < 0:
+        raise ValueError("tolerance must not be negative")
+    return (
+        character_error_rate(reference, hypothesis) > baseline.cer + tolerance
+        or word_error_rate(reference, hypothesis) > baseline.wer + tolerance
+    )
+
+
+__all__ = [
+    "RegressionBaseline",
+    "character_error_rate",
+    "regression_exceeded",
+    "word_error_rate",
+]

@@ -13,7 +13,12 @@ from omniocr.domain.models import (
     Script,
     TenantContext,
 )
-from omniocr.infrastructure.exporters import AltoXmlExporter, DocxExporter, MarkdownExporter
+from omniocr.infrastructure.exporters import (
+    AltoXmlExporter,
+    DocxExporter,
+    MarkdownExporter,
+    PageXmlExporter,
+)
 from omniocr.infrastructure.exporters import SearchablePdfExporter
 
 
@@ -27,6 +32,24 @@ def test_docx_exporter_writes_a_package_with_requested_font() -> None:
 
     assert result.is_ok()
     assert result.value.startswith(b"PK")
+
+
+def test_page_xml_export_contains_coordinates_text_and_confidence() -> None:
+    result = PageXmlExporter().export(_document(), TenantContext("o", "u", "desktop"))
+
+    assert result.is_ok()
+    root = ET.fromstring(result.value)
+    text_line = next(element for element in root.iter() if element.tag.endswith("TextLine"))
+    coords = next(element for element in root.iter() if element.tag.endswith("Coords"))
+    unicode_element = next(element for element in root.iter() if element.tag.endswith("Unicode"))
+    user_attributes = [
+        element.attrib["value"] for element in root.iter() if element.tag.endswith("UserAttribute")
+    ]
+    assert text_line.attrib["id"] == "line-1"
+    assert coords.attrib["points"] == "10,20 310,20 310,60 10,60"
+    assert unicode_element.attrib["conf"] == "0.875000"
+    assert unicode_element.text is not None
+    assert user_attributes == ["tesseract", "ell", "hash-1"]
 
 
 def _document() -> DocumentStructure:

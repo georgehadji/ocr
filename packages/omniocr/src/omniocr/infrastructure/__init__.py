@@ -8,6 +8,7 @@ from omniocr.infrastructure.kraken import KrakenEngine
 from omniocr.infrastructure.preprocess import GrayscaleProcessor
 from omniocr.infrastructure.resilience import RetryingEngine
 from omniocr.infrastructure.events import InMemoryEventBus
+from omniocr.infrastructure.models import sha256_file, verify_model_hash
 
 __all__ = [
     "DocumentPageSource",
@@ -15,5 +16,7 @@ __all__ = [
     "InMemoryEventBus",
     "KrakenEngine",
     "RetryingEngine",
+    "sha256_file",
     "TesseractEngine",
+    "verify_model_hash",
 ]

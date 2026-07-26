@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 import unicodedata
 from typing import Iterator, Mapping, Sequence
 from omniocr.domain.errors import EngineError, ExportError, IngestError, LayoutError, PipelineError
@@ -233,6 +234,7 @@ class PipelineOrchestrator:
             for raw_page in page_stream:
                 if raw_page.number in completed_numbers:
                     continue
+                started_at = perf_counter()
                 try:
                     page = self._process_page(raw_page, ctx)
                 except PipelineError as exc:
@@ -244,11 +246,22 @@ class PipelineOrchestrator:
                     )
                     if self._event_bus is not None:
                         self._event_bus.publish(
-                            PipelineEvent("page_failed", raw_page.number, str(exc))
+                            PipelineEvent(
+                                "page_failed",
+                                raw_page.number,
+                                str(exc),
+                                (perf_counter() - started_at) * 1000,
+                            )
                         )
                 else:
                     if self._event_bus is not None:
-                        self._event_bus.publish(PipelineEvent("page_completed", raw_page.number))
+                        self._event_bus.publish(
+                            PipelineEvent(
+                                "page_completed",
+                                raw_page.number,
+                                duration_ms=(perf_counter() - started_at) * 1000,
+                            )
+                        )
                 pages.append(page)
                 completed_numbers.add(raw_page.number)
 

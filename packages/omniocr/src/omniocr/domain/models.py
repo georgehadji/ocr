@@ -87,6 +87,7 @@ class PipelineEvent:
     event_type: str
     page_number: int
     detail: str = ""
+    duration_ms: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
