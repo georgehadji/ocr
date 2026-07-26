@@ -19,6 +19,7 @@ from omniocr.domain.models import (
     TenantContext,
 )
 from omniocr.domain.result import Err, Ok, Result
+from omniocr.infrastructure.lexicon import SetLexicon
 from omniocr.ports.interfaces import (
     IEventBus,
     IExporter,
@@ -88,19 +89,15 @@ class FirstCandidateReconciler:
         return Ok(candidates[0])
 
 
-class SetLexicon:
-    """Small in-memory lexicon adapter suitable for tests and bundled vocabularies."""
-
-    def __init__(self, name: str, words: Sequence[str]) -> None:
-        self.name = name
-        self._words = frozenset(words)
-
-    def contains(self, token: str) -> bool:
-        return token in self._words
-
-
 class SuggestOnlyCorrector:
     """Run conservative checks while preserving the recognized source text."""
+
+    _BREATHING_MARKS: frozenset[str] = frozenset(
+        ["\u0313", "\u0314"]  # smooth, rough
+    )
+    _ACCENT_MARKS: frozenset[str] = frozenset(
+        ["\u0300", "\u0301", "\u0342"]  # grave, acute, circumflex/perispomeni
+    )
 
     def __init__(
         self,
@@ -170,7 +167,50 @@ class SuggestOnlyCorrector:
                         )
                     )
 
+        diacritic_issues = self._check_diacritics(line.text)
+        for issue in diacritic_issues:
+            suggestions.append(
+                Suggestion(
+                    line_id=line.id,
+                    source_text=line.text,
+                    suggestion_text=line.text,
+                    reason=issue,
+                    reversible=True,
+                )
+            )
+
         return Ok(tuple(suggestions))
+
+    @staticmethod
+    def _check_diacritics(text: str) -> list[str]:
+        """Check for impossible polytonic diacritic combinations.
+
+        Returns a list of reason strings, one per detected violation.
+        """
+        issues: list[str] = []
+        nfd = unicodedata.normalize("NFD", text)
+        index = 0
+        while index < len(nfd):
+            character = nfd[index]
+            if unicodedata.category(character) in ("Mn", "Mc"):
+                index += 1
+                continue
+            # Count combining marks on this base character
+            breathing = 0
+            accents = 0
+            index += 1
+            while index < len(nfd) and unicodedata.category(nfd[index]) in ("Mn", "Mc"):
+                mark = nfd[index]
+                if mark in SuggestOnlyCorrector._BREATHING_MARKS:
+                    breathing += 1
+                elif mark in SuggestOnlyCorrector._ACCENT_MARKS:
+                    accents += 1
+                index += 1
+            if breathing > 1:
+                issues.append("multiple_breathing_marks")
+            if accents > 1:
+                issues.append("multiple_accent_marks")
+        return issues
 
 
 class PlainTextExporter:

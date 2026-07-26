@@ -5,9 +5,9 @@ from omniocr.application.pipeline import (
     NullRouter,
     PipelineOrchestrator,
     SuggestOnlyCorrector,
-    SetLexicon,
     build_document,
 )
+from omniocr.infrastructure.lexicon import SetLexicon
 from omniocr.domain.models import (
     BBox,
     Confidence,
@@ -141,6 +141,96 @@ def test_suggest_only_corrector_expands_configured_ligatures_reversibly() -> Non
     assert configured.value[0].suggestion_text == "και λόγος"
     assert configured.value[0].reversible
     assert line.text == source
+
+
+def test_diacritic_validator_flags_multiple_breathing_marks() -> None:
+    """NFD decomposition with two breathing marks on one base triggers a suggestion."""
+    # Build a string with two combining breathing marks on alpha.
+    alpha_with_two_breathings = (
+        "\u03b1"  # alpha
+        "\u0313"  # smooth breathing
+        "\u0314"  # rough breathing — impossible combination
+    )
+    line = OCRLine(
+        id="line-diacritic",
+        text=alpha_with_two_breathings,
+        confidence=Confidence(90),
+        bbox=BBox(0, 0, 10, 10),
+        script=Script.POLYTONIC,
+    )
+    result = SuggestOnlyCorrector().correct(line, TenantContext("org", "user", "desktop"))
+    assert result.is_ok()
+    reasons = {s.reason for s in result.value}
+    assert "multiple_breathing_marks" in reasons
+
+
+def test_diacritic_validator_flags_multiple_accent_marks() -> None:
+    """NFD decomposition with two accent marks on one base triggers a suggestion."""
+    alpha_with_two_accents = (
+        "\u03b1"  # alpha
+        "\u0300"  # grave
+        "\u0301"  # acute — impossible combination
+    )
+    line = OCRLine(
+        id="line-accents",
+        text=alpha_with_two_accents,
+        confidence=Confidence(90),
+        bbox=BBox(0, 0, 10, 10),
+        script=Script.POLYTONIC,
+    )
+    result = SuggestOnlyCorrector().correct(line, TenantContext("org", "user", "desktop"))
+    assert result.is_ok()
+    reasons = {s.reason for s in result.value}
+    assert "multiple_accent_marks" in reasons
+
+
+def test_diacritic_validator_passes_legitimate_polytonic_text() -> None:
+    """Precomposed polytonic Greek with valid diacritics triggers no diacritic issue."""
+    line = OCRLine(
+        id="line-valid",
+        text="ἄνθρωπος",  # precomposed: alpha with smooth + acute, valid
+        confidence=Confidence(90),
+        bbox=BBox(0, 0, 100, 10),
+        script=Script.POLYTONIC,
+    )
+    result = SuggestOnlyCorrector().correct(line, TenantContext("org", "user", "desktop"))
+    assert result.is_ok()
+    reasons = {s.reason for s in result.value}
+    assert "multiple_breathing_marks" not in reasons
+    assert "multiple_accent_marks" not in reasons
+
+
+def test_bundled_byzantine_lexicon_recognises_known_words() -> None:
+    """Byzantine lexicon: known liturgical words pass, unknown words flagged."""
+    from omniocr.infrastructure.lexicons import byzantine_lexicon
+
+    lexicon = byzantine_lexicon()
+    assert lexicon.contains("θεοτόκος")
+    assert lexicon.contains("εὐαγγέλιον")
+    assert lexicon.contains("λειτουργία")
+    assert not lexicon.contains("ἄγνωστος")
+
+
+def test_bundled_pontian_lexicon_recognises_known_words() -> None:
+    """Pontian lexicon: known dialect words pass, standard Greek words flagged."""
+    from omniocr.infrastructure.lexicons import pontian_lexicon
+
+    lexicon = pontian_lexicon()
+    assert lexicon.contains("εμάν")
+    assert lexicon.contains("τραγωδώ")
+    assert lexicon.contains("ψωμίν")
+    assert not lexicon.contains("ἄνθρωπος")
+
+
+def test_lexicons_by_script_returns_mapping() -> None:
+    """lexicons_by_script() returns a non-empty mapping of Script→lexicon."""
+    from omniocr.infrastructure.lexicons import lexicons_by_script
+
+    mapping = lexicons_by_script()
+    assert Script.BYZANTINE in mapping
+    assert Script.PONTIAN in mapping
+    assert mapping[Script.BYZANTINE].name == "byzantine"
+    assert mapping[Script.PONTIAN].name == "pontian"
 
 
 def test_pipeline_checkpoints_each_completed_page() -> None:

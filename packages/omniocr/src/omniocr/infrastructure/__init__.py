@@ -4,6 +4,7 @@ from omniocr.infrastructure.exporters import AltoXmlExporter, DocxExporter, Mark
 from omniocr.infrastructure.ingest import DocumentPageSource
 from omniocr.infrastructure.jobs import InMemoryJobStore, SQLiteJobStore
 from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
+from omniocr.infrastructure.lexicon import SetLexicon
 from omniocr.infrastructure.models import sha256_file, verify_model_hash
 from omniocr.infrastructure.preprocess import GrayscaleProcessor, PassthroughProcessor, SauvolaProcessor, normalize_nfc
 from omniocr.infrastructure.resilience import CachingEngine, CircuitBreakerEngine, RetryingEngine
@@ -28,6 +29,7 @@ __all__ = [
     "RetryingEngine",
     "SauvolaProcessor",
     "SearchablePdfExporter",
+    "SetLexicon",
     "Settings",
     "sha256_file",
     "SQLiteJobStore",

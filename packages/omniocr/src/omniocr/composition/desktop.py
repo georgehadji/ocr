@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from omniocr.application.pipeline import PipelineOrchestrator
+from omniocr.application.pipeline import PipelineOrchestrator, SuggestOnlyCorrector
 from omniocr.infrastructure.tesseract import TesseractEngine
 from omniocr.infrastructure.ingest import DocumentPageSource
 from omniocr.infrastructure.preprocess import GrayscaleProcessor
@@ -11,6 +11,7 @@ from omniocr.application.router import ScriptRouter
 from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
 from omniocr.infrastructure.exporters import MarkdownExporter
 from omniocr.infrastructure.jobs import InMemoryJobStore
+from omniocr.infrastructure.lexicons import lexicons_by_script
 from omniocr.ports.interfaces import IExporter, IJobStore
 
 
@@ -39,6 +40,7 @@ def create_tesseract_pipeline(
         layout_analyzer=KrakenLayoutAnalyzer(script),
         router=_TesseractRouter(TesseractEngine(language)),
         reconciler=ConfidenceWeightedReconciler(),
+        post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
         exporter=exporter or MarkdownExporter(),
         job_store=job_store or InMemoryJobStore(),
     )
@@ -69,6 +71,7 @@ def create_ensemble_pipeline(
         layout_analyzer=KrakenLayoutAnalyzer(script),
         router=router,
         reconciler=ConfidenceWeightedReconciler(),
+        post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
         exporter=exporter or MarkdownExporter(),
         job_store=job_store or InMemoryJobStore(),
     )
