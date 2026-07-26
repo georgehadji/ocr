@@ -16,7 +16,9 @@ class RetryingEngine(IOCREngine):
         self.attempts = attempts
         self.name = engine.name
 
-    def extract(self, page: RawPage, context: TenantContext) -> Result[tuple[OCRBlock, ...], EngineError]:
+    def extract(
+        self, page: RawPage, context: TenantContext
+    ) -> Result[tuple[OCRBlock, ...], EngineError]:
         last_error: EngineError | None = None
         for _ in range(self.attempts):
             result = self.engine.extract(page, context)

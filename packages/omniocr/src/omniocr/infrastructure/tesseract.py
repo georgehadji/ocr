@@ -23,7 +23,9 @@ class TesseractEngine(IOCREngine):
         self.language = language
         self.config = config
 
-    def extract(self, page: RawPage, context: TenantContext) -> Result[Sequence[OCRBlock], EngineError]:
+    def extract(
+        self, page: RawPage, context: TenantContext
+    ) -> Result[Sequence[OCRBlock], EngineError]:
         try:
             from PIL import Image
             import pytesseract

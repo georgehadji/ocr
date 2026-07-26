@@ -73,6 +73,14 @@ class Suggestion:
 
 
 @dataclass(frozen=True, slots=True)
+class PageFailure:
+    """A page-local failure retained for review without aborting the job."""
+
+    error_type: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
 class OCRBlock:
     id: str
     text: str
@@ -105,6 +113,7 @@ class DocumentPage:
     height: int
     lines: Tuple[OCRLine, ...] = field(default_factory=tuple)
     suggestions: Tuple[Suggestion, ...] = field(default_factory=tuple)
+    failures: Tuple[PageFailure, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,4 +131,3 @@ class TenantContext:
     user_id: str
     subscription_tier: str
     custom_model_id: str | None = None
-

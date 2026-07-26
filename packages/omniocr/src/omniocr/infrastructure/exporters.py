@@ -143,4 +143,40 @@ class SearchablePdfExporter(IExporter):
             return Err(ExportError(f"searchable PDF export failed: {exc}"))
 
 
-__all__ = ["AltoXmlExporter", "MarkdownExporter", "SearchablePdfExporter"]
+class DocxExporter(IExporter):
+    """Export OCR text to DOCX without changing the recognized source text."""
+
+    def __init__(self, font_name: str = "Gentium Plus") -> None:
+        self._font_name = font_name
+
+    def export(
+        self, document: DocumentStructure, context: TenantContext
+    ) -> Result[bytes, ExportError]:
+        try:
+            from io import BytesIO
+
+            from docx import Document
+            from docx.oxml.ns import qn
+
+            output = BytesIO()
+            doc = Document()
+            style = doc.styles["Normal"]
+            style.font.name = self._font_name
+            style._element.rPr.rFonts.set(qn("w:eastAsia"), self._font_name)
+            for page_index, page in enumerate(document.pages):
+                if page_index:
+                    doc.add_page_break()
+                for line in page.lines:
+                    paragraph = doc.add_paragraph()
+                    run = paragraph.add_run(line.text)
+                    run.font.name = self._font_name
+                    run._element.rPr.rFonts.set(qn("w:eastAsia"), self._font_name)
+            doc.save(output)
+            return Ok(output.getvalue())
+        except ImportError:
+            return Err(ExportError("DOCX export requires the optional 'docx' dependency"))
+        except (AttributeError, OSError, ValueError) as exc:
+            return Err(ExportError(f"DOCX export failed: {exc}"))
+
+
+__all__ = ["AltoXmlExporter", "DocxExporter", "MarkdownExporter", "SearchablePdfExporter"]

@@ -4,6 +4,7 @@ from omniocr.application.pipeline import (
     InMemoryPage,
     PipelineOrchestrator,
     SuggestOnlyCorrector,
+    SetLexicon,
     build_document,
 )
 from omniocr.domain.models import BBox, Confidence, OCRLine, Script, Suggestion, TenantContext
@@ -84,6 +85,27 @@ def test_nfc_corrector_only_emits_a_suggestion_when_text_changes() -> None:
     assert result.value == ()
 
 
+def test_suggest_only_corrector_highlights_unknown_words_without_rewriting_source() -> None:
+    source = "γνωστή άγνωστη"
+    line = OCRLine(
+        id="line-lexicon",
+        text=source,
+        confidence=Confidence(90),
+        bbox=BBox(0, 0, 10, 10),
+        script=Script.PONTIAN,
+    )
+
+    result = SuggestOnlyCorrector({Script.PONTIAN: SetLexicon("pontian", ("γνωστή",))}).correct(
+        line, TenantContext("org", "user", "desktop")
+    )
+
+    assert result.is_ok()
+    assert line.text == source
+    assert result.value[0].source_text == "άγνωστη"
+    assert result.value[0].suggestion_text == "άγνωστη"
+    assert result.value[0].reason == "not_in_pontian_lexicon"
+
+
 def test_pipeline_checkpoints_each_completed_page() -> None:
     class TwoPageSource:
         def stream(self, document: bytes):
@@ -140,3 +162,27 @@ def test_pipeline_resume_skips_completed_pages() -> None:
     assert resumed.is_ok()
     assert [page.number for page in resumed.value.pages] == [1, 2]
     assert [page.width for page in resumed.value.pages] == [10, 20]
+
+
+def test_pipeline_keeps_failed_page_and_continues_to_later_pages() -> None:
+    class FailingProcessor:
+        def process(self, page, context):
+            from omniocr.domain.errors import IngestError
+
+            if page.number == 2:
+                return Err(IngestError("unreadable page"))
+            return Ok(page)
+
+    class ThreePageSource:
+        def stream(self, document: bytes):
+            for number in (1, 2, 3):
+                yield InMemoryPage(number, str(number).encode(), 10, 10)
+
+    result = PipelineOrchestrator(
+        page_source=ThreePageSource(), image_processor=FailingProcessor()
+    ).run(b"document")
+
+    assert result.is_ok()
+    assert [page.number for page in result.value.pages] == [1, 2, 3]
+    assert result.value.pages[1].failures[0].message == "unreadable page"
+    assert not result.value.pages[2].failures

@@ -14,10 +14,11 @@ dependencies = []
 desktop = []
 tesseract = ["pytesseract>=0.3.10", "Pillow>=10.0"]
 pdf = ["PyMuPDF>=1.24"]
+docx = ["python-docx>=1.1"]
 kraken = ["kraken>=6.0"]
 vlm = []
 calamari = []
-dev = ["pytest", "pytest-cov", "ruff", "mypy"]
+dev = ["pytest", "pytest-cov", "ruff", "mypy", "pre-commit", "build"]
 
 [tool.setuptools]
 package-dir = {"" = "packages/omniocr/src"}

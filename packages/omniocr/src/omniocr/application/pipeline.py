@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import unicodedata
-from typing import Iterator, Sequence
+from typing import Iterator, Mapping, Sequence
 from omniocr.domain.errors import EngineError, ExportError, IngestError, LayoutError, PipelineError
 from omniocr.domain.models import (
     BBox,
@@ -10,6 +10,7 @@ from omniocr.domain.models import (
     DocumentPage,
     DocumentStructure,
     OCRLine,
+    PageFailure,
     Script,
     Suggestion,
     TenantContext,
@@ -19,6 +20,7 @@ from omniocr.ports.interfaces import (
     IExporter,
     IImageProcessor,
     IJobStore,
+    ILexicon,
     ILayoutAnalyzer,
     IOCREngine,
     IPageSource,
@@ -82,21 +84,70 @@ class FirstCandidateReconciler:
         return Ok(candidates[0])
 
 
+class SetLexicon:
+    """Small in-memory lexicon adapter suitable for tests and bundled vocabularies."""
+
+    def __init__(self, name: str, words: Sequence[str]) -> None:
+        self.name = name
+        self._words = frozenset(words)
+
+    def contains(self, token: str) -> bool:
+        return token in self._words
+
+
 class SuggestOnlyCorrector:
+    """Run conservative checks while preserving the recognized source text."""
+
+    def __init__(self, lexicons: Mapping[Script, ILexicon] | None = None) -> None:
+        self._lexicons = dict(lexicons or {})
+
     def correct(
         self, line: OCRLine, context: TenantContext
     ) -> Result[Sequence[Suggestion], EngineError]:
+        suggestions: list[Suggestion] = []
         normalized = unicodedata.normalize("NFC", line.text)
-        if normalized == line.text:
-            return Ok(())
-        suggestion = Suggestion(
-            line_id=line.id,
-            source_text=line.text,
-            suggestion_text=normalized,
-            reason="unicode_nfc",
-            reversible=True,
-        )
-        return Ok((suggestion,))
+        if normalized != line.text:
+            suggestions.append(
+                Suggestion(
+                    line_id=line.id,
+                    source_text=line.text,
+                    suggestion_text=normalized,
+                    reason="unicode_nfc",
+                    reversible=True,
+                )
+            )
+
+        for index, character in enumerate(line.text):
+            if not unicodedata.category(character).startswith("M"):
+                continue
+            previous_category = unicodedata.category(line.text[index - 1]) if index else ""
+            if previous_category.startswith(("L", "M")):
+                continue
+            suggestions.append(
+                Suggestion(
+                    line_id=line.id,
+                    source_text=line.text,
+                    suggestion_text=line.text,
+                    reason="dangling_combining_mark",
+                    reversible=True,
+                )
+            )
+
+        lexicon = self._lexicons.get(line.script)
+        if lexicon is not None:
+            for token in line.text.split():
+                if token and not lexicon.contains(token):
+                    suggestions.append(
+                        Suggestion(
+                            line_id=line.id,
+                            source_text=token,
+                            suggestion_text=token,
+                            reason=f"not_in_{lexicon.name}_lexicon",
+                            reversible=True,
+                        )
+                    )
+
+        return Ok(tuple(suggestions))
 
 
 class PlainTextExporter:
@@ -158,55 +209,17 @@ class PipelineOrchestrator:
             for raw_page in page_stream:
                 if raw_page.number in completed_numbers:
                     continue
-                processed = self._image_processor.process(raw_page, ctx)
-                if processed.is_err():
-                    return Err(processed.error)
-
-                segments = self._layout_analyzer.segment(processed.value, ctx)
-                if segments.is_err():
-                    return Err(segments.error)
-
-                page_lines: list[OCRLine] = []
-                suggestions: list[Suggestion] = []
-                for segment in segments.value:
-                    engines = self._router.route(segment, ctx)
-                    candidate_lines: list[OCRLine] = []
-                    for engine in engines:
-                        extracted = engine.extract(processed.value, ctx)
-                        if extracted.is_err():
-                            continue
-                        for block in extracted.value:
-                            candidate_lines.append(
-                                OCRLine(
-                                    id=f"{segment.id}-{block.id}",
-                                    text=block.text,
-                                    confidence=block.confidence,
-                                    bbox=block.bbox,
-                                    script=segment.script,
-                                    blocks=(block,),
-                                    provenance=block.provenance,
-                                )
-                            )
-                    if not candidate_lines:
-                        candidate_lines.append(segment)
-                    chosen = self._reconciler.reconcile(candidate_lines, ctx)
-                    if chosen.is_err():
-                        return Err(chosen.error)
-                    corrections = self._post_corrector.correct(chosen.value, ctx)
-                    if corrections.is_err():
-                        return Err(corrections.error)
-                    page_lines.append(chosen.value)
-                    suggestions.extend(corrections.value)
-
-                pages.append(
-                    DocumentPage(
+                try:
+                    page = self._process_page(raw_page, ctx)
+                except PipelineError as exc:
+                    page = DocumentPage(
                         number=raw_page.number,
                         width=getattr(raw_page, "width", 1),
                         height=getattr(raw_page, "height", 1),
-                        lines=tuple(page_lines),
-                        suggestions=tuple(suggestions),
+                        failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
                     )
-                )
+                pages.append(page)
+                completed_numbers.add(raw_page.number)
 
                 if self._job_store is not None and checkpoint_id is not None:
                     checkpoint = self._job_store.checkpoint(
@@ -218,6 +231,55 @@ class PipelineOrchestrator:
             return Err(exc)
 
         return Ok(DocumentStructure(pages=tuple(pages)))
+
+    def _process_page(self, raw_page: RawPage, context: TenantContext) -> DocumentPage:
+        processed = self._image_processor.process(raw_page, context)
+        if processed.is_err():
+            raise processed.error
+
+        segments = self._layout_analyzer.segment(processed.value, context)
+        if segments.is_err():
+            raise segments.error
+
+        page_lines: list[OCRLine] = []
+        suggestions: list[Suggestion] = []
+        for segment in segments.value:
+            engines = self._router.route(segment, context)
+            candidate_lines: list[OCRLine] = []
+            for engine in engines:
+                extracted = engine.extract(processed.value, context)
+                if extracted.is_err():
+                    continue
+                for block in extracted.value:
+                    candidate_lines.append(
+                        OCRLine(
+                            id=f"{segment.id}-{block.id}",
+                            text=block.text,
+                            confidence=block.confidence,
+                            bbox=block.bbox,
+                            script=segment.script,
+                            blocks=(block,),
+                            provenance=block.provenance,
+                        )
+                    )
+            if not candidate_lines:
+                candidate_lines.append(segment)
+            chosen = self._reconciler.reconcile(candidate_lines, context)
+            if chosen.is_err():
+                raise chosen.error
+            corrections = self._post_corrector.correct(chosen.value, context)
+            if corrections.is_err():
+                raise corrections.error
+            page_lines.append(chosen.value)
+            suggestions.extend(corrections.value)
+
+        return DocumentPage(
+            number=raw_page.number,
+            width=getattr(raw_page, "width", 1),
+            height=getattr(raw_page, "height", 1),
+            lines=tuple(page_lines),
+            suggestions=tuple(suggestions),
+        )
 
     def export(
         self, document: DocumentStructure, context: TenantContext | None = None

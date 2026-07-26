@@ -17,6 +17,7 @@ from omniocr.domain.models import (
     ModelRef,
     OCRBlock,
     OCRLine,
+    PageFailure,
     Script,
     Suggestion,
 )
@@ -95,6 +96,7 @@ def _document_from_json(payload: str) -> DocumentStructure:
                 height=page_data["height"],
                 lines=tuple(lines),
                 suggestions=tuple(Suggestion(**item) for item in page_data["suggestions"]),
+                failures=tuple(PageFailure(**item) for item in page_data.get("failures", ())),
             )
         )
     return DocumentStructure(pages=tuple(pages))

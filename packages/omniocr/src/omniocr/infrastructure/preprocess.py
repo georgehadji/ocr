@@ -29,11 +29,13 @@ class GrayscaleProcessor:
             image = Image.open(io.BytesIO(page.content)).convert("L")
             output = io.BytesIO()
             image.save(output, format="PNG")
-            return Ok(type(page)(
-                number=page.number,
-                content=output.getvalue(),
-                width=image.width,
-                height=image.height,
-            ))
+            return Ok(
+                type(page)(
+                    number=page.number,
+                    content=output.getvalue(),
+                    width=image.width,
+                    height=image.height,
+                )
+            )
         except Exception as exc:
             return Err(IngestError(f"image preprocessing failed: {exc}"))

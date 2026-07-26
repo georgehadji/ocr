@@ -9,4 +9,3 @@ class Settings:
     desktop_mode: bool = True
     enable_vlm: bool = False
     enable_calamari: bool = False
-

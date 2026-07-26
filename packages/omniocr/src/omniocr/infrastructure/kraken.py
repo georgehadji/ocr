@@ -22,7 +22,9 @@ class KrakenEngine(IOCREngine):
         self._model: Any = None
         self._model_hash = self._hash_model()
 
-    def extract(self, page: RawPage, context: TenantContext) -> Result[Sequence[OCRBlock], EngineError]:
+    def extract(
+        self, page: RawPage, context: TenantContext
+    ) -> Result[Sequence[OCRBlock], EngineError]:
         try:
             from PIL import Image
             from kraken import pageseg, rpred
@@ -57,7 +59,9 @@ class KrakenEngine(IOCREngine):
             text = str(getattr(record, "prediction", "")).strip()
             if not text:
                 continue
-            x, y, right, bottom = self._bounds(getattr(record, "line", None), page_width, page_height)
+            x, y, right, bottom = self._bounds(
+                getattr(record, "line", None), page_width, page_height
+            )
             values = [float(value) for value in getattr(record, "confidences", ())]
             confidence = sum(values) / len(values) * 100 if values else 0.0
             blocks.append(

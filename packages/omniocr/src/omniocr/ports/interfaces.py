@@ -52,6 +52,14 @@ class IPostCorrector(Protocol):
     ) -> Result[Sequence[Suggestion], EngineError]: ...
 
 
+class ILexicon(Protocol):
+    """Read-only vocabulary used to highlight, never rewrite, OCR text."""
+
+    name: str
+
+    def contains(self, token: str) -> bool: ...
+
+
 class IExporter(Protocol):
     def export(
         self, document: DocumentStructure, context: TenantContext
@@ -77,6 +85,7 @@ __all__ = [
     "IExporter",
     "IImageProcessor",
     "IJobStore",
+    "ILexicon",
     "ILayoutAnalyzer",
     "IOCREngine",
     "IPageSource",

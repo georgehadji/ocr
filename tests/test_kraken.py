@@ -8,7 +8,13 @@ from omniocr.infrastructure.kraken import KrakenEngine
 def test_kraken_records_become_provenanced_blocks() -> None:
     engine = KrakenEngine("missing-greek.mlmodel")
     blocks = engine.parse_records(
-        [SimpleNamespace(prediction="πολυτονικό", confidences=[0.9, 0.8], line=[(2, 3), (42, 3), (42, 15), (2, 15)])],
+        [
+            SimpleNamespace(
+                prediction="πολυτονικό",
+                confidences=[0.9, 0.8],
+                line=[(2, 3), (42, 3), (42, 15), (2, 15)],
+            )
+        ],
         100,
         100,
     )

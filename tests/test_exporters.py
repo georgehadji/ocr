@@ -13,8 +13,20 @@ from omniocr.domain.models import (
     Script,
     TenantContext,
 )
-from omniocr.infrastructure.exporters import AltoXmlExporter, MarkdownExporter
+from omniocr.infrastructure.exporters import AltoXmlExporter, DocxExporter, MarkdownExporter
 from omniocr.infrastructure.exporters import SearchablePdfExporter
+
+
+def test_docx_exporter_writes_a_package_with_requested_font() -> None:
+    pytest = __import__("pytest")
+    pytest.importorskip("docx")
+
+    result = DocxExporter("New Athena Unicode").export(
+        _document(), TenantContext("o", "u", "desktop")
+    )
+
+    assert result.is_ok()
+    assert result.value.startswith(b"PK")
 
 
 def _document() -> DocumentStructure:
