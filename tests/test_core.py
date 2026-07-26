@@ -7,10 +7,19 @@ from omniocr.application.pipeline import (
     SetLexicon,
     build_document,
 )
-from omniocr.domain.models import BBox, Confidence, OCRLine, Script, Suggestion, TenantContext
+from omniocr.domain.models import (
+    BBox,
+    Confidence,
+    OCRLine,
+    PipelineEvent,
+    Script,
+    Suggestion,
+    TenantContext,
+)
 from omniocr.domain.result import Err, Ok
 from omniocr.infrastructure.preprocess import normalize_nfc
 from omniocr.infrastructure.jobs import InMemoryJobStore, SQLiteJobStore
+from omniocr.infrastructure.events import InMemoryEventBus
 
 
 def test_bbox_and_confidence_validate() -> None:
@@ -106,6 +115,33 @@ def test_suggest_only_corrector_highlights_unknown_words_without_rewriting_sourc
     assert result.value[0].reason == "not_in_pontian_lexicon"
 
 
+def test_suggest_only_corrector_expands_configured_ligatures_reversibly() -> None:
+    source = "ϗ λόγος"
+    line = OCRLine(
+        id="line-ligature",
+        text=source,
+        confidence=Confidence(90),
+        bbox=BBox(0, 0, 10, 10),
+        script=Script.BYZANTINE,
+    )
+
+    result = SuggestOnlyCorrector({}).correct(
+        line,
+        TenantContext("org", "user", "desktop"),
+    )
+    configured = SuggestOnlyCorrector(ligatures={"ϗ": "και"}).correct(
+        line,
+        TenantContext("org", "user", "desktop"),
+    )
+
+    assert result.is_ok()
+    assert result.value == ()
+    assert configured.is_ok()
+    assert configured.value[0].suggestion_text == "και λόγος"
+    assert configured.value[0].reversible
+    assert line.text == source
+
+
 def test_pipeline_checkpoints_each_completed_page() -> None:
     class TwoPageSource:
         def stream(self, document: bytes):
@@ -186,3 +222,14 @@ def test_pipeline_keeps_failed_page_and_continues_to_later_pages() -> None:
     assert [page.number for page in result.value.pages] == [1, 2, 3]
     assert result.value.pages[1].failures[0].message == "unreadable page"
     assert not result.value.pages[2].failures
+
+
+def test_pipeline_publishes_terminal_page_events() -> None:
+    events: list[object] = []
+    bus = InMemoryEventBus()
+    bus.subscribe(events.append)
+
+    result = PipelineOrchestrator(event_bus=bus).run(b"document")
+
+    assert result.is_ok()
+    assert events == [PipelineEvent("page_completed", 1)]

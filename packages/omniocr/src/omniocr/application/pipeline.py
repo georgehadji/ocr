@@ -11,12 +11,14 @@ from omniocr.domain.models import (
     DocumentStructure,
     OCRLine,
     PageFailure,
+    PipelineEvent,
     Script,
     Suggestion,
     TenantContext,
 )
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.ports.interfaces import (
+    IEventBus,
     IExporter,
     IImageProcessor,
     IJobStore,
@@ -98,8 +100,13 @@ class SetLexicon:
 class SuggestOnlyCorrector:
     """Run conservative checks while preserving the recognized source text."""
 
-    def __init__(self, lexicons: Mapping[Script, ILexicon] | None = None) -> None:
+    def __init__(
+        self,
+        lexicons: Mapping[Script, ILexicon] | None = None,
+        ligatures: Mapping[str, str] | None = None,
+    ) -> None:
         self._lexicons = dict(lexicons or {})
+        self._ligatures = dict(ligatures or {})
 
     def correct(
         self, line: OCRLine, context: TenantContext
@@ -113,6 +120,20 @@ class SuggestOnlyCorrector:
                     source_text=line.text,
                     suggestion_text=normalized,
                     reason="unicode_nfc",
+                    reversible=True,
+                )
+            )
+
+        expanded = line.text
+        for source, replacement in self._ligatures.items():
+            expanded = expanded.replace(source, replacement)
+        if expanded != line.text:
+            suggestions.append(
+                Suggestion(
+                    line_id=line.id,
+                    source_text=line.text,
+                    suggestion_text=expanded,
+                    reason="reversible_ligature_expansion",
                     reversible=True,
                 )
             )
@@ -176,6 +197,7 @@ class PipelineOrchestrator:
         post_corrector: IPostCorrector | None = None,
         exporter: IExporter | None = None,
         job_store: IJobStore | None = None,
+        event_bus: IEventBus | None = None,
     ) -> None:
         self._page_source = page_source or NullPageSource()
         self._image_processor = image_processor or PassthroughImageProcessor()
@@ -185,6 +207,7 @@ class PipelineOrchestrator:
         self._post_corrector = post_corrector or SuggestOnlyCorrector()
         self._exporter = exporter or PlainTextExporter()
         self._job_store = job_store
+        self._event_bus = event_bus
 
     def run(
         self,
@@ -218,6 +241,13 @@ class PipelineOrchestrator:
                         height=getattr(raw_page, "height", 1),
                         failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
                     )
+                    if self._event_bus is not None:
+                        self._event_bus.publish(
+                            PipelineEvent("page_failed", raw_page.number, str(exc))
+                        )
+                else:
+                    if self._event_bus is not None:
+                        self._event_bus.publish(PipelineEvent("page_completed", raw_page.number))
                 pages.append(page)
                 completed_numbers.add(raw_page.number)
 

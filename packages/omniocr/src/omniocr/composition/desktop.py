@@ -6,7 +6,7 @@ from omniocr.infrastructure.ingest import DocumentPageSource
 from omniocr.infrastructure.preprocess import GrayscaleProcessor
 from omniocr.infrastructure.resilience import RetryingEngine
 from omniocr.application.reconcile import ConfidenceWeightedReconciler
-from omniocr.domain.models import Script
+from omniocr.domain.models import OCRLine, Script, TenantContext
 from omniocr.application.router import ScriptRouter
 from omniocr.infrastructure.kraken import KrakenEngine
 from omniocr.infrastructure.exporters import MarkdownExporter
@@ -70,5 +70,5 @@ class _TesseractRouter:
     def __init__(self, engine: TesseractEngine) -> None:
         self._engine = engine
 
-    def route(self, line: object, context: object) -> tuple[TesseractEngine, ...]:
+    def route(self, line: OCRLine, context: TenantContext) -> tuple[TesseractEngine, ...]:
         return (self._engine,)

@@ -81,6 +81,15 @@ class PageFailure:
 
 
 @dataclass(frozen=True, slots=True)
+class PipelineEvent:
+    """Immutable progress event emitted after a page reaches a terminal state."""
+
+    event_type: str
+    page_number: int
+    detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class OCRBlock:
     id: str
     text: str

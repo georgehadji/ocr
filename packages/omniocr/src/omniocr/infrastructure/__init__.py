@@ -7,10 +7,12 @@ from omniocr.infrastructure.ingest import DocumentPageSource
 from omniocr.infrastructure.kraken import KrakenEngine
 from omniocr.infrastructure.preprocess import GrayscaleProcessor
 from omniocr.infrastructure.resilience import RetryingEngine
+from omniocr.infrastructure.events import InMemoryEventBus
 
 __all__ = [
     "DocumentPageSource",
     "GrayscaleProcessor",
+    "InMemoryEventBus",
     "KrakenEngine",
     "RetryingEngine",
     "TesseractEngine",
