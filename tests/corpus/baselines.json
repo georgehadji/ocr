@@ -3,6 +3,10 @@
     "cer": 0.0,
     "wer": 0.0
   },
+  "byzantine-1": {
+    "cer": 0.0,
+    "wer": 0.0
+  },
   "modern-1": {
     "cer": 0.0,
     "wer": 0.0

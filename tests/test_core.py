@@ -143,6 +143,34 @@ def test_suggest_only_corrector_expands_configured_ligatures_reversibly() -> Non
     assert line.text == source
 
 
+def test_suggest_only_corrector_expands_abbreviations_reversibly() -> None:
+    """Common scholarly abbreviations like κ.τ.λ. get a reversible suggestion."""
+    source = "ἄνθρωπος κ.τ.λ."
+    line = OCRLine(
+        id="line-abbr",
+        text=source,
+        confidence=Confidence(90),
+        bbox=BBox(0, 0, 50, 10),
+        script=Script.ANCIENT,
+    )
+
+    disabled = SuggestOnlyCorrector(abbreviations={}).correct(
+        line, TenantContext("org", "user", "desktop")
+    )
+    default = SuggestOnlyCorrector().correct(
+        line, TenantContext("org", "user", "desktop")
+    )
+
+    assert disabled.is_ok()
+    assert not any(s.reason == "reversible_abbreviation_expansion" for s in disabled.value)
+    assert default.is_ok()
+    assert any(
+        s.suggestion_text == "ἄνθρωπος καὶ τὰ λοιπά" and s.reversible
+        for s in default.value
+    )
+    assert line.text == source
+
+
 def test_diacritic_validator_flags_multiple_breathing_marks() -> None:
     """NFD decomposition with two breathing marks on one base triggers a suggestion."""
     # Build a string with two combining breathing marks on alpha.
