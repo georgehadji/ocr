@@ -77,12 +77,19 @@ class CircuitBreakerEngine(IOCREngine):
 
 
 class CachingEngine(IOCREngine):
-    """Cache successful OCR results by page bytes and relevant tenant context."""
+    """Cache successful OCR results by page bytes and relevant tenant context.
 
-    def __init__(self, engine: IOCREngine) -> None:
+    Uses LRU eviction when the cache reaches ``max_size`` entries.
+    """
+
+    def __init__(self, engine: IOCREngine, max_size: int = 128) -> None:
+        if max_size < 1:
+            raise ValueError("max_size must be positive")
         self.engine = engine
         self.name = engine.name
-        self._cache: dict[str, tuple[OCRBlock, ...]] = {}
+        self._max_size = max_size
+        from collections import OrderedDict
+        self._cache: OrderedDict[str, tuple[OCRBlock, ...]] = OrderedDict()
 
     def extract(
         self, page: RawPage, context: TenantContext
@@ -97,11 +104,14 @@ class CachingEngine(IOCREngine):
         )
         cached = self._cache.get(key)
         if cached is not None:
+            self._cache.move_to_end(key)  # LRU promotion
             return Ok(cached)
         result = self.engine.extract(page, context)
         if isinstance(result, Ok):
             cached_result = tuple(result.value)
             self._cache[key] = cached_result
+            if len(self._cache) > self._max_size:
+                self._cache.popitem(last=False)  # evict oldest (least recently used)
             return Ok(cached_result)
         assert isinstance(result, Err)
         return Err(result.error)

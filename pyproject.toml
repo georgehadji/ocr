@@ -20,7 +20,7 @@ kraken = ["kraken>=6.0"]
 vlm = []
 calamari = ["calamari-ocr>=2.0"]
 server = ["fastapi>=0.115", "uvicorn[standard]>=0.32", "rq>=2.0", "redis>=5.0", "python-multipart>=0.0.18"]
-dev = ["pytest", "pytest-cov", "ruff", "mypy", "pre-commit", "build", "bandit", "pip-audit"]
+dev = ["pytest", "pytest-cov", "ruff", "mypy", "pre-commit", "build", "bandit", "pip-audit", "structlog>=26.0"]
 
 [tool.setuptools]
 package-dir = {"" = "packages/omniocr/src"}

@@ -20,6 +20,7 @@ from omniocr.domain.models import (
 )
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.infrastructure.lexicon import SetLexicon
+from omniocr.infrastructure.logging import get_logger
 from omniocr.ports.interfaces import (
     IEventBus,
     IExporter,
@@ -287,6 +288,7 @@ class PipelineOrchestrator:
         self._exporter = exporter or PlainTextExporter()
         self._job_store = job_store
         self._event_bus = event_bus
+        self._log = get_logger("pipeline")
 
     def run(
         self,
@@ -306,6 +308,7 @@ class PipelineOrchestrator:
             list(loaded_checkpoint.pages) if loaded_checkpoint is not None else []
         )
         completed_numbers = {page.number for page in pages}
+        self._log.info("pipeline_start", page_count=len(pages), resume=resume_job_id is not None)
         try:
             page_stream = self._page_source.stream(document)
             for raw_page in page_stream:
@@ -330,15 +333,18 @@ class PipelineOrchestrator:
                                 (perf_counter() - started_at) * 1000,
                             )
                         )
+                    self._log.warning("page_failed", page=raw_page.number, error=str(exc))
                 else:
+                    duration = (perf_counter() - started_at) * 1000
                     if self._event_bus is not None:
                         self._event_bus.publish(
                             PipelineEvent(
                                 "page_completed",
                                 raw_page.number,
-                                duration_ms=(perf_counter() - started_at) * 1000,
+                                duration_ms=duration,
                             )
                         )
+                    self._log.info("page_completed", page=raw_page.number, duration_ms=round(duration, 1))
                 pages.append(page)
                 completed_numbers.add(raw_page.number)
 
