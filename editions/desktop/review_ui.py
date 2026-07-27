@@ -351,6 +351,31 @@ if st.session_state.review_document is not None:
     with col_txt:
         st.download_button("📄 .txt", export_txt.encode("utf-8"), f"{base}.txt", use_container_width=True)
 
+    # Searchable PDF export (requires PyMuPDF)
+    if st.sidebar.button("📕 Export searchable PDF", use_container_width=True):
+        try:
+            from omniocr.infrastructure.exporters import SearchablePdfExporter
+            # Reconstruct minimal DocumentStructure from ReviewDocument
+            from omniocr.domain.models import BBox, Confidence, DocumentPage as DP, DocumentStructure as DS, OCRLine
+            pages_out = []
+            for rp in doc.pages:
+                lines_out = []
+                for rl in rp.lines:
+                    text = st.session_state.ground_truth_lines.get(rl.line_id, st.session_state.edited_lines.get(rl.line_id, rl.text))
+                    lines_out.append(OCRLine(id=rl.line_id, text=text, confidence=Confidence(rl.confidence), bbox=BBox(rl.bbox.x, rl.bbox.y, rl.bbox.w, rl.bbox.h)))
+                pages_out.append(DP(number=rp.number, width=rp.width, height=rp.height, lines=tuple(lines_out)))
+            export_doc = DS(pages=tuple(pages_out))
+            exporter = SearchablePdfExporter(source_pdf=file_bytes)
+            result = exporter.export(export_doc, TenantContext("desktop", "export", "desktop"))
+            if result.is_ok():
+                st.sidebar.download_button("⬇ Download PDF", result.value, f"{base}_searchable.pdf", use_container_width=True)
+            else:
+                st.sidebar.error(str(result.error))
+        except ImportError as exc:
+            st.sidebar.error(f"Install PyMuPDF: pip install -e '.[pdf]' ({exc})")
+        except Exception as exc:
+            st.sidebar.error(f"PDF export failed: {exc}")
+
     # Ground truth summary
     if st.session_state.ground_truth_lines:
         st.sidebar.divider()
