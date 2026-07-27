@@ -25,6 +25,7 @@ from omniocr.application.pipeline import PipelineOrchestrator, SuggestOnlyCorrec
 from omniocr.application.router import ScriptRouter
 from omniocr.domain.models import Script, TenantContext
 from omniocr.infrastructure.config import Settings
+from omniocr.infrastructure.exporters import MarkdownExporter
 from omniocr.infrastructure.logging import configure_logging
 
 # Initialize structured logging for the edition.
@@ -126,6 +127,11 @@ for key, default in [
 
 st.sidebar.title("OmniOCR Review")
 st.sidebar.caption("Scholarly correction interface")
+
+if st.sidebar.button("🔄 New session", help="Clear all state and start fresh"):
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
 
 uploaded_file = st.sidebar.file_uploader(
     "Upload a PDF or image",
