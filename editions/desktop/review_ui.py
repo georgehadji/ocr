@@ -4,9 +4,9 @@ Run from the repository root:
 
     streamlit run editions/desktop/review_ui.py
 
-Requires: streamlit, Pillow, ``kraken`` extra, and the optional ``docx`` extra.
+Requires: streamlit, Pillow, and the optional extras.
 
-    pip install -e ".[kraken,docx]"
+    pip install -e ".[pdf,kraken,opencv,docx]"
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import streamlit as st
 from PIL import Image
 
 from omniocr.application.metrics import character_error_rate
-from omniocr.application.pipeline import PipelineOrchestrator, SuggestOnlyCorrector, SingleLineLayoutAnalyzer
+from omniocr.application.pipeline import PipelineOrchestrator, SuggestOnlyCorrector
 from omniocr.application.router import ScriptRouter
 from omniocr.domain.models import Script, TenantContext
 from omniocr.infrastructure.config import Settings
@@ -119,14 +119,22 @@ if uploaded_file is not None and st.session_state.review_document is None:
         pdf_bytes = uploaded_file.read()
         cfg = Settings.from_env()
 
-        # Try to wire KrakenLayoutAnalyzer; fall back if kraken is not installed.
+        # Try imports; fail gracefully if optional deps are missing.
         try:
+            from omniocr.infrastructure.ingest import DocumentPageSource
+            from omniocr.infrastructure.preprocess import GrayscaleProcessor
             from omniocr.infrastructure.kraken import KrakenLayoutAnalyzer
+
+            page_source = DocumentPageSource()
+            image_processor = GrayscaleProcessor()
             layout = KrakenLayoutAnalyzer(Script.POLYTONIC)
-        except ImportError:
-            layout = SingleLineLayoutAnalyzer(Script.POLYTONIC)
+        except ImportError as exc:
+            st.error(f"Missing dependency: {exc}. Install: pip install -e '.[pdf,kraken,opencv]'")
+            st.stop()
 
         pipeline_kwargs: dict = {
+            "page_source": page_source,
+            "image_processor": image_processor,
             "layout_analyzer": layout,
             "post_corrector": SuggestOnlyCorrector(lexicons=lexicons_by_script()),
             "exporter": MarkdownExporter(),
