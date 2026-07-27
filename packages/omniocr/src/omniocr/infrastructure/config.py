@@ -35,9 +35,7 @@ class Settings:
             desktop_mode=_env_bool(values, "OMNIOCR_DESKTOP_MODE", _DEFAULT_DESKTOP_MODE),
             enable_vlm=_env_bool(values, "OMNIOCR_ENABLE_VLM", _DEFAULT_ENABLE_VLM),
             enable_calamari=_env_bool(values, "OMNIOCR_ENABLE_CALAMARI", _DEFAULT_ENABLE_CALAMARI),
-            max_upload_bytes=int(
-                values.get("OMNIOCR_MAX_UPLOAD_BYTES", str(_DEFAULT_MAX_UPLOAD_BYTES))
-            ),
+            max_upload_bytes=_env_int(values, "OMNIOCR_MAX_UPLOAD_BYTES", _DEFAULT_MAX_UPLOAD_BYTES),
             vlm_api_key=values.get("OMNIOCR_VLM_API_KEY"),
         )
 
@@ -52,3 +50,13 @@ def _env_bool(values: Mapping[str, str], name: str, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise ValueError(f"{name} must be a boolean value")
+
+
+def _env_int(values: Mapping[str, str], name: str, default: int) -> int:
+    raw = values.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw.strip())
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"{name} must be an integer value") from exc

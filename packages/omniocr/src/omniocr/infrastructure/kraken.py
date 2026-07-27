@@ -89,7 +89,7 @@ class KrakenLayoutAnalyzer(ILayoutAnalyzer):
             return RegionType.UNKNOWN
         try:
             return RegionType(raw.lower().replace("-", "_"))
-        except ValueError:
+        except (ValueError, AttributeError):
             return RegionType.UNKNOWN
 
 

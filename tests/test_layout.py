@@ -41,3 +41,32 @@ def test_kraken_layout_analyzer_preserves_order_and_line_geometry() -> None:
     assert result.value[1].region_type.value == "apparatus"
     assert result.value[0].reading_order == 1
     assert result.value[1].reading_order == 2
+
+
+def test_kraken_layout_analyzer_handles_non_string_category() -> None:
+    """Proof-of-defect D2: a non-string category attribute must not crash."""
+    def segmenter(image):
+        class _Category:
+            pass  # category is an object, not a string
+
+        return SimpleNamespace(
+            lines=(
+                SimpleNamespace(
+                    boundary=((0, 0), (10, 0), (10, 10), (0, 10)),
+                    category=_Category(),
+                ),
+            )
+        )
+
+    from io import BytesIO
+    from PIL import Image
+
+    image_data = BytesIO()
+    Image.new("L", (50, 50), 255).save(image_data, format="PNG")
+    analyzer = KrakenLayoutAnalyzer(Script.POLYTONIC, segmenter=segmenter)
+    result = analyzer.segment(
+        InMemoryPage(1, image_data.getvalue(), 50, 50), TenantContext("o", "u", "d")
+    )
+
+    assert result.is_ok()
+    assert result.value[0].region_type == "unknown"

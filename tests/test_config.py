@@ -37,3 +37,16 @@ def test_settings_reject_invalid_values() -> None:
         Settings.from_env({"OMNIOCR_ENABLE_VLM": "maybe"})
     with pytest.raises(ValueError, match="positive"):
         Settings(max_upload_bytes=0)
+
+
+def test_settings_reject_non_numeric_max_upload_bytes() -> None:
+    """Proof-of-defect D1: non-numeric OMNIOCR_MAX_UPLOAD_BYTES → helpful ValueError."""
+    for bad in ["abc", "", "3.14"]:
+        with pytest.raises(ValueError, match="integer"):
+            Settings.from_env({"OMNIOCR_MAX_UPLOAD_BYTES": bad})
+
+
+def test_settings_accept_valid_max_upload_bytes() -> None:
+    """Innocence test: valid integer values parse correctly."""
+    s = Settings.from_env({"OMNIOCR_MAX_UPLOAD_BYTES": "65536"})
+    assert s.max_upload_bytes == 65536
