@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import perf_counter
-import unicodedata
 from typing import Iterator, Mapping, Sequence
 from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.domain.errors import EngineError, ExportError, IngestError, LayoutError, PipelineError
@@ -20,8 +19,8 @@ from omniocr.domain.models import (
     TenantContext,
 )
 from omniocr.domain.result import Err, Ok, Result
-from omniocr.infrastructure.lexicon import SetLexicon
-from omniocr.infrastructure.logging import get_logger
+from omniocr.infrastructure.exporters import PlainTextExporter
+from omniocr.ports.lexicon import SetLexicon
 from omniocr.ports.interfaces import (
     IEventBus,
     IExporter,
@@ -93,14 +92,6 @@ class FirstCandidateReconciler:
 
 
 
-class PlainTextExporter:
-    def export(
-        self, document: DocumentStructure, context: TenantContext
-    ) -> Result[bytes, ExportError]:
-        lines = [line.text for page in document.pages for line in page.lines]
-        return Ok("\n".join(lines).encode("utf-8"))
-
-
 def build_document(
     lines: Sequence[OCRLine], page_number: int = 1, width: int = 1, height: int = 1
 ) -> DocumentStructure:
@@ -130,7 +121,12 @@ class PipelineOrchestrator:
         self._exporter = exporter or PlainTextExporter()
         self._job_store = job_store
         self._event_bus = event_bus
-        self._log = get_logger("pipeline")
+        try:
+            import structlog
+            self._log = structlog.get_logger("omniocr.pipeline")
+        except ImportError:
+            import logging
+            self._log = logging.getLogger("omniocr.pipeline")
 
     def run(
         self,

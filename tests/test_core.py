@@ -7,7 +7,7 @@ from omniocr.application.pipeline import (
     PipelineOrchestrator,
     build_document,
 )
-from omniocr.infrastructure.lexicon import SetLexicon
+from omniocr.ports.lexicon import SetLexicon
 from omniocr.domain.models import (
     BBox,
     Confidence,

@@ -9,6 +9,16 @@ from omniocr.domain.result import Err, Ok, Result
 from omniocr.ports.interfaces import IExporter
 
 
+class PlainTextExporter(IExporter):
+    """Export OCR text as plain text with one line per recognized segment."""
+
+    def export(
+        self, document: DocumentStructure, context: TenantContext
+    ) -> Result[bytes, ExportError]:
+        lines = [line.text for page in document.pages for line in page.lines]
+        return Ok("\n".join(lines).encode("utf-8"))
+
+
 class MarkdownExporter(IExporter):
     """Export source OCR text with page boundaries and no correction rewrite."""
 
@@ -303,5 +313,6 @@ __all__ = [
     "DocxExporter",
     "MarkdownExporter",
     "PageXmlExporter",
+    "PlainTextExporter",
     "SearchablePdfExporter",
 ]

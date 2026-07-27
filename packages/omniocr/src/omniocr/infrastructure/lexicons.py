@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omniocr.infrastructure.lexicon import SetLexicon
+from omniocr.ports.lexicon import SetLexicon
 from omniocr.domain.models import Script
 
 
