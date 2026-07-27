@@ -69,13 +69,16 @@ def create_ensemble_pipeline(
     job_store: IJobStore | None = None,
     vlm_api_key: str | None = None,
     vlm_api_url: str | None = None,
-    vlm_model: str = "gpt-4o-mini",
+    vlm_model: str = "google/gemini-2.5-flash-001",
     calamari_model_glob: str | None = None,
 ) -> PipelineOrchestrator:
     """Build a CPU ensemble with script rules injected at the composition root.
 
     When ``vlm_api_key`` is provided, a VLM engine is added as an opt-in
-    second opinion for polytonic/ancient scripts. When ``calamari_model_glob``
+    second opinion for polytonic/ancient scripts. The VLM defaults to an
+    OpenRouter-compatible endpoint (``https://openrouter.ai/api/v1``) with
+    ``google/gemini-2.5-flash-001`` — set ``vlm_api_url`` to use a different
+    OpenAI-compatible provider. When ``calamari_model_glob``
     is provided, a Calamari subprocess engine is added as a voting booster.
     Both are wrapped in ``RetryingEngine`` for transient-failure resilience.
     """

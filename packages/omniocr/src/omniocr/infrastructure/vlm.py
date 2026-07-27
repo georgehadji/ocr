@@ -2,6 +2,13 @@
 
 Per ARCHITECTURE.md §4 and BUILD_PLAN §4.8: the VLM is always opt-in,
 always grounding-checked, and never the unaudited sole source.
+
+The adapter defaults to `OpenRouter <https://openrouter.ai>`_ as the
+API provider. Set ``api_key`` to your OpenRouter API key and optionally
+configure ``site_url``/``site_name`` for OpenRouter ranking attribution.
+
+To use a different OpenAI-compatible provider, pass its base URL as
+``api_url`` (e.g. ``https://api.openai.com/v1``).
 """
 
 from __future__ import annotations
@@ -27,11 +34,20 @@ from omniocr.ports.interfaces import IOCREngine, RawPage
 class VLMEngine(IOCREngine):
     """Optional cloud-API vision-language model adapter.
 
-    Requires an explicit ``api_key`` and ``api_url`` at construction time.
+    Defaults to `OpenRouter <https://openrouter.ai>`_ at
+    ``https://openrouter.ai/api/v1`` with ``google/gemini-2.5-flash-001``
+    as the default model. The adapter is API-compatible with any OpenAI-
+    style chat completions endpoint.
+
+    Requires an explicit ``api_key`` at construction time.
     The caller must check ``Settings.enable_vlm`` before wiring this adapter.
 
     Results are grounding-guarded: blocks whose bounding boxes do not overlap
     with a verifiable engine are returned as suggestions, never as source text.
+
+    For OpenRouter thinking/reasoning models (e.g., DeepSeek R1), append
+    ``:thinking`` to the model name:
+    ``VLMEngine(api_key=..., model="deepseek/deepseek-r1:thinking")``.
     """
 
     name = "vlm"
@@ -39,9 +55,11 @@ class VLMEngine(IOCREngine):
     def __init__(
         self,
         api_key: str,
-        api_url: str = "https://api.openai.com/v1/chat/completions",
-        model: str = "gpt-4o-mini",
+        api_url: str = "https://openrouter.ai/api/v1",
+        model: str = "google/gemini-2.5-flash-001",
         grounding_guard: GroundingGuard | None = None,
+        site_url: str = "",
+        site_name: str = "OmniOCR",
         prompt: str = (
             "Extract all visible text from this image in its original language. "
             "Return each line of text with its approximate bounding box "
@@ -52,6 +70,8 @@ class VLMEngine(IOCREngine):
         self._api_url = api_url.rstrip("/")
         self._model = model
         self._grounding_guard = grounding_guard or GroundingGuard()
+        self._site_url = site_url
+        self._site_name = site_name
         self._prompt = prompt
 
     def extract(
@@ -83,13 +103,13 @@ class VLMEngine(IOCREngine):
         return grounded, tuple(b for b in vlm_blocks if b not in grounded)
 
     def _call_api(self, image_bytes: bytes) -> Any:
-        """POST the image to the VLM API and return the parsed response."""
+        """POST the image to the VLM API (OpenRouter-compatible) and return the parsed response."""
         import base64
         import json
         import urllib.request
 
         encoded = base64.b64encode(image_bytes).decode("utf-8")
-        payload = {
+        payload: dict[str, Any] = {
             "model": self._model,
             "messages": [
                 {
@@ -108,16 +128,23 @@ class VLMEngine(IOCREngine):
             ],
             "max_tokens": 2048,
         }
+
+        headers: dict[str, str] = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self._api_key}",
+        }
+        if self._site_url:
+            headers["HTTP-Referer"] = self._site_url
+        if self._site_name:
+            headers["X-Title"] = self._site_name
+
         request = urllib.request.Request(
             f"{self._api_url}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self._api_key}",
-            },
+            headers=headers,
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=120) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _parse_response(
