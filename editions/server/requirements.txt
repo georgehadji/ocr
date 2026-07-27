@@ -1,0 +1,8 @@
+# OmniOCR Server Edition dependencies
+# Install with: pip install -r editions/server/requirements.txt
+
+fastapi>=0.115
+uvicorn[standard]>=0.32
+rq>=2.0
+redis>=5.0
+python-multipart>=0.0.18
