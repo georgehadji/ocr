@@ -18,10 +18,11 @@ import streamlit as st
 from PIL import Image
 
 from omniocr.application.metrics import character_error_rate
-from omniocr.application.pipeline import PipelineOrchestrator, SuggestOnlyCorrector
+from omniocr.application.pipeline import PipelineOrchestrator, SuggestOnlyCorrector, SingleLineLayoutAnalyzer
+from omniocr.application.router import ScriptRouter
 from omniocr.domain.models import Script, TenantContext
+from omniocr.infrastructure.config import Settings
 from omniocr.infrastructure.exporters import DocxExporter, MarkdownExporter
-from omniocr.infrastructure.kraken import KrakenLayoutAnalyzer
 from omniocr.infrastructure.lexicons import lexicons_by_script
 from omniocr.infrastructure.review import (
     ReviewDocument,
@@ -116,11 +117,35 @@ uploaded_file = st.sidebar.file_uploader(
 if uploaded_file is not None and st.session_state.review_document is None:
     with st.spinner("Running OCR pipeline..."):
         pdf_bytes = uploaded_file.read()
-        pipeline = PipelineOrchestrator(
-            layout_analyzer=KrakenLayoutAnalyzer(Script.POLYTONIC),
-            post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
-            exporter=MarkdownExporter(),
-        )
+        cfg = Settings.from_env()
+
+        # Try to wire KrakenLayoutAnalyzer; fall back if kraken is not installed.
+        try:
+            from omniocr.infrastructure.kraken import KrakenLayoutAnalyzer
+            layout = KrakenLayoutAnalyzer(Script.POLYTONIC)
+        except ImportError:
+            layout = SingleLineLayoutAnalyzer(Script.POLYTONIC)
+
+        pipeline_kwargs: dict = {
+            "layout_analyzer": layout,
+            "post_corrector": SuggestOnlyCorrector(lexicons=lexicons_by_script()),
+            "exporter": MarkdownExporter(),
+        }
+
+        # Opt-in VLM if an OpenRouter API key is set in the environment.
+        if cfg.enable_vlm and cfg.vlm_api_key:
+            from omniocr.infrastructure.vlm import VLMEngine
+            pipeline_kwargs["router"] = ScriptRouter(
+                by_script={
+                    Script.ANCIENT: (VLMEngine(cfg.vlm_api_key),),
+                    Script.BYZANTINE: (VLMEngine(cfg.vlm_api_key),),
+                    Script.POLYTONIC: (VLMEngine(cfg.vlm_api_key),),
+                },
+                default=(),
+            )
+            st.sidebar.info(f"VLM enabled: {cfg.vlm_api_key[:12]}...")
+
+        pipeline = PipelineOrchestrator(**pipeline_kwargs)
         ctx = TenantContext("desktop", "reviewer", "desktop")
         result = pipeline.run(pdf_bytes, ctx)
         if result.is_ok():
