@@ -11,7 +11,7 @@ def test_settings_use_safe_defaults() -> None:
     assert settings.app_name == "omniocr"
     assert settings.desktop_mode
     assert not settings.enable_vlm
-    assert settings.max_upload_bytes == 100 * 1024 * 1024
+    assert settings.max_upload_bytes == 2 * 1024 * 1024 * 1024
     assert settings.vlm_api_key is None
 
 

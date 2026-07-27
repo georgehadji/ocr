@@ -19,6 +19,19 @@ Provides-Extra: kraken
 Requires-Dist: kraken>=6.0; extra == "kraken"
 Provides-Extra: vlm
 Provides-Extra: calamari
+Requires-Dist: calamari-ocr>=2.0; extra == "calamari"
+Provides-Extra: cloud
+Requires-Dist: fastapi>=0.115; extra == "cloud"
+Requires-Dist: uvicorn[standard]>=0.32; extra == "cloud"
+Requires-Dist: celery[redis]>=5.6; extra == "cloud"
+Requires-Dist: redis>=5.0; extra == "cloud"
+Requires-Dist: python-multipart>=0.0.18; extra == "cloud"
+Provides-Extra: server
+Requires-Dist: fastapi>=0.115; extra == "server"
+Requires-Dist: uvicorn[standard]>=0.32; extra == "server"
+Requires-Dist: rq>=2.0; extra == "server"
+Requires-Dist: redis>=5.0; extra == "server"
+Requires-Dist: python-multipart>=0.0.18; extra == "server"
 Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Requires-Dist: pytest-cov; extra == "dev"
@@ -26,6 +39,9 @@ Requires-Dist: ruff; extra == "dev"
 Requires-Dist: mypy; extra == "dev"
 Requires-Dist: pre-commit; extra == "dev"
 Requires-Dist: build; extra == "dev"
+Requires-Dist: bandit; extra == "dev"
+Requires-Dist: pip-audit; extra == "dev"
+Requires-Dist: structlog>=26.0; extra == "dev"
 
 # OmniOCR — Production Build Plan
 

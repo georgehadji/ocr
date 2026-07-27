@@ -1,0 +1,8 @@
+[server]
+# Increase upload limit from default 200MB to 2GB for large scholarly PDFs.
+# Streamlit enforces this via nginx-style config.
+maxUploadSize = 2048
+
+# Allow large file processing without timeout.
+# Pages may take minutes for multi-hundred-page books.
+maxMessageSize = 2048
