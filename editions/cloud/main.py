@@ -20,6 +20,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from omniocr.infrastructure.config import Settings
+from omniocr.infrastructure.logging import configure_logging
+
+configure_logging("omniocr-cloud")
 
 app = FastAPI(title="OmniOCR Cloud", version="0.1.0", docs_url="/docs")
 

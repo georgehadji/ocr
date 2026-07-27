@@ -361,6 +361,15 @@ class PipelineOrchestrator:
 
     def count_pages(self, document: bytes) -> int:
         """Return the number of pages in a document without processing them."""
+        # PyMuPDF: fast page count from PDF header without streaming.
+        try:
+            import fitz
+            source = fitz.open(stream=document, filetype="pdf")
+            count = len(source)
+            source.close()
+            return max(count, 1)
+        except (ImportError, TypeError, RuntimeError):
+            pass
         count = sum(1 for _ in self._page_source.stream(document))
         return max(count, 1)
 

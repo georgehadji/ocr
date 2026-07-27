@@ -74,6 +74,17 @@ class VLMEngine(IOCREngine):
         self._site_name = site_name
         self._prompt = prompt
 
+    def __repr__(self) -> str:
+        masked = (
+            self._api_key[:8] + "..." + self._api_key[-4:]
+            if len(self._api_key) > 12 else "***"
+        )
+        return (
+            f"VLMEngine(model={self._model!r}, "
+            f"api_url={self._api_url!r}, "
+            f"api_key={masked!r})"
+        )
+
     def extract(
         self, page: RawPage, context: TenantContext
     ) -> Result[Sequence[OCRBlock], EngineError]:

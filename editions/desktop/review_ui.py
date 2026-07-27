@@ -25,6 +25,10 @@ from omniocr.application.pipeline import PipelineOrchestrator, SuggestOnlyCorrec
 from omniocr.application.router import ScriptRouter
 from omniocr.domain.models import Script, TenantContext
 from omniocr.infrastructure.config import Settings
+from omniocr.infrastructure.logging import configure_logging
+
+# Initialize structured logging for the edition.
+configure_logging("omniocr-review")
 from omniocr.infrastructure.lexicons import lexicons_by_script
 from omniocr.infrastructure.review import (
     ReviewDocument,
@@ -536,8 +540,17 @@ if st.session_state.review_document is not None:
                                     st.rerun()
 
                         with st.popover("⌨ Insert polytonic"):
-                            for combo, glyph in POLYTONIC_MAP.items():
-                                if st.button(f"{combo} → {glyph}", key=f"in_{line.line_id}_{combo}"):
+                            selected = st.selectbox(
+                                "Character",
+                                [f"{c} → {POLYTONIC_MAP[c]}" for c in POLYTONIC_MAP],
+                                label_visibility="collapsed",
+                                key=f"pb_sb_{line.line_id}",
+                            )
+                            if selected:
+                                combo = selected.split(" → ")[0]
+                                glyph = POLYTONIC_MAP[combo]
+                                st.write(f"**{glyph}** (Ctrl+C)")
+                                if st.button("Insert at end", key=f"pb_ins_{line.line_id}"):
                                     current = st.session_state.ground_truth_lines.get(line.line_id, st.session_state.edited_lines.get(line.line_id, line.text))
                                     st.session_state.edited_lines[line.line_id] = current + glyph
                                     st.rerun()
