@@ -359,6 +359,47 @@ class PipelineOrchestrator:
 
         return Ok(DocumentStructure(pages=tuple(pages)))
 
+    def count_pages(self, document: bytes) -> int:
+        """Return the number of pages in a document without processing them."""
+        count = sum(1 for _ in self._page_source.stream(document))
+        return max(count, 1)
+
+    def run_iteratively(
+        self,
+        document: bytes,
+        context: TenantContext | None = None,
+    ) -> Iterator[tuple[int, DocumentPage]]:
+        """Process pages one at a time, yielding ``(page_number, DocumentPage)``.
+
+        Unlike ``run()``, this does NOT return a ``DocumentStructure`` or
+        ``Result`` — it yields pages as they finish so the caller can
+        report progress in real time. Per-page failures are wrapped in
+        ``DocumentPage`` with a ``PageFailure`` entry.
+        """
+        ctx = context or TenantContext(
+            organization_id="default", user_id="system", subscription_tier="desktop"
+        )
+        try:
+            page_stream = self._page_source.stream(document)
+            for raw_page in page_stream:
+                started_at = perf_counter()
+                try:
+                    page = self._process_page(raw_page, ctx)
+                except PipelineError as exc:
+                    page = DocumentPage(
+                        number=raw_page.number,
+                        width=getattr(raw_page, "width", 1),
+                        height=getattr(raw_page, "height", 1),
+                        failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
+                    )
+                    self._log.warning("page_failed", page=raw_page.number, error=str(exc))
+                else:
+                    duration = (perf_counter() - started_at) * 1000
+                    self._log.info("page_completed", page=raw_page.number, duration_ms=round(duration, 1))
+                yield (raw_page.number, page)
+        except PipelineError as exc:
+            self._log.error("pipeline_failed", error=str(exc))
+
     def _process_page(self, raw_page: RawPage, context: TenantContext) -> DocumentPage:
         processed = self._image_processor.process(raw_page, context)
         if isinstance(processed, Err):
