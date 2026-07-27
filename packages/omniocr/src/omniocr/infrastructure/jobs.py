@@ -85,6 +85,8 @@ def _document_from_json(payload: str) -> DocumentStructure:
                     confidence=Confidence(line_data["confidence"]["value"]),
                     bbox=BBox(**line_data["bbox"]),
                     script=Script(line_data["script"]),
+                    region_type=line_data.get("region_type", "unknown"),
+                    reading_order=line_data.get("reading_order", 0),
                     blocks=blocks,
                     provenance=_engine_run(line_data["provenance"]),
                 )
@@ -138,4 +140,36 @@ class SQLiteJobStore:
         self._connection.close()
 
 
-__all__ = ["InMemoryJobStore", "SQLiteJobStore"]
+class RedisJobStore:
+    """Checkpoint store backed by Redis for distributed Cloud deployments.
+
+    Redis' built-in persistence (RDB/AOF) ensures durability across
+    worker restarts. Each job is stored as a JSON string under the key
+    ``omniocr:checkpoint:{job_id}``.
+    """
+
+    def __init__(self, redis_url: str = "redis://localhost:6379/0") -> None:
+        import redis as _redis
+        self._redis = _redis.from_url(redis_url)
+
+    def checkpoint(self, job_id: str, document: DocumentStructure) -> Result[None, IngestError]:
+        if not job_id.strip():
+            return Err(IngestError("job id must not be empty"))
+        try:
+            payload = json.dumps(asdict(document), default=_json_default, ensure_ascii=False)
+            self._redis.set(f"omniocr:checkpoint:{job_id}", payload)
+            return Ok(None)
+        except Exception as exc:
+            return Err(IngestError(f"Redis checkpoint failed: {exc}"))
+
+    def load(self, job_id: str) -> DocumentStructure | None:
+        try:
+            raw = self._redis.get(f"omniocr:checkpoint:{job_id}")
+            if raw is None:
+                return None
+            return _document_from_json(raw.decode("utf-8"))
+        except Exception:
+            return None
+
+
+__all__ = ["InMemoryJobStore", "RedisJobStore", "SQLiteJobStore"]

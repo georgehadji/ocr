@@ -69,3 +69,34 @@ def test_caching_engine_reuses_successful_result_for_same_page_and_context() -> 
     assert second.is_ok()
     assert third.is_ok()
     assert engine.calls == 2
+
+
+def test_caching_engine_ttl_expiry_causes_cache_miss() -> None:
+    """A TTL-based cache entry expires after the configured period."""
+    engine = FlakyEngine()
+    cached = CachingEngine(engine, max_size=8, ttl=1)
+    context = TenantContext("o", "u", "d")
+    page = type("Page", (), {"content": b"ttl-test"})()
+
+    # First call: engine fails (calls=0→1) → cache stores nothing
+    first = cached.extract(page, context)
+    assert first.is_err()
+
+    # Second call: engine succeeds (calls=1→2) → cache stores result
+    second = cached.extract(page, context)
+    assert second.is_ok()
+    assert engine.calls == 2
+
+    # Third call within TTL: cache hit, engine not called
+    third = cached.extract(page, context)
+    assert third.is_ok()
+    assert engine.calls == 2  # cache hit
+
+    # Wait for TTL to expire
+    import time
+    time.sleep(1.1)
+
+    # Fourth call after TTL: cache miss, engine called again (calls=2→3 → succeeds)
+    fourth = cached.extract(page, context)
+    assert fourth.is_ok()
+    assert engine.calls == 3
