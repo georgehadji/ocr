@@ -242,6 +242,30 @@ if st.session_state.review_document is not None:
 
     st.sidebar.caption(f"Page {st.session_state.current_page + 1} of {total_pages}")
 
+    # --- Edit mode toggle ---
+    st.sidebar.divider()
+    edit_mode = st.sidebar.checkbox("✏️ Edit mode", value=st.session_state.get("edit_mode", False), help="Show all lines as editable text inputs")
+    st.session_state.edit_mode = edit_mode
+
+    # --- Text search ---
+    query = st.sidebar.text_input("🔍 Search", placeholder="Search across all pages…", label_visibility="visible")
+    if query:
+        results = []
+        for p in doc.pages:
+            for l in p.lines:
+                text = st.session_state.ground_truth_lines.get(l.line_id, st.session_state.edited_lines.get(l.line_id, l.text))
+                if query.lower() in text.lower():
+                    results.append((p.number, l.line_id, text))
+        if results:
+            st.sidebar.write(f"Found {len(results)} matches:")
+            for pnum, lid, text in results[:15]:
+                snippet = text[:60] + "…" if len(text) > 60 else text
+                if st.sidebar.button(f"p.{pnum}: {snippet}", key=f"srch_{lid}", use_container_width=True):
+                    st.session_state.current_page = pnum - 1
+                    st.rerun()
+        else:
+            st.sidebar.caption("No matches")
+
     # --- Suggestion summary ---
     st.sidebar.divider()
     summary = group_suggestions_by_reason(doc)
@@ -336,13 +360,66 @@ if st.session_state.review_document is not None:
                 cer = character_error_rate(orig, text)
                 st.write(f"**{lid[:20]}**: {text[:40]}… *(CER: {cer:.3f})*" if len(text) > 40 else f"**{lid[:20]}**: {text}")
 
-# ---------- Main review pane ----------
+# ---------- Main review pane (tabs: Dashboard + Review) ----------
 
 if st.session_state.review_document is not None:
     doc = st.session_state.review_document
     page_idx = st.session_state.current_page
-    if 0 <= page_idx < len(doc.pages):
-        page = doc.pages[page_idx]
+
+    tab_dashboard, tab_review = st.tabs(["📊 Dashboard", "📄 Review"])
+
+    with tab_dashboard:
+        st.subheader(f"{st.session_state.file_name}")
+        total_suggestions = sum(group_suggestions_by_reason(doc).values()) if group_suggestions_by_reason(doc) else 0
+        low_conf_count = sum(1 for p in doc.pages for l in p.lines if l.is_low_confidence)
+        failed_count = sum(1 for p in doc.pages if p.failures)
+        accepted_count = len(st.session_state.ground_truth_lines)
+
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Pages", len(doc.pages))
+        col2.metric("Failed", failed_count, delta_color="inverse")
+        col3.metric("Suggestions", total_suggestions)
+        col4.metric("Low Conf", low_conf_count, delta_color="inverse")
+        col5.metric("Accepted", accepted_count)
+
+        # Pages by confidence
+        page_scores = [(
+            p.number,
+            sum(l.confidence for l in p.lines) / max(len(p.lines), 1),
+            sum(1 for l in p.lines if l.is_low_confidence),
+        ) for p in doc.pages]
+
+        if page_scores:
+            st.subheader("Pages by Average Confidence")
+            chart_data = {"Page": [s[0] for s in page_scores], "Avg Confidence": [round(s[1], 1) for s in page_scores]}
+            st.bar_chart(chart_data, x="Page", y="Avg Confidence")
+
+        # Suggestion breakdown
+        summary = group_suggestions_by_reason(doc)
+        if summary:
+            st.subheader("Suggestions by Type")
+            chart_data = {"Type": list(summary.keys()), "Count": list(summary.values())}
+            st.bar_chart(chart_data, x="Type", y="Count")
+
+        # Worst pages
+        worst = sorted(page_scores, key=lambda x: x[1])[:10]
+        if worst:
+            st.caption("🔴 10 worst pages (by average confidence) — jump to review")
+            for pnum, avg, lowc in worst:
+                label = f"Page {pnum} — avg {avg:.0f}% ({lowc} low-confidence lines)"
+                if st.button(label, key=f"jump_{pnum}", use_container_width=True):
+                    st.session_state.current_page = pnum - 1
+                    st.rerun()
+
+    with tab_review:
+        edit_mode = st.session_state.get("edit_mode", False)
+        if edit_mode:
+            st.info("✏️ Edit mode — all lines are editable")
+        else:
+            st.caption("View mode — toggle ✏️ Edit mode in sidebar to edit")
+
+        if 0 <= page_idx < len(doc.pages):
+            page = doc.pages[page_idx]
 
         image_col, text_col = st.columns([3, 2])
 
@@ -362,18 +439,32 @@ if st.session_state.review_document is not None:
                 changed = display != line.text
                 conf = line.confidence
 
-                if conf < 40:
-                    badge = "🔴"
-                    bar = "#ff4444"
-                elif conf < 60:
-                    badge = "🟡"
-                    bar = "#ffaa00"
-                elif conf < 80:
-                    badge = "🟢"
-                    bar = "#44aa44"
+                if edit_mode:
+                    new_text = st.text_input(f"{line.line_id} ({conf:.0f}%)", value=display, key=f"em_{line.line_id}", label_visibility="collapsed")
+                    if new_text != display:
+                        if new_text != line.text:
+                            st.session_state.edited_lines[line.line_id] = new_text
+                        else:
+                            st.session_state.edited_lines.pop(line.line_id, None)
+                        st.rerun()
+                    for s in line.suggestions:
+                        if st.button(f"💡 {s.reason}: {s.suggestion_text[:30] if s.suggestion_text else 'flag'}", key=f"ems_{line.line_id}_{s.reason}"):
+                            st.session_state.ground_truth_lines[s.line_id] = s.suggestion_text
+                            st.rerun()
+                    st.caption(f"{conf:.0f}% · {line.script} · {line.region_type}")
                 else:
-                    badge = "✅"
-                    bar = "#228822"
+                    if conf < 40:
+                        badge = "🔴"
+                        bar = "#ff4444"
+                    elif conf < 60:
+                        badge = "🟡"
+                        bar = "#ffaa00"
+                    elif conf < 80:
+                        badge = "🟢"
+                        bar = "#44aa44"
+                    else:
+                        badge = "✅"
+                        bar = "#228822"
 
                 st.markdown(
                     f"""<div style="border-left:4px solid {bar};padding:4px 8px 0;margin:2px 0;background:linear-gradient(90deg,{bar}08,transparent)">
@@ -385,32 +476,33 @@ if st.session_state.review_document is not None:
                     unsafe_allow_html=True,
                 )
 
-                with st.expander("✏️ Edit / suggestions"):
-                    new_text = st.text_area("Line", display, key=f"ta_{line.line_id}", label_visibility="collapsed")
-                    if new_text != display:
-                        if new_text != line.text:
-                            st.session_state.edited_lines[line.line_id] = new_text
-                        else:
-                            st.session_state.edited_lines.pop(line.line_id, None)
-                        st.rerun()
+                if not edit_mode:
+                    with st.expander("✏️ Edit / suggestions"):
+                        new_text = st.text_area("Line", display, key=f"ta_{line.line_id}", label_visibility="collapsed")
+                        if new_text != display:
+                            if new_text != line.text:
+                                st.session_state.edited_lines[line.line_id] = new_text
+                            else:
+                                st.session_state.edited_lines.pop(line.line_id, None)
+                            st.rerun()
 
-                    for s in line.suggestions:
-                        akey = f"a_{s.line_id}_{s.reason}"
-                        if s.suggestion_text:
-                            st.write(f"**{s.reason}**: {s.suggestion_text}")
-                        else:
-                            st.write(f"**{s.reason}**: flag only")
-                        if s.reversible and s.suggestion_text:
-                            if st.button("Accept", key=akey):
-                                st.session_state.ground_truth_lines[s.line_id] = s.suggestion_text
-                                st.rerun()
+                        for s in line.suggestions:
+                            akey = f"a_{s.line_id}_{s.reason}"
+                            if s.suggestion_text:
+                                st.write(f"**{s.reason}**: {s.suggestion_text}")
+                            else:
+                                st.write(f"**{s.reason}**: flag only")
+                            if s.reversible and s.suggestion_text:
+                                if st.button("Accept", key=akey):
+                                    st.session_state.ground_truth_lines[s.line_id] = s.suggestion_text
+                                    st.rerun()
 
-                    with st.popover("⌨ Insert polytonic"):
-                        for combo, glyph in POLYTONIC_MAP.items():
-                            if st.button(f"{combo} → {glyph}", key=f"in_{line.line_id}_{combo}"):
-                                current = st.session_state.ground_truth_lines.get(line.line_id, st.session_state.edited_lines.get(line.line_id, line.text))
-                                st.session_state.edited_lines[line.line_id] = current + glyph
-                                st.rerun()
+                        with st.popover("⌨ Insert polytonic"):
+                            for combo, glyph in POLYTONIC_MAP.items():
+                                if st.button(f"{combo} → {glyph}", key=f"in_{line.line_id}_{combo}"):
+                                    current = st.session_state.ground_truth_lines.get(line.line_id, st.session_state.edited_lines.get(line.line_id, line.text))
+                                    st.session_state.edited_lines[line.line_id] = current + glyph
+                                    st.rerun()
 
                 st.caption(f"{line.script} · {line.region_type} · #{line.reading_order}")
 
