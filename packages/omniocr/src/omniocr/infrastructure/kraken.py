@@ -62,6 +62,13 @@ class KrakenLayoutAnalyzer(ILayoutAnalyzer):
                 for index, record in enumerate(records)
             )
             return Ok(lines)
+        except ImportError:
+            return Err(
+                LayoutError(
+                    "Kraken layout segmentation requires the optional kraken extra — "
+                    "install with: pip install omniocr[kraken]"
+                )
+            )
         except Exception as exc:
             return Err(LayoutError(f"Kraken layout segmentation failed: {exc}"))
 
@@ -117,6 +124,13 @@ class KrakenEngine(IOCREngine):
             segmentation = pageseg.segment(image)
             records = rpred.rpred(self._model, image, segmentation)
             return Ok(self.parse_records(records, page.width, page.height))
+        except ImportError:
+            return Err(
+                EngineError(
+                    "Kraken recognition requires the optional kraken extra — "
+                    "install with: pip install omniocr[kraken]"
+                )
+            )
         except Exception as exc:
             return Err(EngineError(f"Kraken extraction failed: {exc}"))
 

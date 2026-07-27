@@ -4,7 +4,9 @@ Run from the repository root:
 
     streamlit run editions/desktop/review_ui.py
 
-Requires: streamlit, Pillow, and the optional ``docx`` extra for DOCX export.
+Requires: streamlit, Pillow, ``kraken`` extra, and the optional ``docx`` extra.
+
+    pip install -e ".[kraken,docx]"
 """
 
 from __future__ import annotations
