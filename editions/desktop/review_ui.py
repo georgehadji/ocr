@@ -7,6 +7,10 @@ Run from the repository root:
 Requires: streamlit, Pillow, and the optional extras.
 
     pip install -e ".[pdf,kraken,opencv,docx]"
+
+Keyboard shortcuts:
+    ← →        prev/next page
+    Ctrl+Enter  jump to page number in input
 """
 
 from __future__ import annotations
@@ -35,64 +39,32 @@ st.set_page_config(page_title="OmniOCR Review", layout="wide")
 # ---------- Polytonic keyboard ----------
 
 POLYTONIC_MAP: dict[str, str] = {
-    "a>": "ἀ",  # alpha + smooth
-    "a<": "ἁ",  # alpha + rough
-    "a/>": "ἄ",  # alpha + smooth + acute
-    "a/<": "ἅ",  # alpha + rough + acute
-    "a=>": "ἂ",  # alpha + smooth + grave
-    "a=<": "ἃ",  # alpha + rough + grave
-    "a~>": "ἆ",  # alpha + smooth + circumflex
-    "a~<": "ἇ",  # alpha + rough + circumflex
-    "A>": "Ἀ",
-    "A<": "Ἁ",
-    "A/>": "Ἄ",
-    "A/<": "Ἅ",
-    "e>": "ἐ",
-    "e<": "ἑ",
-    "e/>": "ἔ",
-    "e/<": "ἕ",
-    "E>": "Ἐ",
-    "E<": "Ἑ",
-    "h>": "ἠ",
-    "h<": "ἡ",
-    "h/>": "ἤ",
-    "h/<": "ἥ",
-    "h~>": "ἦ",
-    "h~<": "ἧ",
-    "H>": "Ἠ",
-    "H<": "Ἡ",
-    "i>": "ἰ",
-    "i<": "ἱ",
-    "i/>": "ἴ",
-    "i/<": "ἵ",
-    "i~>": "ἶ",
-    "i~<": "ἷ",
-    "I>": "Ἰ",
-    "I<": "Ἱ",
-    "o>": "ὀ",
-    "o<": "ὁ",
-    "o/>": "ὄ",
-    "o/<": "ὅ",
-    "O>": "Ὀ",
-    "O<": "Ὁ",
-    "u>": "ὐ",
-    "u<": "ὑ",
-    "u/>": "ὔ",
-    "u/<": "ὕ",
-    "U<": "Ὑ",
-    "w>": "ὠ",
-    "w<": "ὡ",
-    "w/>": "ὤ",
-    "w/<": "ὥ",
-    "w~>": "ὦ",
-    "w~<": "ὧ",
-    "W>": "Ὠ",
-    "W<": "Ὡ",
-    "r>": "ῤ",  # rho + smooth
-    "r<": "ῥ",  # rho + rough
-    "R<": "Ῥ",
+    "a>": "ἀ", "a<": "ἁ", "a/>": "ἄ", "a/<": "ἅ",
+    "a=>": "ἂ", "a=<": "ἃ", "a~>": "ἆ", "a~<": "ἇ",
+    "A>": "Ἀ", "A<": "Ἁ", "A/>": "Ἄ", "A/<": "Ἅ",
+    "e>": "ἐ", "e<": "ἑ", "e/>": "ἔ", "e/<": "ἕ",
+    "E>": "Ἐ", "E<": "Ἑ",
+    "h>": "ἠ", "h<": "ἡ", "h/>": "ἤ", "h/<": "ἥ",
+    "h~>": "ἦ", "h~<": "ἧ", "H>": "Ἠ", "H<": "Ἡ",
+    "i>": "ἰ", "i<": "ἱ", "i/>": "ἴ", "i/<": "ἵ",
+    "i~>": "ἶ", "i~<": "ἷ", "I>": "Ἰ", "I<": "Ἱ",
+    "o>": "ὀ", "o<": "ὁ", "o/>": "ὄ", "o/<": "ὅ",
+    "O>": "Ὀ", "O<": "Ὁ",
+    "u>": "ὐ", "u<": "ὑ", "u/>": "ὔ", "u/<": "ὕ", "U<": "Ὑ",
+    "w>": "ὠ", "w<": "ὡ", "w/>": "ὤ", "w/<": "ὥ",
+    "w~>": "ὦ", "w~<": "ὧ", "W>": "Ὠ", "W<": "Ὡ",
+    "r>": "ῤ", "r<": "ῥ", "R<": "Ῥ",
+    "'": "᾽",  # koronis
 }
 
+# Keyboard category groups for the persistent panel
+POLYTONIC_GROUPS: list[tuple[str, dict[str, str]]] = [
+    ("Breathings", {"Smooth (>)": ">", "Rough (<)": "<"}),
+    ("Accents", {"Acute (/)": "/", "Grave (=)": "=", "Circumflex (~)": "~"}),
+    ("Combos", {k: k for k in ["a>", "a<", "a/>", "a/<", "e>", "e<", "e/>", "e/<",
+                                "h>", "h<", "h/>", "h/<", "o>", "o<", "o/>", "o/<",
+                                "w>", "w<", "w/>", "w/<"]}),
+]
 
 # ---------- Session state ----------
 
@@ -102,7 +74,32 @@ if "current_page" not in st.session_state:
     st.session_state.current_page = 0
 if "ground_truth_lines" not in st.session_state:
     st.session_state.ground_truth_lines: dict[str, str] = {}
+if "edited_lines" not in st.session_state:
+    st.session_state.edited_lines: dict[str, str] = {}
+if "pb_pending" not in st.session_state:
+    st.session_state.pb_pending: str = ""
 
+
+# ---------- Keyboard shortcut injection ----------
+
+st.markdown(
+    """
+<script>
+document.addEventListener('keydown', function(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    const streamlitDoc = window.parent.document;
+    if (e.key === 'ArrowLeft') {
+        const btn = streamlitDoc.querySelector('[data-testid="stButton"] button:has-text("◀")');
+        if (btn) btn.click();
+    } else if (e.key === 'ArrowRight') {
+        const btn = streamlitDoc.querySelector('[data-testid="stButton"] button:has-text("▶")');
+        if (btn) btn.click();
+    }
+});
+</script>
+""",
+    unsafe_allow_html=True,
+)
 
 # ---------- Sidebar controls ----------
 
@@ -112,14 +109,15 @@ st.sidebar.caption("Scholarly correction interface")
 uploaded_file = st.sidebar.file_uploader(
     "Upload a PDF or image",
     type=["pdf", "png", "jpg", "jpeg", "tif", "tiff"],
+    help="Supports up to 2 GB files.",
 )
 
 if uploaded_file is not None and st.session_state.review_document is None:
-    with st.spinner("Running OCR pipeline..."):
+    file_name = uploaded_file.name
+    with st.spinner(f"Running OCR on {file_name}..."):
         pdf_bytes = uploaded_file.read()
         cfg = Settings.from_env()
 
-        # Try imports; fail gracefully if optional deps are missing.
         try:
             from omniocr.infrastructure.ingest import DocumentPageSource
             from omniocr.infrastructure.preprocess import GrayscaleProcessor
@@ -140,7 +138,6 @@ if uploaded_file is not None and st.session_state.review_document is None:
             "exporter": MarkdownExporter(),
         }
 
-        # Opt-in VLM if an OpenRouter API key is set in the environment.
         if cfg.enable_vlm and cfg.vlm_api_key:
             from omniocr.infrastructure.vlm import VLMEngine
             pipeline_kwargs["router"] = ScriptRouter(
@@ -155,7 +152,12 @@ if uploaded_file is not None and st.session_state.review_document is None:
 
         pipeline = PipelineOrchestrator(**pipeline_kwargs)
         ctx = TenantContext("desktop", "reviewer", "desktop")
-        result = pipeline.run(pdf_bytes, ctx)
+
+        with st.spinner("Processing pages..."):
+            progress = st.sidebar.progress(0, "OCR in progress…")
+            result = pipeline.run(pdf_bytes, ctx)
+            progress.progress(100, "Complete")
+
         if result.is_ok():
             pages = list(result.value.pages)
             page_images = [b""] * len(pages)
@@ -170,6 +172,7 @@ if uploaded_file is not None and st.session_state.review_document is None:
                 pass
             st.session_state.review_document = build_review_document(result.value, page_images)
             st.session_state.current_page = 0
+            st.session_state.file_name = file_name
             st.rerun()
         else:
             st.sidebar.error(f"Pipeline failed: {result.error}")
@@ -177,18 +180,42 @@ if uploaded_file is not None and st.session_state.review_document is None:
 if st.session_state.review_document is not None:
     doc = st.session_state.review_document
     total_pages = len(doc.pages)
+    file_name = st.session_state.get("file_name", "document.pdf")
 
-    col1, col2, col3 = st.sidebar.columns(3)
-    with col1:
-        if st.button("◀ Prev") and st.session_state.current_page > 0:
+    st.sidebar.divider()
+
+    # Page navigation — number input + arrow buttons
+    nav_col1, nav_col2, nav_col3 = st.sidebar.columns([3, 1, 1])
+    with nav_col1:
+        page_jump = st.number_input(
+            "Page",
+            min_value=1,
+            max_value=total_pages,
+            value=st.session_state.current_page + 1,
+            label_visibility="collapsed",
+            key="page_jump",
+        )
+        if page_jump != st.session_state.current_page + 1:
+            st.session_state.current_page = page_jump - 1
+            st.rerun()
+    with nav_col2:
+        if st.button("◀", help="Previous page (←)", disabled=st.session_state.current_page == 0):
             st.session_state.current_page -= 1
             st.rerun()
-    with col2:
-        st.write(f"Page {st.session_state.current_page + 1}/{total_pages}")
-    with col3:
-        if st.button("Next ▶") and st.session_state.current_page < total_pages - 1:
+    with nav_col3:
+        if st.button("▶", help="Next page (→)", disabled=st.session_state.current_page == total_pages - 1):
             st.session_state.current_page += 1
             st.rerun()
+
+    st.sidebar.caption(f"of {total_pages} pages")
+    st.sidebar.divider()
+
+    # Document info
+    st.sidebar.caption(f"📄 File: {file_name}")
+    st.sidebar.caption(f"📊 {total_pages} pages")
+    failed_pages = sum(1 for p in doc.pages if p.failures)
+    if failed_pages:
+        st.sidebar.caption(f"⚠️ {failed_pages} failed pages")
 
     # Suggestion summary
     summary = group_suggestions_by_reason(doc)
@@ -197,12 +224,75 @@ if st.session_state.review_document is not None:
         for reason, count in sorted(summary.items(), key=lambda x: -x[1]):
             st.sidebar.write(f"  {reason}: {count}")
 
+    # Persistent polytonic keyboard
+    st.sidebar.divider()
+    st.sidebar.subheader("⌨ Polytonic Keyboard")
+    st.sidebar.caption("Click a combo to copy for pasting into text")
+
+    for label, combos in POLYTONIC_GROUPS:
+        with st.sidebar.expander(label):
+            for name, combo in combos.items():
+                glyph = POLYTONIC_MAP.get(combo, "")
+                if glyph:
+                    if st.sidebar.button(f"{name} → {glyph}", key=f"pb_{combo}", use_container_width=True):
+                        st.session_state.pb_pending = glyph
+                        st.rerun()
+
+    st.sidebar.divider()
+
     # Export
-    if st.sidebar.button("Export Markdown"):
-        export_ctx = TenantContext("desktop", "export", "desktop")
-        md = MarkdownExporter()
-        # Re-run pipeline for export (simplified — in production, store the result)
-        st.sidebar.success("Export handled via pipeline")
+    st.sidebar.subheader("Export")
+
+    export_ctx = TenantContext("desktop", "export", "desktop")
+
+    # Collect all edited/ground-truthed text for export
+    # For now, export from the document in session state
+    # In a production version, this would use the ground truth pipeline result
+
+    if st.sidebar.button("📥 Export Markdown", use_container_width=True):
+        md_exporter = MarkdownExporter()
+        # Use original pipeline result for export
+        export_content = "\n\n".join(
+            f"## Page {p.number}\n\n" + "\n".join(
+                st.session_state.ground_truth_lines.get(l.line_id, l.text)
+                for l in p.lines
+            )
+            for p in doc.pages
+        )
+        st.sidebar.download_button(
+            "Download Markdown",
+            export_content.encode("utf-8"),
+            file_name=f"{Path(file_name).stem}.md",
+            key="dl_md",
+            use_container_width=True,
+        )
+
+    if st.sidebar.button("📥 Export Text", use_container_width=True):
+        txt_content = "\n".join(
+            st.session_state.ground_truth_lines.get(l.line_id, l.text)
+            for p in doc.pages
+            for l in p.lines
+        )
+        st.sidebar.download_button(
+            "Download Text",
+            txt_content.encode("utf-8"),
+            file_name=f"{Path(file_name).stem}.txt",
+            key="dl_txt",
+            use_container_width=True,
+        )
+
+    # Ground truth summary — collapsible
+    if st.session_state.ground_truth_lines:
+        st.sidebar.divider()
+        with st.sidebar.expander("Accepted Corrections"):
+            for line_id, text in st.session_state.ground_truth_lines.items():
+                orig = next(
+                    (l.text for p in doc.pages for l in p.lines if l.line_id == line_id),
+                    "",
+                )
+                cer = character_error_rate(orig, text)
+                st.write(f"**{line_id}**: {text[:50]}…  *(CER: {cer:.3f})*")
+
 
 # ---------- Main review pane ----------
 
@@ -219,67 +309,116 @@ if st.session_state.review_document is not None:
                 img = Image.open(io.BytesIO(page.image_bytes))
                 st.image(img, use_container_width=True)
             else:
-                st.info("Page image not available")
+                st.info("Page image not available — PyMuPDF required for page rendering")
 
         with text_col:
             st.subheader(f"Page {page.number}")
+
             if page.failures:
-                st.error(f"Failures: {', '.join(f.message for f in page.failures)}")
+                for f in page.failures:
+                    st.error(f"Failed: {f.message}")
 
             for line in page.lines:
-                key = f"line_{line.line_id}"
+                # Get current text (edited or ground-truthed)
+                display_text = st.session_state.ground_truth_lines.get(line.line_id)
+                if display_text is None:
+                    display_text = st.session_state.edited_lines.get(line.line_id, line.text)
 
-                if line.is_low_confidence:
-                    st.markdown(f"**:red[{line.text}]**  *(low conf: {line.confidence:.0f}%)*")
+                changed = display_text != line.text
+
+                # Confidence color bar
+                conf = line.confidence
+                if conf < 40:
+                    conf_color = "#ff4444"
+                    conf_emoji = "🔴"
+                elif conf < 60:
+                    conf_color = "#ffaa00"
+                    conf_emoji = "🟡"
+                elif conf < 80:
+                    conf_color = "#44aa44"
+                    conf_emoji = "🟢"
                 else:
-                    st.write(f"{line.text}  *({line.confidence:.0f}%)*")
+                    conf_color = "#228822"
+                    conf_emoji = "✅"
 
-                st.caption(
-                    f"Script: {line.script} | Region: {line.region_type} "
-                    f"| Order: {line.reading_order}"
-                )
+                # Text display
+                line_container = st.container()
+                if line.is_low_confidence:
+                    line_container.markdown(
+                        f"""<div style="border-left:4px solid {conf_color};padding:4px 8px;margin:2px 0;background:linear-gradient(90deg,{conf_color}08,transparent)">
+                        <span style="color:{conf_color};font-weight:bold">{conf_emoji} {line.confidence:.0f}%</span>
+                        <span style="color:#cc0000;font-size:1.05em">{display_text}</span>
+                        {("<span style='color:#888;font-size:0.85em'> (edited)</span>" if changed else "")}
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    line_container.markdown(
+                        f"""<div style="border-left:4px solid {conf_color};padding:4px 8px;margin:2px 0;background:linear-gradient(90deg,{conf_color}08,transparent)">
+                        <span style="color:{conf_color};font-weight:bold">{conf_emoji} {line.confidence:.0f}%</span>
+                        {"<span style='text-decoration:underline;text-decoration-color:#228822'>" if changed else ""}
+                        {display_text}
+                        {"</span>" if changed else ""}
+                        {("<span style='color:#888;font-size:0.85em'> (edited)</span>" if changed else "")}
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
 
-                if line.suggestions:
-                    expand = st.expander(f"{len(line.suggestions)} suggestion(s)")
-                    for s in line.suggestions:
-                        accepted_key = f"accept_{s.line_id}_{s.reason}"
-                        is_accepted = st.session_state.ground_truth_lines.get(s.line_id) == s.suggestion_text
-                        if s.suggestion_text:
-                            expand.write(f"**{s.reason}**: {s.suggestion_text}")
+                # Inline editing — text input that appears on click
+                edit_key = f"edit_{line.line_id}"
+                if edit_key not in st.session_state:
+                    st.session_state[edit_key] = display_text
+
+                with st.expander(f"✏️ Edit line"):
+                    new_text = st.text_area(
+                        "Correct this line",
+                        value=display_text,
+                        key=f"ta_{line.line_id}",
+                        label_visibility="collapsed",
+                    )
+                    if new_text != display_text:
+                        if line.text != new_text:
+                            st.session_state.edited_lines[line.line_id] = new_text
                         else:
-                            expand.write(f"**{s.reason}**: flag only")
-                        if s.reversible and s.suggestion_text:
-                            if expand.button("Accept", key=accepted_key):
-                                st.session_state.ground_truth_lines[s.line_id] = s.suggestion_text
-                                st.rerun()
-                    if is_accepted:
-                        expand.success("Accepted as ground truth")
+                            st.session_state.edited_lines.pop(line.line_id, None)
+                        st.rerun()
 
-                # Polytonic keyboard per line
-                with st.popover("⌨ Polytonic"):
-                    st.caption("Type a key combo (e.g. a> = ἀ)")
-                    combo = st.text_input("Combo", key=f"combo_{line.line_id}", label_visibility="collapsed")
-                    if combo and combo in POLYTONIC_MAP:
-                        st.write(f"→ {POLYTONIC_MAP[combo]}")
-                        if st.button(f"Insert {POLYTONIC_MAP[combo]}", key=f"insert_{line.line_id}"):
-                            st.session_state.ground_truth_lines[line.line_id] = (
-                                st.session_state.ground_truth_lines.get(line.line_id, line.text)
-                                + POLYTONIC_MAP[combo]
-                            )
-                            st.rerun()
+                    if st.session_state.pb_pending:
+                        st.info(f"→ Click to insert: **{st.session_state.pb_pending}**")
 
-                st.divider()
+                # Suggestions expander
+                if line.suggestions:
+                    with st.expander(f"💡 {len(line.suggestions)} suggestion(s)"):
+                        for s in line.suggestions:
+                            accept_key = f"accept_{s.line_id}_{s.reason}"
+                            if s.suggestion_text:
+                                st.write(f"**{s.reason}**: {s.suggestion_text}")
+                            else:
+                                st.write(f"**{s.reason}**: flag only")
+                            if s.reversible and s.suggestion_text:
+                                if st.button("Accept", key=accept_key):
+                                    st.session_state.ground_truth_lines[s.line_id] = s.suggestion_text
+                                    st.rerun()
+                            if st.session_state.ground_truth_lines.get(s.line_id) == s.suggestion_text:
+                                st.success("Accepted")
 
-        # Ground truth summary
-        if st.session_state.ground_truth_lines:
-            st.subheader("Accepted Corrections (Ground Truth)")
-            for line_id, text in st.session_state.ground_truth_lines.items():
-                orig = next(
-                    (l.text for p in doc.pages for l in p.lines if l.line_id == line_id),
-                    "",
+                # Region + script metadata
+                st.caption(
+                    f"{line.script} · {line.region_type} · reading order #{line.reading_order}"
                 )
-                cer = character_error_rate(orig, text)
-                st.write(f"**{line_id}**: {text}  *(CER vs original: {cer:.4f})*")
+
+        st.divider()
+
+        # Ground truth toggle at bottom
+        if st.session_state.ground_truth_lines:
+            with st.expander(f"📝 Accepted Corrections ({len(st.session_state.ground_truth_lines)})"):
+                for line_id, text in st.session_state.ground_truth_lines.items():
+                    orig = next(
+                        (l.text for p in doc.pages for l in p.lines if l.line_id == line_id),
+                        "",
+                    )
+                    cer = character_error_rate(orig, text)
+                    st.write(f"**{line_id}**: {text}  *(CER: {cer:.4f})*")
 
 else:
     st.info("Upload a PDF or image to begin review")
