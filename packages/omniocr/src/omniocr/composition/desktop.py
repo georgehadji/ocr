@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.application.pipeline import PipelineOrchestrator, SuggestOnlyCorrector
 from omniocr.infrastructure.tesseract import TesseractEngine
 from omniocr.infrastructure.ingest import DocumentPageSource

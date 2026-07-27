@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.application.pipeline import (
     InMemoryPage,
     NullRouter,
     PipelineOrchestrator,
-    SuggestOnlyCorrector,
     build_document,
 )
 from omniocr.infrastructure.lexicon import SetLexicon

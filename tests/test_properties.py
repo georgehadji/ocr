@@ -10,7 +10,7 @@ from __future__ import annotations
 from hypothesis import given, assume
 from hypothesis.strategies import text, integers, floats, one_of, sampled_from
 
-from omniocr.application.pipeline import SuggestOnlyCorrector
+from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.application.metrics import character_error_rate, word_error_rate
 from omniocr.domain.models import (
     BBox,

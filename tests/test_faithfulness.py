@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from omniocr.application.pipeline import SuggestOnlyCorrector
+from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.domain.models import BBox, Confidence, OCRLine, Script, TenantContext
 
 
