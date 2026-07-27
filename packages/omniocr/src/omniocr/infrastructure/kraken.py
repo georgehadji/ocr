@@ -47,6 +47,12 @@ class KrakenLayoutAnalyzer(ILayoutAnalyzer):
                 segmenter = kraken_segment
 
             image = Image.open(io.BytesIO(page.content))
+            # Kraken's ``pageseg.segment()`` requires a bi-level (binary) image.
+            # Convert grayscale (L) mode to binary (1) using a threshold.
+            if image.mode == "L":
+                image = image.point(lambda x: 255 if x > 128 else 0, mode="1")
+            elif image.mode != "1":
+                image = image.convert("1")
             segmentation = segmenter(image)
             records = getattr(segmentation, "lines", segmentation)
             lines = tuple(
