@@ -69,7 +69,7 @@ def create_ensemble_pipeline(
     job_store: IJobStore | None = None,
     vlm_api_key: str | None = None,
     vlm_api_url: str | None = None,
-    vlm_model: str = "google/gemini-2.5-flash-001",
+    vlm_model: str = "google/gemini-3.5-flash-lite",
     calamari_model_glob: str | None = None,
 ) -> PipelineOrchestrator:
     """Build a CPU ensemble with script rules injected at the composition root.

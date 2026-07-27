@@ -35,9 +35,9 @@ class VLMEngine(IOCREngine):
     """Optional cloud-API vision-language model adapter.
 
     Defaults to `OpenRouter <https://openrouter.ai>`_ at
-    ``https://openrouter.ai/api/v1`` with ``google/gemini-2.5-flash-001``
-    as the default model. The adapter is API-compatible with any OpenAI-
-    style chat completions endpoint.
+    ``https://openrouter.ai/api/v1`` with ``google/gemini-3.5-flash-lite``
+    as the default model — 5× cheaper than Gemini Flash, vision-capable,
+    with minimal reasoning effort for deterministic extraction.
 
     Requires an explicit ``api_key`` at construction time.
     The caller must check ``Settings.enable_vlm`` before wiring this adapter.
@@ -56,7 +56,7 @@ class VLMEngine(IOCREngine):
         self,
         api_key: str,
         api_url: str = "https://openrouter.ai/api/v1",
-        model: str = "google/gemini-2.5-flash-001",
+        model: str = "google/gemini-3.5-flash-lite",
         grounding_guard: GroundingGuard | None = None,
         site_url: str = "",
         site_name: str = "OmniOCR",
@@ -127,7 +127,13 @@ class VLMEngine(IOCREngine):
                 }
             ],
             "max_tokens": 2048,
+            "temperature": 0.0,
+            "top_p": 1.0,
         }
+        if "gemini" in self._model.lower():
+            payload["reasoning"] = {"effort": "minimal"}
+        elif "claude" in self._model.lower():
+            payload["reasoning"] = {"effort": "low"}
 
         headers: dict[str, str] = {
             "Content-Type": "application/json",
