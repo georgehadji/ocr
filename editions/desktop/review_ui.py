@@ -424,8 +424,21 @@ if st.session_state.review_document is not None:
         image_col, text_col = st.columns([3, 2])
 
         with image_col:
+            show_bbox = st.checkbox("📐 Show reading order", value=st.session_state.get("show_bbox", False), key="bbox_toggle", label_visibility="collapsed")
+            st.session_state.show_bbox = show_bbox
+
             if page.image_bytes:
-                st.image(Image.open(io.BytesIO(page.image_bytes)), use_container_width=True)
+                img = Image.open(io.BytesIO(page.image_bytes)).convert("RGB")
+                if show_bbox:
+                    from PIL import ImageDraw
+                    draw = ImageDraw.Draw(img)
+                    colors = ["#ff4444", "#44aaff", "#44ff44", "#ffaa00", "#ff44ff", "#44ffff"]
+                    for idx, line in enumerate(page.lines):
+                        b = line.bbox
+                        color = colors[idx % len(colors)]
+                        draw.rectangle([b.x, b.y, b.right, b.bottom], outline=color, width=3)
+                        draw.text((b.x + 2, b.y + 2), str(idx + 1), fill=color)
+                st.image(img, use_container_width=True)
             else:
                 st.info("Page image — install PyMuPDF: pip install -e '.[pdf]'")
 
@@ -505,6 +518,22 @@ if st.session_state.review_document is not None:
                                     st.rerun()
 
                 st.caption(f"{line.script} · {line.region_type} · #{line.reading_order}")
+
+            # Engine comparison
+            has_blocks = any(len(l.blocks) > 0 for p in doc.pages for l in p.lines)
+            if has_blocks:
+                with st.expander("⚖️ Engine comparison"):
+                    st.caption("Per-word blocks from each engine. Colors show per-block confidence.")
+                    for line in page.lines[:10]:
+                        if line.blocks:
+                            engines = {}
+                            for b in line.blocks:
+                                eng = b.provenance.engine if b.provenance else "unknown"
+                                engines.setdefault(eng, []).append(f"{b.text} ({b.confidence.value:.0f}%)")
+                            st.write(f"**{line.line_id}**")
+                            for eng, tokens in engines.items():
+                                conf_color = "#28a745" if all(float(t.split("(")[-1].rstrip("%)")) > 70 for t in tokens) else "#dc3545"
+                                st.markdown(f"<span style='color:{conf_color};font-weight:bold'>{eng}</span>: {' '.join(tokens)}", unsafe_allow_html=True)
 
             if st.session_state.ground_truth_lines:
                 with st.expander(f"✅ {len(st.session_state.ground_truth_lines)} corrections"):
