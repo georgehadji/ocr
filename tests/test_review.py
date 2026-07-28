@@ -96,13 +96,11 @@ def test_review_line_preserves_metadata() -> None:
 def test_review_line_suggestions_grouped_by_id() -> None:
     """Suggestions are assigned to the correct line by line_id."""
     suggestions = {
-        "line-1-1": (
-            Suggestion("line-1-1", "source", "suggestion", "check", True),
-        ),
+        "line-1-1": (Suggestion("line-1-1", "source", "suggestion", "check", True),),
     }
     review = build_review_page(_page(), b"", suggestions)
 
-    matching = [l for l in review.lines if l.line_id == "line-1-1"]
+    matching = [line for line in review.lines if line.line_id == "line-1-1"]
     assert len(matching) == 1
     assert len(matching[0].suggestions) == 1
     assert matching[0].suggestions[0].reason == "check"

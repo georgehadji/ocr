@@ -9,7 +9,7 @@ source text is never mutated in place.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Tuple
 
@@ -18,7 +18,6 @@ from omniocr.domain.models import (
     Confidence,
     DocumentPage,
     DocumentStructure,
-    OCRLine,
     PageFailure,
     Suggestion,
 )
@@ -66,7 +65,9 @@ def _is_low_confidence(confidence: Confidence) -> bool:
 
 
 def build_review_page(
-    page: DocumentPage, image_bytes: bytes, line_suggestions: dict[str, Sequence[Suggestion]] | None = None
+    page: DocumentPage,
+    image_bytes: bytes,
+    line_suggestions: Mapping[str, Sequence[Suggestion]] | None = None,
 ) -> ReviewPage:
     """Assemble a ``ReviewPage`` from pipeline output.
 
@@ -110,7 +111,9 @@ def build_review_document(
             suggestions_by_line.setdefault(suggestion.line_id, []).append(suggestion)
 
     review_pages = tuple(
-        build_review_page(page, page_images[index] if index < len(page_images) else b"", suggestions_by_line)
+        build_review_page(
+            page, page_images[index] if index < len(page_images) else b"", suggestions_by_line
+        )
         for index, page in enumerate(document.pages)
     )
     return ReviewDocument(pages=review_pages)

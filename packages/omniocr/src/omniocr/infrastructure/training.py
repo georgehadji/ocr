@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from omniocr.domain.models import DocumentPage, OCRLine, Script
+from omniocr.domain.models import Script
 from omniocr.infrastructure.review import ReviewDocument
 
 
@@ -52,10 +52,12 @@ def export_ground_truth_to_kraken_json(
         for line in page.lines:
             text = _ground_truth_text(line, page)
             if text:
-                records.append({
-                    "image": image_path.name,
-                    "text": text,
-                })
+                records.append(
+                    {
+                        "image": image_path.name,
+                        "text": text,
+                    }
+                )
 
     train_path = output / "train.json"
     train_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")

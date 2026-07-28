@@ -55,16 +55,16 @@ class CalamariEngine(IOCREngine):
         self, page: RawPage, context: TenantContext
     ) -> Result[Sequence[OCRBlock], EngineError]:
         try:
-            import glob
-
             with tempfile.TemporaryDirectory() as tmpdir:
                 image_path = Path(tmpdir) / "page.png"
                 image_path.write_bytes(page.content)
 
                 cmd = [
                     "calamari-predict",
-                    "--files", str(image_path),
-                    "--checkpoint", self._model_glob,
+                    "--files",
+                    str(image_path),
+                    "--checkpoint",
+                    self._model_glob,
                     *self._args,
                 ]
                 result = subprocess.run(
@@ -95,9 +95,7 @@ class CalamariEngine(IOCREngine):
         except Exception as exc:
             return Err(EngineError(f"Calamari extraction failed: {exc}"))
 
-    def _parse_output(
-        self, output: str, page_width: int, page_height: int
-    ) -> list[OCRBlock]:
+    def _parse_output(self, output: str, page_width: int, page_height: int) -> list[OCRBlock]:
         """Convert Calamari JSON output into immutable domain blocks."""
         import json
 

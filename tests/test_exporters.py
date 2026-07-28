@@ -231,7 +231,8 @@ def test_alto_export_region_type_and_reading_order_preserved() -> None:
     text_lines = [
         elem
         for elem in root.iter()
-        if elem.tag.endswith("TextLine") and elem.attrib.get("ID") in {"line-1", "line-2", "line-3", "line-4"}
+        if elem.tag.endswith("TextLine")
+        and elem.attrib.get("ID") in {"line-1", "line-2", "line-3", "line-4"}
     ]
 
     regions = {
@@ -259,13 +260,11 @@ def test_page_xml_export_region_type_preserved() -> None:
     text_lines = [
         elem
         for elem in root.iter()
-        if elem.tag.endswith("TextLine") and elem.attrib.get("id") in {"line-1", "line-2", "line-3", "line-4"}
+        if elem.tag.endswith("TextLine")
+        and elem.attrib.get("id") in {"line-1", "line-2", "line-3", "line-4"}
     ]
 
-    regions = {
-        elem.attrib["id"]: elem.attrib.get("regionType")
-        for elem in text_lines
-    }
+    regions = {elem.attrib["id"]: elem.attrib.get("regionType") for elem in text_lines}
 
     assert regions["line-1"] == "main"
     assert regions["line-3"] == "apparatus"

@@ -94,6 +94,7 @@ def test_caching_engine_ttl_expiry_causes_cache_miss() -> None:
 
     # Wait for TTL to expire
     import time
+
     time.sleep(1.1)
 
     # Fourth call after TTL: cache miss, engine called again (calls=2→3 → succeeds)

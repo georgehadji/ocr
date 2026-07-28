@@ -22,4 +22,3 @@ def test_server_composition_validates_upload() -> None:
 
     assert validate_upload(b"not-a-pdf", "book.pdf", 100).is_err()
     assert validate_upload(b"%PDF-1.7", "book.pdf", 100).is_ok()
-

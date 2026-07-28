@@ -4,14 +4,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omniocr.domain.models import BBox, Confidence, DocumentPage, DocumentStructure, OCRLine, RegionType, Script, Suggestion
+from omniocr.domain.models import (
+    BBox,
+    Confidence,
+    DocumentPage,
+    DocumentStructure,
+    OCRLine,
+    RegionType,
+    Script,
+)
 from omniocr.infrastructure.review import ReviewDocument, build_review_document
-from omniocr.infrastructure.training import compute_cer_improvement, export_ground_truth_to_kraken_json
+from omniocr.infrastructure.training import (
+    compute_cer_improvement,
+    export_ground_truth_to_kraken_json,
+)
 
 
 def _review_doc() -> ReviewDocument:
     """Create a simple ReviewDocument with one page and one line."""
-    run = None
     line = OCRLine(
         id="line-1",
         text="κεφάλαιον",
@@ -33,6 +43,7 @@ def test_export_ground_truth_to_kraken_json(tmp_path: Path) -> None:
 
     assert output.is_file()
     import json
+
     records = json.loads(output.read_text())
     assert len(records) == 1
     text = records[0]["text"]
@@ -44,14 +55,27 @@ def test_export_ground_truth_to_kraken_json(tmp_path: Path) -> None:
 
 def test_export_ground_truth_to_kraken_json_multiple_lines(tmp_path: Path) -> None:
     """Multiple lines on the same page are all written to train.json."""
-    line1 = OCRLine(id="l1", text="line1", confidence=Confidence(90), bbox=BBox(0, 0, 50, 10), script=Script.BYZANTINE)
-    line2 = OCRLine(id="l2", text="line2", confidence=Confidence(85), bbox=BBox(0, 20, 50, 10), script=Script.BYZANTINE)
+    line1 = OCRLine(
+        id="l1",
+        text="line1",
+        confidence=Confidence(90),
+        bbox=BBox(0, 0, 50, 10),
+        script=Script.BYZANTINE,
+    )
+    line2 = OCRLine(
+        id="l2",
+        text="line2",
+        confidence=Confidence(85),
+        bbox=BBox(0, 20, 50, 10),
+        script=Script.BYZANTINE,
+    )
     page = DocumentPage(number=1, width=200, height=100, lines=(line1, line2))
     structure = DocumentStructure(pages=(page,))
     doc = build_review_document(structure, [b"img"])
 
     output = export_ground_truth_to_kraken_json(doc, tmp_path)
     import json
+
     records = json.loads(output.read_text())
     assert len(records) == 2
     assert records[0]["text"] == "line1"

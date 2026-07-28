@@ -1,12 +1,23 @@
 from omniocr.infrastructure.config import Settings
 from omniocr.infrastructure.events import InMemoryEventBus
-from omniocr.infrastructure.exporters import AltoXmlExporter, DocxExporter, MarkdownExporter, PageXmlExporter, SearchablePdfExporter
+from omniocr.infrastructure.exporters import (
+    AltoXmlExporter,
+    DocxExporter,
+    MarkdownExporter,
+    PageXmlExporter,
+    SearchablePdfExporter,
+)
 from omniocr.infrastructure.ingest import DocumentPageSource
 from omniocr.infrastructure.jobs import InMemoryJobStore, SQLiteJobStore
 from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
 from omniocr.ports.lexicon import SetLexicon
 from omniocr.infrastructure.models import sha256_file, verify_model_hash
-from omniocr.infrastructure.preprocess import GrayscaleProcessor, PassthroughProcessor, SauvolaProcessor, normalize_nfc
+from omniocr.infrastructure.preprocess import (
+    GrayscaleProcessor,
+    PassthroughProcessor,
+    SauvolaProcessor,
+    normalize_nfc,
+)
 from omniocr.infrastructure.resilience import CachingEngine, CircuitBreakerEngine, RetryingEngine
 from omniocr.infrastructure.security import validate_upload
 from omniocr.infrastructure.tesseract import TesseractEngine

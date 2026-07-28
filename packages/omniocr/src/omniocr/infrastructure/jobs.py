@@ -150,6 +150,7 @@ class RedisJobStore:
 
     def __init__(self, redis_url: str = "redis://localhost:6379/0") -> None:
         import redis as _redis
+
         self._redis = _redis.from_url(redis_url)
 
     def checkpoint(self, job_id: str, document: DocumentStructure) -> Result[None, IngestError]:

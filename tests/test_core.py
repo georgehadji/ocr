@@ -157,17 +157,12 @@ def test_suggest_only_corrector_expands_abbreviations_reversibly() -> None:
     disabled = SuggestOnlyCorrector(abbreviations={}).correct(
         line, TenantContext("org", "user", "desktop")
     )
-    default = SuggestOnlyCorrector().correct(
-        line, TenantContext("org", "user", "desktop")
-    )
+    default = SuggestOnlyCorrector().correct(line, TenantContext("org", "user", "desktop"))
 
     assert disabled.is_ok()
     assert not any(s.reason == "reversible_abbreviation_expansion" for s in disabled.value)
     assert default.is_ok()
-    assert any(
-        s.suggestion_text == "ἄνθρωπος καὶ τὰ λοιπά" and s.reversible
-        for s in default.value
-    )
+    assert any(s.suggestion_text == "ἄνθρωπος καὶ τὰ λοιπά" and s.reversible for s in default.value)
     assert line.text == source
 
 

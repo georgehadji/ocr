@@ -45,6 +45,7 @@ def test_kraken_layout_analyzer_preserves_order_and_line_geometry() -> None:
 
 def test_kraken_layout_analyzer_handles_non_string_category() -> None:
     """Proof-of-defect D2: a non-string category attribute must not crash."""
+
     def segmenter(image):
         class _Category:
             pass  # category is an object, not a string

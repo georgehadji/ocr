@@ -141,7 +141,9 @@ class PageXmlExporter(IExporter):
                         f"{line.bbox.x},{line.bbox.bottom}"
                     )
                     text_line = ET.SubElement(
-                        text_region, "TextLine", {"id": line.id, "regionType": line.region_type.value}
+                        text_region,
+                        "TextLine",
+                        {"id": line.id, "regionType": line.region_type.value},
                     )
                     ET.SubElement(text_line, "Coords", {"points": points})
                     if line.provenance is not None:

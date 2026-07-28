@@ -8,7 +8,7 @@ BUILD_PLAN §8.1.
 from __future__ import annotations
 
 from hypothesis import given, assume
-from hypothesis.strategies import text, integers, floats, one_of, sampled_from
+from hypothesis.strategies import text, integers, floats, sampled_from
 
 from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.application.metrics import character_error_rate, word_error_rate
@@ -43,6 +43,7 @@ def _line(text: str, script: Script = Script.MODERN) -> OCRLine:
 
 # ---------- NFC idempotence properties ----------
 
+
 @given(text=_GREEK_TEXT)
 def test_nfc_normalization_is_idempotent(text: str) -> None:
     """NFC-normalized text should not change when normalized again."""
@@ -73,6 +74,7 @@ def test_corrector_always_returns_ok(text: str) -> None:
 
 # ---------- CER/WER metric properties ----------
 
+
 @given(text1=_GREEK_TEXT, text2=_GREEK_TEXT)
 def test_character_error_rate_is_non_negative(text1: str, text2: str) -> None:
     """CER and WER must never be negative."""
@@ -97,6 +99,7 @@ def test_cer_symmetric_neighbor(text: str) -> None:
 
 
 # ---------- BBox invariant properties ----------
+
 
 @given(x=integers(0, 1000), y=integers(0, 1000), w=integers(1, 500), h=integers(1, 500))
 def test_bbox_right_and_bottom_are_positive(x: int, y: int, w: int, h: int) -> None:
@@ -142,6 +145,7 @@ def test_boxes_do_not_overlap_when_separate(x, y, w, h, offset) -> None:
 
 
 # ---------- Confidence invariant properties ----------
+
 
 @given(value=floats(0, 100))
 def test_confidence_accepts_valid_range(value: float) -> None:

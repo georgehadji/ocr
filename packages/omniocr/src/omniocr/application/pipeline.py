@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Iterator, Mapping, Sequence
+from typing import Iterator, Sequence
 from omniocr.application.post_correction import SuggestOnlyCorrector
-from omniocr.domain.errors import EngineError, ExportError, IngestError, LayoutError, PipelineError
+from omniocr.domain.errors import EngineError, IngestError, LayoutError, PipelineError
 from omniocr.domain.models import (
     BBox,
     Confidence,
@@ -20,13 +20,11 @@ from omniocr.domain.models import (
 )
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.infrastructure.exporters import PlainTextExporter
-from omniocr.ports.lexicon import SetLexicon
 from omniocr.ports.interfaces import (
     IEventBus,
     IExporter,
     IImageProcessor,
     IJobStore,
-    ILexicon,
     ILayoutAnalyzer,
     IOCREngine,
     IPageSource,
@@ -35,6 +33,20 @@ from omniocr.ports.interfaces import (
     IRouter,
     RawPage,
 )
+
+__all__ = [
+    "FirstCandidateReconciler",
+    "InMemoryPage",
+    "NullPageSource",
+    "NullRouter",
+    "PassthroughImageProcessor",
+    "PipelineOrchestrator",
+    "SingleLineLayoutAnalyzer",
+    # Re-exported for composition roots and edition UIs.
+    "PlainTextExporter",
+    "SuggestOnlyCorrector",
+    "build_document",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,8 +102,6 @@ class FirstCandidateReconciler:
         return Ok(candidates[0])
 
 
-
-
 def build_document(
     lines: Sequence[OCRLine], page_number: int = 1, width: int = 1, height: int = 1
 ) -> DocumentStructure:
@@ -123,9 +133,11 @@ class PipelineOrchestrator:
         self._event_bus = event_bus
         try:
             import structlog
+
             self._log = structlog.get_logger("omniocr.pipeline")
         except ImportError:
             import logging
+
             self._log = logging.getLogger("omniocr.pipeline")
 
     def run(
@@ -182,7 +194,9 @@ class PipelineOrchestrator:
                                 duration_ms=duration,
                             )
                         )
-                    self._log.info("page_completed", page=raw_page.number, duration_ms=round(duration, 1))
+                    self._log.info(
+                        "page_completed", page=raw_page.number, duration_ms=round(duration, 1)
+                    )
                 pages.append(page)
                 completed_numbers.add(raw_page.number)
 
@@ -202,6 +216,7 @@ class PipelineOrchestrator:
         # PyMuPDF: fast page count from PDF header without streaming.
         try:
             import fitz
+
             source = fitz.open(stream=document, filetype="pdf")
             count = len(source)
             source.close()
@@ -242,7 +257,9 @@ class PipelineOrchestrator:
                     self._log.warning("page_failed", page=raw_page.number, error=str(exc))
                 else:
                     duration = (perf_counter() - started_at) * 1000
-                    self._log.info("page_completed", page=raw_page.number, duration_ms=round(duration, 1))
+                    self._log.info(
+                        "page_completed", page=raw_page.number, duration_ms=round(duration, 1)
+                    )
                 yield (raw_page.number, page)
         except PipelineError as exc:
             self._log.error("pipeline_failed", error=str(exc))

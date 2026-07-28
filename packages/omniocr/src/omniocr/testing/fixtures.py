@@ -58,6 +58,4 @@ def load_baselines() -> dict[str, dict[str, float]]:
 
 def list_fixture_ids() -> list[str]:
     """Return all fixture ids (the stem of each .txt file in the corpus)."""
-    return sorted(
-        path.stem for path in _get_corpus().glob("*.txt") if path.stem != "baselines"
-    )
+    return sorted(path.stem for path in _get_corpus().glob("*.txt") if path.stem != "baselines")

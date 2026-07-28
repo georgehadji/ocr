@@ -31,8 +31,6 @@ def test_calamari_parse_output_extracts_texts() -> None:
 
 def test_calamari_extract_returns_install_hint_when_not_on_path() -> None:
     """When calamari-predict is not installed, extract returns a helpful Err."""
-    import subprocess
-    import sys
 
     engine = CalamariEngine()
 
@@ -42,7 +40,19 @@ def test_calamari_extract_returns_install_hint_when_not_on_path() -> None:
         width = 100
         height = 100
 
-    result = engine.extract(_NullPage(), type("ctx", (), {"organization_id": "o", "user_id": "u", "subscription_tier": "d", "custom_model_id": None})())
+    result = engine.extract(
+        _NullPage(),
+        type(
+            "ctx",
+            (),
+            {
+                "organization_id": "o",
+                "user_id": "u",
+                "subscription_tier": "d",
+                "custom_model_id": None,
+            },
+        )(),
+    )
 
     assert result.is_err()
     assert "calamari-predict not found on PATH" in str(result.error)

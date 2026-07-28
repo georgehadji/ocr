@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from omniocr.domain.models import BBox, Confidence, OCRBlock
 from omniocr.infrastructure.vlm import VLMEngine
 
 

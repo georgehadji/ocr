@@ -65,7 +65,9 @@ class SuggestOnlyCorrector(IPostCorrector):
         self._lexicons = dict(lexicons) if lexicons is not None else {}
         self._ligatures = dict(ligatures) if ligatures is not None else {}
         self._abbreviations = (
-            dict(abbreviations) if abbreviations is not None else SuggestOnlyCorrector._ABBREVIATIONS
+            dict(abbreviations)
+            if abbreviations is not None
+            else SuggestOnlyCorrector._ABBREVIATIONS
         )
 
     def correct(

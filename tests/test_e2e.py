@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from omniocr.application.pipeline import PipelineOrchestrator
 from omniocr.domain.models import TenantContext
-from omniocr.application.pipeline import PlainTextExporter
 from omniocr.infrastructure.exporters import (
     AltoXmlExporter,
     MarkdownExporter,
@@ -21,6 +20,7 @@ def _synthetic_pdf_bytes() -> bytes:
     """Create a minimal valid PDF with one blank page using PyMuPDF if available, or provide a minimal PDF."""
     try:
         import fitz
+
         doc = fitz.open()
         doc.new_page(width=100, height=100)
         result = doc.tobytes()

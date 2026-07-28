@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from omniocr.application.post_correction import SuggestOnlyCorrector
-from omniocr.application.pipeline import PipelineOrchestrator, SuggestOnlyCorrector
+from omniocr.application.pipeline import PipelineOrchestrator
 from omniocr.infrastructure.tesseract import TesseractEngine
 from omniocr.infrastructure.ingest import DocumentPageSource
 from omniocr.infrastructure.preprocess import GrayscaleProcessor
@@ -13,7 +13,7 @@ from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
 from omniocr.infrastructure.exporters import MarkdownExporter
 from omniocr.infrastructure.jobs import InMemoryJobStore
 from omniocr.infrastructure.lexicons import lexicons_by_script
-from omniocr.ports.interfaces import IExporter, IJobStore
+from omniocr.ports.interfaces import IExporter, IJobStore, IOCREngine
 
 # VLM and Calamari are optional extras; import failures gracefully disable them.
 try:
@@ -85,15 +85,17 @@ def create_ensemble_pipeline(
     """
     tesseract = RetryingEngine(TesseractEngine(tesseract_language))
     kraken = RetryingEngine(KrakenEngine(kraken_model_path))
-    by_script: dict[Script, tuple] = {
+    by_script: dict[Script, tuple[IOCREngine, ...]] = {
         Script.ANCIENT: (kraken, tesseract),
         Script.BYZANTINE: (kraken, tesseract),
         Script.POLYTONIC: (kraken, tesseract),
     }
-    default: tuple = (tesseract,)
+    default: tuple[IOCREngine, ...] = (tesseract,)
 
     if vlm_api_key is not None:
-        vlm = VLMEngine(api_key=vlm_api_key, api_url=vlm_api_url or "https://api.openai.com/v1", model=vlm_model)
+        vlm = VLMEngine(
+            api_key=vlm_api_key, api_url=vlm_api_url or "https://api.openai.com/v1", model=vlm_model
+        )
         retrying_vlm = RetryingEngine(vlm)
         for script_key in (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC):
             by_script[script_key] = (*by_script[script_key], retrying_vlm)

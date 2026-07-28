@@ -13,7 +13,6 @@ To use a different OpenAI-compatible provider, pass its base URL as
 
 from __future__ import annotations
 
-import io
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
@@ -76,14 +75,9 @@ class VLMEngine(IOCREngine):
 
     def __repr__(self) -> str:
         masked = (
-            self._api_key[:8] + "..." + self._api_key[-4:]
-            if len(self._api_key) > 12 else "***"
+            self._api_key[:8] + "..." + self._api_key[-4:] if len(self._api_key) > 12 else "***"
         )
-        return (
-            f"VLMEngine(model={self._model!r}, "
-            f"api_url={self._api_url!r}, "
-            f"api_key={masked!r})"
-        )
+        return f"VLMEngine(model={self._model!r}, api_url={self._api_url!r}, api_key={masked!r})"
 
     def extract(
         self, page: RawPage, context: TenantContext
@@ -107,7 +101,7 @@ class VLMEngine(IOCREngine):
         only use grounded blocks as candidate text.
         """
         result = self.extract(page, context)
-        if isinstance(result, Err):
+        if not isinstance(result, Ok):
             return (), ()
         vlm_blocks = list(result.value)
         grounded, _ = self._grounding_guard.filter(vlm_blocks, engine_blocks)
@@ -164,9 +158,7 @@ class VLMEngine(IOCREngine):
         with urllib.request.urlopen(request, timeout=120) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    def _parse_response(
-        self, data: Any, page_width: int, page_height: int
-    ) -> list[OCRBlock]:
+    def _parse_response(self, data: Any, page_width: int, page_height: int) -> list[OCRBlock]:
         """Parse the API response into OCRBlocks."""
         timestamp = datetime.now(timezone.utc).isoformat()
         run = EngineRun(
@@ -199,7 +191,12 @@ class VLMEngine(IOCREngine):
             if len(coord_parts) != 4:
                 continue
             try:
-                x, y, x2, y2 = int(coord_parts[0]), int(coord_parts[1]), int(coord_parts[2]), int(coord_parts[3])
+                x, y, x2, y2 = (
+                    int(coord_parts[0]),
+                    int(coord_parts[1]),
+                    int(coord_parts[2]),
+                    int(coord_parts[3]),
+                )
             except (ValueError, TypeError):
                 continue
             bbox = BBox(x=x, y=y, w=max(1, x2 - x), h=max(1, y2 - y))

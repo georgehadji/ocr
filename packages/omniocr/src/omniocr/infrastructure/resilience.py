@@ -103,6 +103,7 @@ class CachingEngine(IOCREngine):
         self._max_size = max_size
         self._ttl = ttl
         from collections import OrderedDict
+
         self._cache: OrderedDict[str, tuple[float, tuple[OCRBlock, ...]]] = OrderedDict()
         self._lock = Lock()
 
