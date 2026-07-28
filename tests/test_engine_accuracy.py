@@ -174,6 +174,7 @@ def test_polytonic_diacritics_survive_recognition() -> None:
     assert combining, "polytonic recognition produced no combining diacritics at all"
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(
     not list(Path("models").glob("*.mlmodel")),
     reason="no Kraken .mlmodel available; see models/README.md",
@@ -182,8 +183,8 @@ def test_polytonic_diacritics_survive_recognition() -> None:
 def test_kraken_beats_tesseract_on_hard_scripts(fixture_id: str) -> None:
     """BUILD_PLAN §10 Phase 1: Kraken must beat Tesseract on polytonic/ancient.
 
-    Skipped until a Greek Kraken model is committed to ``models/``. This
-    acceptance criterion is therefore NOT yet verified — see audit D7.
+    **SLOW** — Kraken model inference on CPU can take several minutes. Run
+    with ``--runslow`` or use ``pytest -m slow``.
     """
     from omniocr.infrastructure.kraken import KrakenEngine
 

@@ -33,6 +33,9 @@ where = ["packages/omniocr/src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "slow: marks tests as slow (Kraken model inference, end-to-end training); run with --runslow or pytest -m slow",
+]
 
 [tool.ruff]
 line-length = 100
