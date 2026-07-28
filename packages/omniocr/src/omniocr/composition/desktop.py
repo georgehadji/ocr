@@ -106,7 +106,19 @@ def create_ensemble_pipeline(
         for script_key in (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC):
             by_script[script_key] = (*by_script[script_key], retrying_calamari)
 
-    router = ScriptRouter(by_script=by_script, default=default)
+    # Build engine_map so the router can resolve promoted models by engine name
+    engine_map: dict[str, IOCREngine] = {
+        "kraken": kraken,
+        "tesseract": tesseract,
+    }
+    if vlm_api_key is not None:
+        engine_map["vlm"] = retrying_vlm
+    if calamari_model_glob is not None:
+        engine_map["calamari"] = retrying_calamari
+
+    router = ScriptRouter(
+        by_script=by_script, default=default, engine_map=engine_map
+    )
     return PipelineOrchestrator(
         page_source=DocumentPageSource(),
         image_processor=GrayscaleProcessor(),

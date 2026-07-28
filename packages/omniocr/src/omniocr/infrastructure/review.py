@@ -5,20 +5,26 @@ image lines alongside recognized text, highlights low-confidence regions,
 shows disagreements between engines, and lets the scholar accept or reject
 suggestions. All editor operations emit ``Suggestion`` objects — the
 source text is never mutated in place.
+
+v2 addition: review actions (accept/edit) also emit ``Correction`` objects
+as the durable ground-truth record for training.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Tuple
 
+from omniocr.domain.corrections import Correction
 from omniocr.domain.models import (
     BBox,
     Confidence,
     DocumentPage,
     DocumentStructure,
     PageFailure,
+    Script,
     Suggestion,
 )
 
@@ -132,6 +138,43 @@ def group_suggestions_by_reason(
     return counts
 
 
+def review_line_to_correction(
+    review_line: ReviewLine,
+    page_number: int,
+    corrected_text: str,
+    corrected_by: str,
+    accepted: bool = True,
+) -> Correction:
+    """Create a ``Correction`` from a review line and user's final text.
+
+    This is the function that review UI controllers call when a user accepts
+    or edits a line. It converts the review action into a durable
+    ``Correction`` value object that feeds the training pipeline.
+
+    Args:
+        review_line: The line as displayed in the review UI.
+        page_number: The page this line belongs to.
+        corrected_text: The text after human review (may equal original).
+        corrected_by: Identifier for the reviewer.
+        accepted: Whether the correction is accepted for training.
+
+    Returns:
+        A ``Correction`` ready for persistence via ``ICorrectionStore``.
+    """
+    script = Script(review_line.script) if review_line.script else Script.UNKNOWN
+    return Correction(
+        line_id=review_line.line_id,
+        page_number=page_number,
+        original_text=review_line.text,
+        corrected_text=corrected_text,
+        corrected_by=corrected_by,
+        corrected_at=datetime.utcnow().isoformat(),
+        bbox=review_line.bbox,
+        script=script,
+        accepted=accepted,
+    )
+
+
 __all__ = [
     "ReviewDocument",
     "ReviewLine",
@@ -139,4 +182,5 @@ __all__ = [
     "build_review_document",
     "build_review_page",
     "group_suggestions_by_reason",
+    "review_line_to_correction",
 ]
