@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 from omniocr.application.metrics import character_error_rate, word_error_rate
 
@@ -22,9 +21,7 @@ CORPUS = Path("tests/corpus")
 
 def _main() -> None:
     fixture_ids: list[str] = sorted(
-        path.stem
-        for path in CORPUS.glob("*.txt")
-        if path.stem != "baselines"
+        path.stem for path in CORPUS.glob("*.txt") if path.stem != "baselines"
     )
 
     baselines: dict[str, dict[str, float]] = {}

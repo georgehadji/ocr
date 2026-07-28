@@ -1,0 +1,26 @@
+{
+  "ancient-1": {
+    "tesseract": {
+      "cer": 0.0076,
+      "wer": 0.0526
+    }
+  },
+  "byzantine-1": {
+    "tesseract": {
+      "cer": 0.0118,
+      "wer": 0.0312
+    }
+  },
+  "modern-1": {
+    "tesseract": {
+      "cer": 0.0135,
+      "wer": 0.087
+    }
+  },
+  "polytonic-1": {
+    "tesseract": {
+      "cer": 0.0,
+      "wer": 0.0
+    }
+  }
+}

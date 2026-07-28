@@ -237,8 +237,48 @@ found. D1–D6 are **fixed**; D7–D8 remain **open** and block a true Phase 1 s
 | D4 | Low | `composition/desktop.py:88,93` | Bare `tuple` annotations — untyped generics under `mypy --strict`. | ✅ Fixed |
 | D5 | Low | `application/pipeline.py` | Four dead imports; `SuggestOnlyCorrector`/`PlainTextExporter` were re-exported implicitly to 4 edition modules + tests. Added explicit `__all__`. | ✅ Fixed |
 | D6 | Low | `packages/`, `tests/` | 24 files failed `ruff format --check`; 21 `ruff check` errors; 5 `mypy --strict` errors. | ✅ Fixed |
-| **D7** | **High** | `tests/test_e2e.py`, `tests/corpus/` | **No test exercises a real OCR engine on real page content.** The E2E tests run a *blank* synthetic PDF through the default `PipelineOrchestrator` (no engine wired). Corpus fixtures set hypothesis == reference, so CER=0 by construction. The regression *harness* is verified; **engine accuracy is not**. BUILD_PLAN §10 Phase 1 requires "Kraken beats Tesseract CER on the polytonic fixture" — untested. | ❌ Open |
-| **D8** | **Medium** | `tests/test_faithfulness.py` | **The faithfulness test is tautological.** It asserts `line.text` is unchanged after `SuggestOnlyCorrector.correct()` — but `OCRLine` is a frozen dataclass, so this cannot fail regardless of corrector behavior. No test asserts text survives **pipeline → export** byte-identical, which is the actual product guarantee (ARCHITECTURE.md §1). | ❌ Open |
+| **D7** | **High** | `tests/test_e2e.py`, `tests/corpus/` | **No test exercised a real OCR engine on real page content.** The E2E tests run a *blank* synthetic PDF through the default `PipelineOrchestrator` (no engine wired). Corpus fixtures set hypothesis == reference, so CER=0 by construction. The regression *harness* was verified; **engine accuracy was not**. | ⚠️ Mostly fixed |
+| **D8** | **Medium** | `tests/test_faithfulness.py` | **The faithfulness test was tautological.** It asserts `line.text` is unchanged after `SuggestOnlyCorrector.correct()` — but `OCRLine` is a frozen dataclass, so this cannot fail regardless of corrector behavior. No test asserted text survives **pipeline → export** byte-identical, the actual product guarantee (ARCHITECTURE.md §1). | ✅ Fixed |
+
+#### D7 resolution (2026-07-28)
+
+`tests/test_engine_accuracy.py` (12 tests) now runs the **real** `TesseractEngine`
+over the rendered Greek fixture pages and gates on genuinely measured error rates,
+committed to `tests/corpus/engine_baselines.json` and reproducible via
+`scripts/compute_engine_baselines.py`:
+
+| Fixture | Lang | CER | WER |
+|---|---|---|---|
+| `polytonic-1` | `grc` | 0.0000 | 0.0000 |
+| `ancient-1` | `grc` | 0.0076 | 0.0526 |
+| `byzantine-1` | `grc` | 0.0118 | 0.0312 |
+| `modern-1` | `ell` | 0.0135 | 0.0870 |
+
+Three gates: an absolute plausibility ceiling (CER < 0.15) that catches
+catastrophic failure, a baseline regression gate (tolerance 0.05), and an
+assertion that polytonic combining diacritics actually survive recognition.
+Verified non-vacuous — pointing the engine at the `eng` pack drives CER to
+**0.8867** and trips the ceiling. Tests skip rather than fail when Tesseract or
+its `ell`/`grc` packs are absent.
+
+**Still unverified:** BUILD_PLAN §10 Phase 1 also requires "Kraken beats
+Tesseract CER on the polytonic fixture." No Greek `.mlmodel` is committed to
+`models/`, so `test_kraken_beats_tesseract_on_hard_scripts` **skips**. Kraken —
+the documented accuracy driver for polytonic/ancient/Byzantine print
+(ARCHITECTURE.md §2) — therefore has **no accuracy coverage at all**. Commit a
+model to close this.
+
+#### D8 resolution (2026-07-28)
+
+`tests/test_faithfulness_pipeline.py` (9 tests) drives a full
+`PipelineOrchestrator` with a fixed-output engine and asserts the recognized text
+reaches **every text-bearing exporter** (TXT, Markdown, ALTO, PAGE-XML)
+byte-identical. The probe text is deliberately hostile: polytonic diacritics, the
+Byzantine kai-ligature `ϗ`, and `καλατσεύω` — a genuine Pontian word a naive
+corrector would "fix" to `κουβεντιάζω`. Dedicated tests assert the Pontian word
+is not standardized, the ligature is not expanded, combining marks are unchanged,
+and decomposed input is not lost. Verified non-vacuous: substituting a rewriting
+exporter inverts all three faithfulness assertions.
 
 ### 4.3 Improvement Opportunities (non-blocking)
 
@@ -401,18 +441,20 @@ license         shared core has no Calamari imports
 pytest          138 passed
 ```
 
-**Two caveats on the sign-off:**
+**Caveats on the sign-off:**
 
 1. Six defects (D1–D6) existed at the time this report first said "no open defects."
    Three CI gates were red. The verdict was recorded without running them.
-2. D7–D8 remain open. Phase 1's acceptance criteria include real-engine CER comparison
-   and a meaningful faithfulness guarantee; neither is currently tested. The system is
-   **functionally** complete and **structurally** faithful (frozen models + separate
-   suggestion layer), but its recognition accuracy and end-to-end text preservation are
-   **unmeasured**.
+2. D7 and D8 were closed on 2026-07-28 (see §4.2). Tesseract accuracy and end-to-end
+   faithfulness are now measured, gated, and verified non-vacuous.
+3. **One acceptance criterion remains genuinely unverified:** Kraken has no accuracy
+   coverage, because no Greek `.mlmodel` is committed to `models/`. Since ARCHITECTURE.md
+   §2 designates Kraken — not Tesseract — as the accuracy driver for polytonic, ancient,
+   and Byzantine print, the engine that carries the product's hardest requirement is
+   currently untested. Commit a model and un-skip
+   `test_kraken_beats_tesseract_on_hard_scripts` to close this.
 
-Recommended before declaring Phase 1 done: add real printed-Greek fixture pages with
-ground truth, recompute baselines, and add a pipeline→export byte-identity test.
+Phase 1 should be considered complete for the **Tesseract** path only.
 
 - ✅ CI green on an empty pipeline
 - ✅ `mypy --strict` clean (enforced in CI)

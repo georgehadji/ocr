@@ -22,6 +22,7 @@ from pathlib import Path
 # MLflow is optional — training works without it.
 try:
     import mlflow
+
     _HAS_MLFLOW = True
 except ImportError:
     _HAS_MLFLOW = False
@@ -67,13 +68,19 @@ def _train_kraken(args: argparse.Namespace) -> float:
     """Run kraken-train and return the final validation CER."""
     cmd = [
         "kraken",
-        "--log", "info",
+        "--log",
+        "info",
         "train",
-        "--device", "cpu",
-        "--load", str(args.base_model),
-        "--train", str(args.train_dir / "train.json"),
-        "--epochs", str(args.epochs),
-        "--output", str(args.output_model),
+        "--device",
+        "cpu",
+        "--load",
+        str(args.base_model),
+        "--train",
+        str(args.train_dir / "train.json"),
+        "--epochs",
+        str(args.epochs),
+        "--output",
+        str(args.output_model),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -100,11 +107,13 @@ def _track_with_mlflow(args: argparse.Namespace, final_cer: float) -> None:
 
     mlflow.set_experiment(args.mlflow_experiment)
     with mlflow.start_run():
-        mlflow.log_params({
-            "base_model": str(args.base_model),
-            "epochs": args.epochs,
-            "train_samples": len(json.loads((args.train_dir / "train.json").read_text())),
-        })
+        mlflow.log_params(
+            {
+                "base_model": str(args.base_model),
+                "epochs": args.epochs,
+                "train_samples": len(json.loads((args.train_dir / "train.json").read_text())),
+            }
+        )
         mlflow.log_metric("final_cer", final_cer)
         mlflow.log_artifact(str(args.output_model))
         print(f"MLflow run logged to experiment '{args.mlflow_experiment}'")
@@ -122,6 +131,7 @@ def main() -> None:
 
     print(f"Fine-tuned model saved to: {args.output_model}")
     from omniocr.infrastructure.training import compute_cer_improvement
+
     print(f"CER improvement vs pretrained: {compute_cer_improvement(0.0, final_cer):+.2f}%")
 
 
