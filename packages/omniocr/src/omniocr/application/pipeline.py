@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Iterator, Sequence
+from typing import Iterator, Protocol, Sequence, cast
 from omniocr.application.post_correction import SuggestOnlyCorrector
-from omniocr.domain.errors import EngineError, IngestError, LayoutError, PipelineError
+from omniocr.domain.errors import EngineError, ExportError, IngestError, LayoutError, PipelineError
 from omniocr.domain.models import (
     BBox,
     Confidence,
@@ -19,7 +20,6 @@ from omniocr.domain.models import (
     TenantContext,
 )
 from omniocr.domain.result import Err, Ok, Result
-from omniocr.infrastructure.exporters import PlainTextExporter
 from omniocr.ports.interfaces import (
     IEventBus,
     IExporter,
@@ -43,10 +43,46 @@ __all__ = [
     "PipelineOrchestrator",
     "SingleLineLayoutAnalyzer",
     # Re-exported for composition roots and edition UIs.
-    "PlainTextExporter",
     "SuggestOnlyCorrector",
     "build_document",
 ]
+
+
+def _get_logger(name: str) -> _StructuredLogger:
+    """Return a structlog logger if available, else a stdlib-backed adapter.
+
+    ``structlog`` is a dev-only extra, not a core dependency, so a base
+    install must not crash when structured keyword fields (``page=``,
+    ``duration_ms=``) are passed to log calls.
+    """
+    try:
+        import structlog
+
+        return cast("_StructuredLogger", structlog.get_logger(name))
+    except ImportError:
+        return _StdlibLoggerAdapter(logging.getLogger(name))
+
+
+class _StructuredLogger(Protocol):
+    def info(self, event: str, **kwargs: object) -> None: ...
+    def warning(self, event: str, **kwargs: object) -> None: ...
+    def error(self, event: str, **kwargs: object) -> None: ...
+
+
+class _StdlibLoggerAdapter:
+    """Adapts stdlib ``logging.Logger`` to accept structlog-style keyword fields."""
+
+    def __init__(self, logger: logging.Logger) -> None:
+        self._logger = logger
+
+    def info(self, event: str, **kwargs: object) -> None:
+        self._logger.info(event, extra=kwargs)
+
+    def error(self, event: str, **kwargs: object) -> None:
+        self._logger.error(event, extra=kwargs)
+
+    def warning(self, event: str, **kwargs: object) -> None:
+        self._logger.warning(event, extra=kwargs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +129,21 @@ class NullRouter:
         return (self._engine,) if self._engine is not None else ()
 
 
+class _DefaultTextExporter:
+    """Minimal ``IExporter`` default: one line per recognized segment.
+
+    Kept local (not imported from ``infrastructure``) so ``application``
+    does not depend on a concrete adapter package. Real editions inject a
+    richer exporter (Markdown/DOCX/PDF/ALTO) via composition.
+    """
+
+    def export(
+        self, document: DocumentStructure, context: TenantContext
+    ) -> Result[bytes, ExportError]:
+        lines = [line.text for page in document.pages for line in page.lines]
+        return Ok("\n".join(lines).encode("utf-8"))
+
+
 class FirstCandidateReconciler:
     def reconcile(
         self, candidates: Sequence[OCRLine], context: TenantContext
@@ -128,17 +179,10 @@ class PipelineOrchestrator:
         self._router = router or NullRouter()
         self._reconciler = reconciler or FirstCandidateReconciler()
         self._post_corrector = post_corrector or SuggestOnlyCorrector()
-        self._exporter = exporter or PlainTextExporter()
+        self._exporter = exporter or _DefaultTextExporter()
         self._job_store = job_store
         self._event_bus = event_bus
-        try:
-            import structlog
-
-            self._log = structlog.get_logger("omniocr.pipeline")
-        except ImportError:
-            import logging
-
-            self._log = logging.getLogger("omniocr.pipeline")
+        self._log = _get_logger("omniocr.pipeline")
 
     def run(
         self,
