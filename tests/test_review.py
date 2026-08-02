@@ -7,6 +7,9 @@ from omniocr.domain.models import (
     Confidence,
     DocumentPage,
     DocumentStructure,
+    EngineRun,
+    ModelRef,
+    OCRBlock,
     OCRLine,
     RegionType,
     Script,
@@ -133,3 +136,51 @@ def test_build_review_page_empty_lines() -> None:
     review = build_review_page(page, b"")
     assert len(review.lines) == 0
     assert len(review.failures) == 0
+
+
+def test_review_line_carries_engine_blocks() -> None:
+    """Per-engine blocks survive into ReviewLine so the UI can show disagreement.
+
+    Without this the review UI's engine-comparison panel raises
+    ``AttributeError: 'ReviewLine' object has no attribute 'blocks'``.
+    """
+    run = EngineRun(
+        engine="tesseract",
+        model_ref=ModelRef(engine="tesseract", model_name="grc", model_hash="abc"),
+        model_hash="abc",
+        params=("psm6",),
+        timestamp="2026-08-01T00:00:00+00:00",
+    )
+    block = OCRBlock(
+        id="blk-1",
+        text="Ἑλληνικά",
+        confidence=Confidence(92.0),
+        bbox=BBox(10, 20, 300, 30),
+        provenance=run,
+    )
+    page = DocumentPage(
+        number=1,
+        width=600,
+        height=800,
+        lines=(
+            OCRLine(
+                id="line-1",
+                text="Ἑλληνικά",
+                confidence=Confidence(92.0),
+                bbox=BBox(10, 20, 300, 30),
+                blocks=(block,),
+            ),
+        ),
+    )
+
+    review = build_review_page(page, b"")
+
+    assert len(review.lines[0].blocks) == 1
+    assert review.lines[0].blocks[0].provenance is not None
+    assert review.lines[0].blocks[0].provenance.engine == "tesseract"
+
+
+def test_review_line_blocks_default_empty() -> None:
+    """A line with no per-engine blocks yields an empty tuple, never None."""
+    review = build_review_page(_page(1), b"")
+    assert review.lines[0].blocks == ()

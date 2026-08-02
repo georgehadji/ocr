@@ -11,15 +11,14 @@ slow or destabilise inference.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence, cast
+from typing import cast
 
 from omniocr.application.promotion import BeatsParentOnHeldOut, PromotionPolicy
 from omniocr.application.training_orchestrator import TrainingOrchestrator
 from omniocr.domain.corpus import SplitName
 from omniocr.domain.errors import TrainingError
-from omniocr.domain.models import ModelRef
 from omniocr.domain.result import Ok, Result
-from omniocr.domain.training import EvaluationReport, PromotedModel
+from omniocr.domain.training import EvaluationReport
 from omniocr.infrastructure.alto_training import TrainingDataExporter
 from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
 from omniocr.infrastructure.corpus_repository import FileCorpusRepository
@@ -47,10 +46,9 @@ class _CorpusEvaluator(IEvaluator):
     def __init__(self, corpus: ICorpusRepository) -> None:
         self._corpus = corpus
 
-    def evaluate(
-        self, engine: object, split: SplitName
-    ) -> Result[EvaluationReport, TrainingError]:
+    def evaluate(self, engine: object, split: SplitName) -> Result[EvaluationReport, TrainingError]:
         from omniocr.application.evaluation import evaluate as eval_fn
+
         pages = self._corpus.pages(split)
         if not pages:
             return Ok(
@@ -105,8 +103,11 @@ def create_training_pipeline(
         corpus = FileCorpusRepository(corpus_root)
         evaluator: IEvaluator = _CorpusEvaluator(corpus)
     else:
+
         class _NoOpEvaluator(IEvaluator):
-            def evaluate(self, engine: object, split: SplitName) -> Result[EvaluationReport, TrainingError]:
+            def evaluate(
+                self, engine: object, split: SplitName
+            ) -> Result[EvaluationReport, TrainingError]:
                 return Ok(
                     EvaluationReport(
                         model_hash=getattr(engine, "name", "unknown"),

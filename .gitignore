@@ -8,3 +8,4 @@ __pycache__/
 .reasonix/
 *.db
 implementation_audit_report.md
+/Outputs/

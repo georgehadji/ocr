@@ -7,11 +7,7 @@ exercise the v2 replacement pathway via ``assemble_training_samples`` and
 
 from __future__ import annotations
 
-from pathlib import Path
 
-from omniocr.domain.corrections import Correction
-from omniocr.domain.models import BBox, Script
-from omniocr.domain.result import Ok
 from omniocr.infrastructure.training import compute_cer_improvement
 
 
@@ -36,5 +32,6 @@ class TestDeprecationShim:
         """Calling the deprecated function should raise a DeprecationWarning."""
         from omniocr.infrastructure.training import export_ground_truth_to_kraken_json
         import pytest
+
         with pytest.raises(DeprecationWarning):
             export_ground_truth_to_kraken_json(None, "/tmp")

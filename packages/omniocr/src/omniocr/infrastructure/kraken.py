@@ -23,6 +23,27 @@ from omniocr.domain.result import Err, Ok, Result
 from omniocr.ports.interfaces import ILayoutAnalyzer, IOCREngine, RawPage
 
 
+def _open_bilevel(content: bytes) -> Any:
+    """Decode page bytes into the bi-level image ``kraken.pageseg`` requires.
+
+    Both Kraken entry points must go through this. They previously binarized
+    independently and drifted: the analyzer converted, the recognizer did not,
+    so recognition died on the grayscale page the preprocessor emits with
+    "Image is not bi-level" while segmentation looked healthy.
+
+    ponytail: fixed 128 threshold. Kraken's baseline segmenter (``blla``)
+    takes grayscale directly and handles skewed historical lines better, but
+    measured >6 GB peak allocation on an 800x180 page — unusable on a CPU-only
+    target. Revisit when blla can be run within a memory budget.
+    """
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(content))
+    if image.mode == "1":
+        return image
+    return image.convert("L").point(lambda value: 255 if value > 128 else 0, mode="1")
+
+
 class KrakenLayoutAnalyzer(ILayoutAnalyzer):
     """Convert Kraken's ordered line segmentation into immutable OCR lines."""
 
@@ -38,22 +59,13 @@ class KrakenLayoutAnalyzer(ILayoutAnalyzer):
         self, page: RawPage, context: TenantContext
     ) -> Result[Sequence[OCRLine], LayoutError]:
         try:
-            from PIL import Image
-
             segmenter = self._segmenter
             if segmenter is None:
                 from kraken.pageseg import segment as kraken_segment
 
                 segmenter = kraken_segment
 
-            image = Image.open(io.BytesIO(page.content))
-            # Kraken's ``pageseg.segment()`` requires a bi-level (binary) image.
-            # Convert grayscale (L) mode to binary (1) using a threshold.
-            if image.mode == "L":
-                image = image.point(lambda x: 255 if x > 128 else 0, mode="1")
-            elif image.mode != "1":
-                image = image.convert("1")
-            segmentation = segmenter(image)
+            segmentation = segmenter(_open_bilevel(page.content))
             records = getattr(segmentation, "lines", segmentation)
             lines = tuple(
                 OCRLine(
@@ -80,6 +92,28 @@ class KrakenLayoutAnalyzer(ILayoutAnalyzer):
 
     @staticmethod
     def _bounds(record: Any, page_width: int, page_height: int) -> tuple[int, int, int, int]:
+        """Return ``(x, y, w, h)`` for one segmentation record.
+
+        Kraken emits two record shapes and both must be handled:
+
+        - ``BBoxLine`` (``pageseg``) carries ``bbox = [x0, y0, x1, y1]``
+        - ``BaselineLine`` (``blla``) carries a ``boundary`` polygon
+
+        Raising on an unrecognised shape is deliberate. The previous fallback
+        to a full-page box was silent and catastrophic: every line then covered
+        the whole page, so every recognized word overlapped every line and each
+        line came back holding the entire page's text. ``segment()`` converts
+        this into ``Err(LayoutError)``, which is visible; a wrong answer is not.
+        """
+        bbox = getattr(record, "bbox", None)
+        if bbox is None and isinstance(record, dict):
+            bbox = record.get("bbox")
+        if bbox is not None:
+            values = [int(value) for value in bbox]
+            if len(values) == 4:
+                x0, y0, x1, y1 = values
+                return x0, y0, max(1, x1 - x0), max(1, y1 - y0)
+
         geometry = getattr(record, "boundary", None) or getattr(record, "polygon", None)
         if geometry is None and isinstance(record, dict):
             geometry = record.get("boundary") or record.get("polygon")
@@ -90,7 +124,11 @@ class KrakenLayoutAnalyzer(ILayoutAnalyzer):
                 ys = [int(point[1]) for point in points]
                 x, y = min(xs), min(ys)
                 return x, y, max(1, max(xs) - x), max(1, max(ys) - y)
-        return 0, 0, max(1, page_width), max(1, page_height)
+
+        raise LayoutError(
+            f"unrecognized Kraken segmentation record: {type(record).__name__} "
+            "exposes neither 'bbox' nor a 'boundary'/'polygon' geometry"
+        )
 
     @staticmethod
     def _region_type(record: Any) -> RegionType:
@@ -120,13 +158,12 @@ class KrakenEngine(IOCREngine):
         self, page: RawPage, context: TenantContext
     ) -> Result[Sequence[OCRBlock], EngineError]:
         try:
-            from PIL import Image
             from kraken import pageseg, rpred
             from kraken.lib import models
 
             if self._model is None:
                 self._model = models.load_any(str(self.model_path))
-            image = Image.open(io.BytesIO(page.content))
+            image = _open_bilevel(page.content)
             segmentation = pageseg.segment(image)
             records = rpred.rpred(self._model, image, segmentation)
             return Ok(self.parse_records(records, page.width, page.height))

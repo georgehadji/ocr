@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
-from omniocr.application.promotion import BeatsParentOnHeldOut, refuse_unless_test_split
-from omniocr.domain.errors import PromotionRefused
+from omniocr.application.promotion import BeatsParentOnHeldOut
 from omniocr.domain.models import ModelRef, Script
 from omniocr.domain.result import Err, Ok
 from omniocr.domain.training import EvaluationReport, ModelCandidate
@@ -43,12 +41,8 @@ class TestBeatsParentOnHeldOut:
 
     def test_promote_when_candidate_beats_parent(self) -> None:
         candidate = _candidate()
-        candidate_report = _report(
-            cer_values={Script.POLYTONIC: 0.03, Script.ANCIENT: 0.02}
-        )
-        parent_report = _report(
-            cer_values={Script.POLYTONIC: 0.05, Script.ANCIENT: 0.03}
-        )
+        candidate_report = _report(cer_values={Script.POLYTONIC: 0.03, Script.ANCIENT: 0.02})
+        parent_report = _report(cer_values={Script.POLYTONIC: 0.05, Script.ANCIENT: 0.03})
         result = self.policy.decide(candidate, candidate_report, parent_report)
         assert isinstance(result, Ok)
         promoted = result.value
@@ -63,12 +57,8 @@ class TestBeatsParentOnHeldOut:
 
     def test_refuse_script_regression(self) -> None:
         candidate = _candidate()
-        candidate_report = _report(
-            cer_values={Script.POLYTONIC: 0.06, Script.ANCIENT: 0.02}
-        )
-        parent_report = _report(
-            cer_values={Script.POLYTONIC: 0.05, Script.ANCIENT: 0.03}
-        )
+        candidate_report = _report(cer_values={Script.POLYTONIC: 0.06, Script.ANCIENT: 0.02})
+        parent_report = _report(cer_values={Script.POLYTONIC: 0.05, Script.ANCIENT: 0.03})
         result = self.policy.decide(candidate, candidate_report, parent_report)
         assert isinstance(result, Err)
         assert "regressed" in str(result.error).lower()
@@ -82,12 +72,8 @@ class TestBeatsParentOnHeldOut:
 
     def test_refuse_below_min_improvement(self) -> None:
         policy = BeatsParentOnHeldOut(min_improvement_pct=10.0)
-        candidate_report = _report(
-            cer_values={Script.POLYTONIC: 0.049, Script.ANCIENT: 0.029}
-        )
-        parent_report = _report(
-            cer_values={Script.POLYTONIC: 0.05, Script.ANCIENT: 0.03}
-        )
+        candidate_report = _report(cer_values={Script.POLYTONIC: 0.049, Script.ANCIENT: 0.029})
+        parent_report = _report(cer_values={Script.POLYTONIC: 0.05, Script.ANCIENT: 0.03})
         result = policy.decide(_candidate(), candidate_report, parent_report)
         assert isinstance(result, Err)
         assert "below" in str(result.error).lower()
@@ -99,12 +85,8 @@ class TestBeatsParentOnHeldOut:
         zero CER means perfect accuracy — any candidate error is a regression
         in every script.
         """
-        candidate_report = _report(
-            cer_values={Script.POLYTONIC: 0.01, Script.ANCIENT: 0.01}
-        )
-        parent_report = _report(
-            cer_values={Script.POLYTONIC: 0.0, Script.ANCIENT: 0.0}
-        )
+        candidate_report = _report(cer_values={Script.POLYTONIC: 0.01, Script.ANCIENT: 0.01})
+        parent_report = _report(cer_values={Script.POLYTONIC: 0.0, Script.ANCIENT: 0.0})
         result = self.policy.decide(_candidate(), candidate_report, parent_report)
         assert isinstance(result, Err)
         # Rule 3 fires first: any positive candidate CER is a regression

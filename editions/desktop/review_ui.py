@@ -118,6 +118,7 @@ for key, default in [
     ("file_bytes", b""),
     ("file_name", ""),
     ("saved", False),
+    ("decoded_images", {}),  # page_number → PIL.Image cache for fast navigation
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -463,7 +464,15 @@ if st.session_state.review_document is not None:
             st.session_state.show_bbox = show_bbox
 
             if page.image_bytes:
-                img = Image.open(io.BytesIO(page.image_bytes)).convert("RGB")
+                page_num = page.number
+                cached = st.session_state.decoded_images
+                if page_num not in cached:
+                    cached[page_num] = Image.open(io.BytesIO(page.image_bytes)).convert("RGB")
+                    # Keep cache bounded — evict oldest when > 20 entries.
+                    if len(cached) > 20:
+                        oldest = min(cached.keys())
+                        del cached[oldest]
+                img = cached[page_num].copy()
                 if show_bbox:
                     from PIL import ImageDraw
                     draw = ImageDraw.Draw(img)

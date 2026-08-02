@@ -18,16 +18,13 @@ from omniocr.application.ground_truth import (
     assemble_training_samples,
 )
 from omniocr.application.promotion import PromotionPolicy
-from omniocr.domain.corrections import Correction
-from omniocr.domain.errors import EngineError, PromotionRefused, TrainingError
-from omniocr.domain.models import ModelRef, OCRBlock, Script, TenantContext
+from omniocr.domain.errors import EngineError, TrainingError
+from omniocr.domain.models import ModelRef, OCRBlock, TenantContext
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.domain.training import (
     EvaluationReport,
     ModelCandidate,
     PromotedModel,
-    TrainingRun,
-    TrainingSample,
 )
 from omniocr.ports.interfaces import (
     ICorrectionStore,
@@ -35,7 +32,6 @@ from omniocr.ports.interfaces import (
     IEvaluator,
     ILineCropper,
     IModelRegistry,
-    IOCREngine,
     ITrainer,
     ITrainingDataExporter,
     RawPage,
@@ -124,12 +120,12 @@ class TrainingOrchestrator:
             return Ok(None)
 
         # Stage 3: Export training data to trainer format
-        export_result = self._exporter.export(
-            samples, output_dir / "training_data"
-        )
+        export_result = self._exporter.export(samples, output_dir / "training_data")
         if isinstance(export_result, Err):
             return Err(export_result.error)
-        data_path = export_result.value if hasattr(export_result, "value") else output_dir / "training_data"
+        data_path = (
+            export_result.value if hasattr(export_result, "value") else output_dir / "training_data"
+        )
 
         # Stage 4: Train the model
         train_result = self._trainer.train(
@@ -159,8 +155,28 @@ class TrainingOrchestrator:
             return Err(parent_eval.error)
 
         # Stage 7: Promotion policy decides
-        candidate_report = candidate_eval.value if hasattr(candidate_eval, "value") else EvaluationReport(model_hash="", per_script_cer={}, per_script_wer={}, sample_count=0, evaluated_on="test")
-        parent_report = parent_eval.value if hasattr(parent_eval, "value") else EvaluationReport(model_hash="", per_script_cer={}, per_script_wer={}, sample_count=0, evaluated_on="test")
+        candidate_report = (
+            candidate_eval.value
+            if hasattr(candidate_eval, "value")
+            else EvaluationReport(
+                model_hash="",
+                per_script_cer={},
+                per_script_wer={},
+                sample_count=0,
+                evaluated_on="test",
+            )
+        )
+        parent_report = (
+            parent_eval.value
+            if hasattr(parent_eval, "value")
+            else EvaluationReport(
+                model_hash="",
+                per_script_cer={},
+                per_script_wer={},
+                sample_count=0,
+                evaluated_on="test",
+            )
+        )
 
         decision = self._promotion_policy.decide(
             candidate=candidate,
@@ -219,7 +235,9 @@ class _CandidateEngine:
         self.candidate = candidate
         self.name = f"kraken:{candidate.path}"
 
-    def extract(self, page: RawPage, context: TenantContext) -> Result[Sequence[OCRBlock], EngineError]:  # type: ignore[misc]
+    def extract(
+        self, page: RawPage, context: TenantContext
+    ) -> Result[Sequence[OCRBlock], EngineError]:
         """Placeholder — evaluation uses the real engine, not this wrapper."""
         raise NotImplementedError("_CandidateEngine is an evaluation placeholder")
 
@@ -231,7 +249,9 @@ class _ParentEngine:
         self.parent = parent
         self.name = f"kraken:{parent.model_name}"
 
-    def extract(self, page: RawPage, context: TenantContext) -> Result[Sequence[OCRBlock], EngineError]:  # type: ignore[misc]
+    def extract(
+        self, page: RawPage, context: TenantContext
+    ) -> Result[Sequence[OCRBlock], EngineError]:
         """Placeholder — evaluation uses the real engine, not this wrapper."""
         raise NotImplementedError("_ParentEngine is an evaluation placeholder")
 

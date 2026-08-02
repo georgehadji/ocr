@@ -116,9 +116,7 @@ def create_ensemble_pipeline(
     if calamari_model_glob is not None:
         engine_map["calamari"] = retrying_calamari
 
-    router = ScriptRouter(
-        by_script=by_script, default=default, engine_map=engine_map
-    )
+    router = ScriptRouter(by_script=by_script, default=default, engine_map=engine_map)
     return PipelineOrchestrator(
         page_source=DocumentPageSource(),
         image_processor=GrayscaleProcessor(),

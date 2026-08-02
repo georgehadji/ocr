@@ -31,4 +31,3 @@ class PromotionRefused(TrainingError):
 
 class CorrectionStoreError(TrainingError):
     """Persistence failure in the corrections store."""
-

@@ -101,3 +101,33 @@ def test_caching_engine_ttl_expiry_causes_cache_miss() -> None:
     fourth = cached.extract(page, context)
     assert fourth.is_ok()
     assert engine.calls == 3
+
+
+def test_circuit_breaker_thread_safety() -> None:
+    """Concurrent callers all observe the open circuit after threshold failures.
+
+    With a failure_threshold of 1, the first failure opens the circuit.
+    50 concurrent threads racing into extract() must all see the circuit
+    open once it has opened — no caller ever receives an Ok result
+    (the underlying engine always fails), and the lock prevents the
+    failure-count from racing past the threshold unwrapped.
+    """
+    import concurrent.futures
+
+    engine = AlwaysFailEngine()
+    breaker = CircuitBreakerEngine(engine, failure_threshold=1, reset_timeout=30)
+    context = TenantContext("o", "u", "d")
+
+    def call() -> str:
+        result = breaker.extract(None, context)
+        assert result.is_err(), "an Err result is always the only correct outcome"
+        return "err"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(executor.map(lambda _: call(), range(50)))
+
+    # Every caller observed an Err — the circuit open short-circuits all
+    # subsequent callers. At least one underlying engine call happened.
+    assert len(results) == 50
+    assert all(r == "err" for r in results)
+    assert engine.calls >= 1

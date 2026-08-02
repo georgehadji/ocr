@@ -51,8 +51,7 @@ class PilLineCropper(ILineCropper):
             if right <= x or bottom <= y:
                 return Err(
                     TrainingError(
-                        f"empty crop region after clamping: "
-                        f"({x}, {y}, {right}, {bottom})"
+                        f"empty crop region after clamping: ({x}, {y}, {right}, {bottom})"
                     )
                 )
 

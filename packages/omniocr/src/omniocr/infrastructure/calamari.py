@@ -10,7 +10,7 @@ calamari_ocr in a separate environment or as a subprocess dependency.
 
 from __future__ import annotations
 
-import subprocess
+import subprocess  # nosec B404 - argv list, no shell, isolation is the point (BUILD_PLAN §4.8)
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -67,7 +67,7 @@ class CalamariEngine(IOCREngine):
                     self._model_glob,
                     *self._args,
                 ]
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603 - argv list, no shell
                     cmd,
                     capture_output=True,
                     text=True,

@@ -9,6 +9,7 @@ _DEFAULT_DESKTOP_MODE = True
 _DEFAULT_ENABLE_VLM = False
 _DEFAULT_ENABLE_CALAMARI = False
 _DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
+_DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +19,7 @@ class Settings:
     enable_vlm: bool = _DEFAULT_ENABLE_VLM
     enable_calamari: bool = _DEFAULT_ENABLE_CALAMARI
     max_upload_bytes: int = _DEFAULT_MAX_UPLOAD_BYTES
+    redis_url: str = _DEFAULT_REDIS_URL
     vlm_api_key: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
@@ -25,6 +27,8 @@ class Settings:
             raise ValueError("app_name must not be empty")
         if self.max_upload_bytes <= 0:
             raise ValueError("max_upload_bytes must be positive")
+        if not self.redis_url.strip():
+            raise ValueError("redis_url must not be empty")
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Settings":
@@ -38,6 +42,7 @@ class Settings:
             max_upload_bytes=_env_int(
                 values, "OMNIOCR_MAX_UPLOAD_BYTES", _DEFAULT_MAX_UPLOAD_BYTES
             ),
+            redis_url=values.get("OMNIOCR_REDIS_URL", _DEFAULT_REDIS_URL),
             vlm_api_key=values.get("OMNIOCR_VLM_API_KEY"),
         )
 

@@ -6,7 +6,16 @@ from typing import Iterator, Mapping, Protocol, Sequence
 from omniocr.domain.corrections import Correction
 from omniocr.domain.corpus import CorpusPage, SplitName
 from omniocr.domain.errors import EngineError, ExportError, IngestError, LayoutError, TrainingError
-from omniocr.domain.models import BBox, DocumentStructure, ModelRef, OCRBlock, OCRLine, Script, Suggestion, TenantContext
+from omniocr.domain.models import (
+    BBox,
+    DocumentStructure,
+    ModelRef,
+    OCRBlock,
+    OCRLine,
+    Script,
+    Suggestion,
+    TenantContext,
+)
 from omniocr.domain.result import Result
 from omniocr.domain.training import EvaluationReport, ModelCandidate, PromotedModel, TrainingSample
 
@@ -144,9 +153,7 @@ class IEvaluator(Protocol):
 class ICorpusRepository(Protocol):
     """Repository over structured corpus pages."""
 
-    def pages(
-        self, split: SplitName, script: Script | None = None
-    ) -> Sequence[CorpusPage]: ...
+    def pages(self, split: SplitName, script: Script | None = None) -> Sequence[CorpusPage]: ...
 
 
 __all__ = [

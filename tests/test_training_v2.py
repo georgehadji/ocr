@@ -11,14 +11,15 @@ from omniocr.domain.training import (
     EvaluationReport,
     ModelCandidate,
     PromotedModel,
-    TrainingRun,
     TrainingSample,
 )
 
 
 class TestTrainingSample:
     def test_valid_training_sample(self) -> None:
-        ts = TrainingSample(image_path=Path("/tmp/line.png"), text="κεφάλαιον", script=Script.BYZANTINE)
+        ts = TrainingSample(
+            image_path=Path("/tmp/line.png"), text="κεφάλαιον", script=Script.BYZANTINE
+        )
         assert ts.text == "κεφάλαιον"
         assert ts.script == Script.BYZANTINE
 

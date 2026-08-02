@@ -46,6 +46,47 @@ API: http://localhost:8000/docs
 | `OMNIOCR_ENABLE_VLM` | `false` | Enable VLM reviewer |
 | `OMNIOCR_VLM_API_KEY` | — | OpenRouter API key |
 | `OMNIOCR_APP_NAME` | `"omniocr"` | App identifier for logs |
+| `OMNIOCR_MAX_WORKERS` | — | Number of threads for parallel page processing (unset = sequential) |
+| `OMNIOCR_CACHE_TTL` | — | Cache TTL in seconds for CachingEngine (unset = no TTL) |
+| `OMNIOCR_REDIS_URL` | `redis://localhost:6379/0` | Redis URL for Cloud job store |
+
+## Performance Tuning
+
+### Parallel page processing
+
+Set `max_workers` when constructing the pipeline to enable ThreadPoolExecutor-based
+parallelism. Each page is processed in a separate thread; results are assembled in
+page-number order:
+
+```python
+pipeline = PipelineOrchestrator(max_workers=4, ...)
+result = pipeline.run(pdf_bytes)
+```
+
+Start with `max_workers=2` and scale up to the number of CPU cores. The default
+(`None`) preserves the original synchronous, single-threaded behavior.
+
+### TTL cache eviction
+
+Wrap engines with `CachingEngine(engine, ttl=3600)` to prevent cross-document cache
+leakage in long-running worker processes. Entries expire after `ttl` seconds:
+
+```python
+from omniocr.infrastructure.resilience import CachingEngine
+cached = CachingEngine(my_engine, max_size=128, ttl=3600)
+```
+
+### Redis job store (Cloud edition)
+
+The Cloud composition root wires `RedisJobStore` for durable checkpoint persistence
+across worker restarts. Configure via `OMNIOCR_REDIS_URL`. If Redis is unreachable,
+the Cloud composition falls back to a `SQLiteJobStore` (`omniocr_cloud_jobs.db`),
+so a standalone Cloud deployment still persists checkpoints:
+
+```python
+from omniocr.infrastructure.jobs import RedisJobStore
+job_store = RedisJobStore(redis_url="redis://my-redis:6379/0")
+```
 
 ## Common Issues
 

@@ -23,6 +23,7 @@ from omniocr.domain.models import (
     Confidence,
     DocumentPage,
     DocumentStructure,
+    OCRBlock,
     PageFailure,
     Script,
     Suggestion,
@@ -42,6 +43,9 @@ class ReviewLine:
     reading_order: int
     suggestions: Tuple[Suggestion, ...] = field(default_factory=tuple)
     is_low_confidence: bool = False
+    # Per-engine blocks, carried through so the UI can show engine disagreement
+    # (ARCHITECTURE.md §3.8). Empty when a single engine produced the line.
+    blocks: Tuple[OCRBlock, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +97,7 @@ def build_review_page(
             reading_order=line.reading_order,
             suggestions=tuple(mapped.get(line.id, ())),
             is_low_confidence=_is_low_confidence(line.confidence),
+            blocks=line.blocks,
         )
         for line in page.lines
     )

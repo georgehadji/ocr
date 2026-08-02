@@ -59,3 +59,28 @@ def load_baselines() -> dict[str, dict[str, float]]:
 def list_fixture_ids() -> list[str]:
     """Return all fixture ids (the stem of each .txt file in the corpus)."""
     return sorted(path.stem for path in _get_corpus().glob("*.txt") if path.stem != "baselines")
+
+
+def load_provenance() -> dict[str, dict[str, str]]:
+    """Return the per-fixture provenance record from corpus/PROVENANCE.json."""
+    path = _get_corpus() / "PROVENANCE.json"
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return dict(data.get("fixtures", {}))
+
+
+def fixture_tier(fixture_id: str) -> str:
+    """Return ``'synthetic'``, ``'scan'``, or ``'unknown'`` for a fixture.
+
+    Accuracy gates must consult this. A synthetic fixture is a machine render
+    of a known string: it proves an engine reads Greek, but its CER says
+    nothing about performance on a real page, and treating the two alike is
+    how a 0.0076 CER on rendered Arial gets mistaken for book accuracy.
+    """
+    return load_provenance().get(fixture_id, {}).get("tier", "unknown")
+
+
+def list_scan_ids() -> list[str]:
+    """Return only fixtures backed by a real page image and human transcription."""
+    return [fid for fid in list_fixture_ids() if fixture_tier(fid) == "scan"]

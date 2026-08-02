@@ -8,10 +8,9 @@ installed, using a no-op store.
 from __future__ import annotations
 
 import logging
-from typing import Mapping
 
 from omniocr.domain.errors import TrainingError
-from omniocr.domain.models import ModelRef, Script
+from omniocr.domain.models import Script
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.domain.training import PromotedModel
 from omniocr.ports.interfaces import IModelRegistry
@@ -74,6 +73,7 @@ class MlflowModelRegistry(IModelRegistry):
                 # Log the model artifact if it exists on disk
                 try:
                     from pathlib import Path
+
                     path = Path(model.model_ref.model_name)
                     if path.exists():
                         mlflow.log_artifact(str(path), artifact_path="models")

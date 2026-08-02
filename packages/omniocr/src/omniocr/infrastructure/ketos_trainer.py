@@ -7,9 +7,8 @@ Includes timeouts, resource caps, and structured logging.
 
 from __future__ import annotations
 
-import json
 import logging
-import subprocess
+import subprocess  # nosec B404 - argv list, no shell, CLI isolation is the point
 import sys
 from pathlib import Path
 from typing import Mapping
@@ -58,16 +57,12 @@ class KetosTrainer(ITrainer):
         """
         train_json = data / "train.json"
         if not train_json.is_file():
-            return Err(
-                TrainingError(f"training data not found: {train_json}")
-            )
+            return Err(TrainingError(f"training data not found: {train_json}"))
 
         # Determine the parent model path
         parent_path = Path(parent.model_name)
         if not parent_path.is_file():
-            return Err(
-                TrainingError(f"parent model not found: {parent_path}")
-            )
+            return Err(TrainingError(f"parent model not found: {parent_path}"))
 
         # Build output path
         output_path = data.parent / "ketos_finetuned.mlmodel"
@@ -105,37 +100,27 @@ class KetosTrainer(ITrainer):
 
         _LOG.info(
             "ketos_train_start train_json=%s parent=%s epochs=%s",
-            str(train_json), str(parent_path), epochs,
+            str(train_json),
+            str(parent_path),
+            epochs,
         )
 
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603 - argv list, no shell
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=self._timeout,
             )
         except subprocess.TimeoutExpired:
-            return Err(
-                TrainingError(
-                    f"ketos training timed out after {self._timeout}s"
-                )
-            )
+            return Err(TrainingError(f"ketos training timed out after {self._timeout}s"))
 
         if result.returncode != 0:
             stderr = result.stderr[-2000:] if result.stderr else ""
-            return Err(
-                TrainingError(
-                    f"ketos train failed (exit {result.returncode}): {stderr}"
-                )
-            )
+            return Err(TrainingError(f"ketos train failed (exit {result.returncode}): {stderr}"))
 
         if not output_path.is_file():
-            return Err(
-                TrainingError(
-                    f"ketos did not produce output model: {output_path}"
-                )
-            )
+            return Err(TrainingError(f"ketos did not produce output model: {output_path}"))
 
         model_hash = sha256_file(output_path)
         run_id = params.get("run_id", "unknown")
@@ -149,7 +134,8 @@ class KetosTrainer(ITrainer):
 
         _LOG.info(
             "ketos_train_complete output=%s model_hash=%s",
-            str(output_path), model_hash,
+            str(output_path),
+            model_hash,
         )
 
         return Ok(candidate)

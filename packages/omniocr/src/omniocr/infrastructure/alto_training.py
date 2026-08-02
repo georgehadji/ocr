@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Sequence
 
 from omniocr.domain.errors import TrainingError
-from omniocr.domain.result import Err, Ok, Result
+from omniocr.domain.result import Ok, Result
 from omniocr.domain.training import TrainingSample
 from omniocr.ports.interfaces import ITrainingDataExporter
 
@@ -34,9 +34,7 @@ class TrainingDataExporter(ITrainingDataExporter):
         └── train.json     # ketos-compatible manifest
     """
 
-    def export(
-        self, samples: Sequence[TrainingSample], out: Path
-    ) -> Result[Path, TrainingError]:
+    def export(self, samples: Sequence[TrainingSample], out: Path) -> Result[Path, TrainingError]:
         """Export training samples to a ketos-consumable format.
 
         Args:

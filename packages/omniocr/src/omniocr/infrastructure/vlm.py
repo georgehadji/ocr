@@ -65,6 +65,11 @@ class VLMEngine(IOCREngine):
             "in the format: x1,y1,x2,y2|text (one per line)."
         ),
     ) -> None:
+        # api_url is operator/env-configured, not per-request input — but a
+        # misconfigured value (file://, custom scheme) must fail at
+        # construction, not silently open something other than an HTTP API.
+        if not api_url.startswith(("http://", "https://")):
+            raise ValueError(f"VLMEngine api_url must be http(s), got: {api_url!r}")
         self._api_key = api_key
         self._api_url = api_url.rstrip("/")
         self._model = model
@@ -155,7 +160,9 @@ class VLMEngine(IOCREngine):
             headers=headers,
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with urllib.request.urlopen(  # nosec B310 - scheme validated in __init__
+            request, timeout=120
+        ) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _parse_response(self, data: Any, page_width: int, page_height: int) -> list[OCRBlock]:

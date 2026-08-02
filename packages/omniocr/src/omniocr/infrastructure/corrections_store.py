@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from omniocr.domain.corrections import Correction
 from omniocr.domain.errors import CorrectionStoreError, TrainingError
@@ -77,12 +77,14 @@ class SqliteCorrectionStore(ICorrectionStore):
                     correction.corrected_text,
                     correction.corrected_by,
                     correction.corrected_at,
-                    json.dumps({
-                        "x": correction.bbox.x,
-                        "y": correction.bbox.y,
-                        "w": correction.bbox.w,
-                        "h": correction.bbox.h,
-                    }),
+                    json.dumps(
+                        {
+                            "x": correction.bbox.x,
+                            "y": correction.bbox.y,
+                            "w": correction.bbox.w,
+                            "h": correction.bbox.h,
+                        }
+                    ),
                     correction.script.value,
                     1 if correction.accepted else 0,
                 ),
@@ -128,7 +130,7 @@ class SqliteCorrectionStore(ICorrectionStore):
         self._conn.close()
 
     @staticmethod
-    def _row_to_correction(row: tuple) -> Correction:
+    def _row_to_correction(row: tuple[Any, ...]) -> Correction:
         """Convert a SQLite row to a ``Correction`` value object."""
         bbox_data = json.loads(row[6])
         return Correction(

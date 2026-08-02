@@ -84,6 +84,68 @@ pip install -e ".[pdf,kraken,opencv,docx,dev]"
 
 ## Usage
 
+### CLI (headless — agents, CI, batch)
+
+Installing the package registers an `omniocr` command. It never prompts, never
+opens a UI, and never reads stdin.
+
+```bash
+omniocr doctor --json
+```
+
+```bash
+omniocr run book.pdf --engine ensemble --script polytonic
+```
+
+`--out` is optional. Without it, output lands in `Outputs/<input-name>.txt`
+(created automatically) — pass `--out` or `--format` to choose the file or
+format explicitly:
+
+```bash
+omniocr run book.pdf --out book.docx --engine ensemble --script polytonic
+```
+
+Check the environment before a long run — `doctor` exits `3` and names the
+problem when an engine, language pack, or model is missing:
+
+```bash
+omniocr doctor
+```
+
+Cap the work while testing a setup, instead of committing to a whole book —
+also the fastest way to check that the engine/language/script combination
+actually works before committing to a long run:
+
+```bash
+omniocr run book.pdf --max-pages 5 --json
+```
+
+**Speed.** `--engine tesseract` is seconds per page. `--engine kraken` and the
+default `--engine ensemble` also run Kraken on CPU, which measured **minutes
+per page**, not seconds. Size any process timeout accordingly — a short
+timeout on the default engine reads as a hang, not slowness. `--engine
+tesseract` is the fast path for a first pass or a CI smoke check.
+
+**Contract for unattended callers**
+
+| Aspect | Behaviour |
+|---|---|
+| stdout | With `--json`, exactly one JSON document. Nothing else — safe to pipe to `jq`. |
+| stderr | Per-page progress and all diagnostics, in every mode. |
+| exit 0 | Completed with no page failures. **Not** a claim of accuracy — OCR always has some error rate; `"ok": true` means the pipeline ran, not that the text is error-free. |
+| exit 1 | Pipeline or export failed. Partial output may still have been written — check `failures` in the JSON. |
+| exit 2 | Bad arguments or missing input file. |
+| exit 3 | Environment problem: missing engine, language pack, or model. |
+
+Output format comes from the `--out` extension (`.txt`, `.md`, `.docx`, `.pdf`,
+`.xml`) and can be overridden with `--format` (adds `page` for PAGE-XML).
+
+Run it without installing:
+
+```bash
+python -m omniocr.interfaces.cli doctor
+```
+
 ### Desktop Edition (Streamlit review UI)
 
 ```bash

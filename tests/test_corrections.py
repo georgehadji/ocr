@@ -100,17 +100,5 @@ class TestGroundTruthLine:
         """
         # GroundTruthLine.from_correction() is the SOLE constructor.
         # An OCRLine instance has no ``from_correction`` method.
-        from omniocr.domain.models import OCRLine, Confidence
-
-        ocr_line = OCRLine(
-            id="test",
-            text="some text",
-            confidence=Confidence(90.0),
-            bbox=BBox(0, 0, 10, 10),
-        )
-
-        # For the D10 fix, what matters is that there's no path from OCRLine
-        # to GroundTruthLine in the business logic.
-        # Verify: GroundTruthLine only has from_correction, not from_ocr_line
         assert not hasattr(GroundTruthLine, "from_ocr_line")
         assert hasattr(GroundTruthLine, "from_correction")

@@ -2,7 +2,31 @@
 
 from __future__ import annotations
 
+import pytest
+
 from omniocr.infrastructure.vlm import VLMEngine
+
+
+def test_default_api_url_is_accepted() -> None:
+    VLMEngine(api_key="test-key")  # must not raise
+
+
+def test_https_api_url_is_accepted() -> None:
+    VLMEngine(api_key="test-key", api_url="https://api.example.com/v1")  # must not raise
+
+
+def test_http_api_url_is_accepted() -> None:
+    VLMEngine(api_key="test-key", api_url="http://localhost:8080/v1")  # must not raise
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    ["file:///etc/passwd", "ftp://example.com", "javascript:alert(1)", "example.com/v1"],
+)
+def test_non_http_api_url_is_rejected_at_construction(bad_url: str) -> None:
+    """A misconfigured scheme must fail fast, not silently open at call time."""
+    with pytest.raises(ValueError, match="must be http"):
+        VLMEngine(api_key="test-key", api_url=bad_url)
 
 
 def _api_response(
@@ -72,3 +96,15 @@ def test_vlm_extract_guarded_without_engine_blocks_keeps_all() -> None:
     blocks = engine._parse_response(data, 400, 100)
 
     assert len(blocks) >= 1
+
+
+def test_vlm_repr_masks_api_key() -> None:
+    """repr(VLMEngine) shows truncated API key, never the full secret."""
+    engine = VLMEngine(api_key="sk-or-v1-abcdef123456")
+    representation = repr(engine)
+    assert "sk-or-v1-abcdef123456" not in representation
+    assert "sk-or-v1...3456" in representation
+
+    short_key = VLMEngine(api_key="short")
+    assert "short" not in repr(short_key)
+    assert "***" in repr(short_key)

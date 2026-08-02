@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from xml.etree import ElementTree as ET
+from xml.etree import ElementTree as ET  # nosec B405 - builds/writes XML here, never parses input
 
 from omniocr.domain.errors import ExportError
 from omniocr.domain.models import DocumentStructure, TenantContext
@@ -267,10 +267,14 @@ class SearchablePdfExporter(IExporter):
                         )
                         if inserted <= 0:
                             return Err(ExportError(f"could not place OCR line {line.id}"))
-                return Ok(pdf.tobytes(garbage=3, deflate=True))
+                result_bytes = pdf.tobytes(garbage=3, deflate=True)
+                return Ok(result_bytes)
             finally:
                 pdf.close()
+                # Release the source PDF bytes to free memory after export.
+                self._source_pdf = b""
         except Exception as exc:
+            self._source_pdf = b""
             return Err(ExportError(f"searchable PDF export failed: {exc}"))
 
 

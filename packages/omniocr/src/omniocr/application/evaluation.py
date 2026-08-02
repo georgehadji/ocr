@@ -67,11 +67,7 @@ def evaluate(
         # Read ground truth
         gt_text = _read_ground_truth(page.ground_truth_path)
         if gt_text is None:
-            return Err(
-                TrainingError(
-                    f"cannot read ground truth: {page.ground_truth_path}"
-                )
-            )
+            return Err(TrainingError(f"cannot read ground truth: {page.ground_truth_path}"))
 
         # Read the page image and run the engine
         try:
@@ -82,9 +78,11 @@ def evaluate(
         raw_page = _CorpusRawPage(image_bytes)
         result = engine.extract(raw_page, context)
         if not result.is_ok():
-            return Err(TrainingError(
-                f"engine failed on {page.page_id}: {result.error}"  # type: ignore[attr-defined]
-            ))
+            return Err(
+                TrainingError(
+                    f"engine failed on {page.page_id}: {result.error}"  # type: ignore[attr-defined]
+                )
+            )
 
         hypothesis = " ".join(block.text for block in result.value)  # type: ignore[attr-defined]
 
@@ -97,12 +95,8 @@ def evaluate(
     for script, texts in script_texts.items():
         if not texts:
             continue
-        cers = [
-            character_error_rate(ref, hyp) for ref, hyp in texts if hyp
-        ]
-        wers = [
-            word_error_rate(ref, hyp) for ref, hyp in texts if hyp
-        ]
+        cers = [character_error_rate(ref, hyp) for ref, hyp in texts if hyp]
+        wers = [word_error_rate(ref, hyp) for ref, hyp in texts if hyp]
         per_script_cer[script] = sum(cers) / len(cers) if cers else 1.0
         per_script_wer[script] = sum(wers) / len(wers) if wers else 1.0
 

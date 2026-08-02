@@ -153,6 +153,18 @@ class RedisJobStore:
 
         self._redis = _redis.from_url(redis_url)
 
+    def ping(self) -> bool:
+        """Return True if the backing Redis server is reachable.
+
+        Redis clients constructed via ``from_url`` are lazy and do not
+        connect until the first command. This probes connectivity so callers
+        (e.g. a composition root) can decide between Redis and a fallback.
+        """
+        try:
+            return bool(self._redis.ping())
+        except Exception:
+            return False
+
     def checkpoint(self, job_id: str, document: DocumentStructure) -> Result[None, IngestError]:
         if not job_id.strip():
             return Err(IngestError("job id must not be empty"))

@@ -34,9 +34,7 @@ class FileCorpusRepository(ICorpusRepository):
     def __init__(self, corpus_root: str | Path) -> None:
         self._root = Path(corpus_root)
 
-    def pages(
-        self, split: SplitName, script: Script | None = None
-    ) -> Sequence[CorpusPage]:
+    def pages(self, split: SplitName, script: Script | None = None) -> Sequence[CorpusPage]:
         """Return corpus pages for the given split, optionally filtered by script.
 
         Pages are discovered from the filesystem by matching ``*.png`` /

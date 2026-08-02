@@ -7,11 +7,10 @@ testable, and auditable.
 
 from __future__ import annotations
 
-import math
 from typing import Protocol
 
 from omniocr.domain.errors import PromotionRefused
-from omniocr.domain.models import ModelRef, Script
+from omniocr.domain.models import ModelRef
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.domain.training import EvaluationReport, ModelCandidate, PromotedModel
 
@@ -59,10 +58,7 @@ class BeatsParentOnHeldOut:
         # Rule 1: must be evaluated on TEST split
         if candidate_report.evaluated_on != "test":
             return Err(
-                PromotionRefused(
-                    f"evaluated on '{candidate_report.evaluated_on}', "
-                    f"expected 'test'"
-                )
+                PromotionRefused(f"evaluated on '{candidate_report.evaluated_on}', expected 'test'")
             )
 
         # Rule 4: minimum sample count
@@ -93,9 +89,7 @@ class BeatsParentOnHeldOut:
         # Rule 2: refuse if improvement is below threshold
         if parent_mean_cer == 0.0:
             return Err(
-                PromotionRefused(
-                    f"parent mean CER is 0 — cannot compute relative improvement"
-                )
+                PromotionRefused("parent mean CER is 0 — cannot compute relative improvement")
             )
 
         improvement_pct = (parent_mean_cer - candidate_mean_cer) / parent_mean_cer * 100.0
@@ -135,9 +129,7 @@ def refuse_unless_test_split(
     """Refuse promotion unless evaluated on the TEST split."""
     if candidate_report.evaluated_on != "test":
         return Err(
-            PromotionRefused(
-                f"evaluated on '{candidate_report.evaluated_on}', expected 'test'"
-            )
+            PromotionRefused(f"evaluated on '{candidate_report.evaluated_on}', expected 'test'")
         )
     return Ok(None)
 
