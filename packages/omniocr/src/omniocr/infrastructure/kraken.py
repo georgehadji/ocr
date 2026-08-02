@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable
@@ -21,6 +22,30 @@ from omniocr.domain.models import (
 )
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.ports.interfaces import ILayoutAnalyzer, IOCREngine, RawPage
+
+_LOG = logging.getLogger("omniocr.kraken")
+
+
+def select_device(preferred: str | None = None) -> str:
+    """Return the torch device Kraken should use: CUDA when usable, else CPU.
+
+    ``preferred`` short-circuits detection, so a caller can pin a device (and
+    tests can exercise both paths on a machine with no GPU).
+
+    Availability is probed defensively: a torch build without CUDA, a driver
+    mismatch, or a machine with no GPU can each raise here rather than simply
+    returning ``False``, and none of those is a reason to fail the run.
+    """
+    if preferred is not None:
+        return preferred
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception as exc:  # ImportError, driver/CUDA init failures
+        _LOG.debug("CUDA probe failed, using CPU: %s", exc)
+    return "cpu"
 
 
 def _open_bilevel(content: bytes) -> Any:
@@ -149,24 +174,32 @@ class KrakenEngine(IOCREngine):
 
     name = "kraken"
 
-    def __init__(self, model_path: str | Path) -> None:
+    def __init__(self, model_path: str | Path, device: str | None = None) -> None:
         self.model_path = Path(model_path)
+        self._requested_device = device
+        # Resolved on first use, not here: probing CUDA imports torch, and
+        # composition roots construct this engine eagerly whether or not a
+        # page is ever recognized.
+        self._device: str | None = None
         self._model: Any = None
         self._model_hash = self._hash_model()
+
+    @property
+    def device(self) -> str:
+        """The torch device in use — ``cuda`` when available, else ``cpu``."""
+        if self._device is None:
+            self._device = select_device(self._requested_device)
+        return self._device
 
     def extract(
         self, page: RawPage, context: TenantContext
     ) -> Result[Sequence[OCRBlock], EngineError]:
         try:
-            from kraken import pageseg, rpred
-            from kraken.lib import models
+            from kraken import pageseg
 
-            if self._model is None:
-                self._model = models.load_any(str(self.model_path))
             image = _open_bilevel(page.content)
             segmentation = pageseg.segment(image)
-            records = rpred.rpred(self._model, image, segmentation)
-            return Ok(self.parse_records(records, page.width, page.height))
+            return Ok(self._recognize(image, segmentation, page))
         except ImportError:
             return Err(
                 EngineError(
@@ -176,6 +209,49 @@ class KrakenEngine(IOCREngine):
             )
         except Exception as exc:
             return Err(EngineError(f"Kraken extraction failed: {exc}"))
+
+    def _recognize(self, image: Any, segmentation: Any, page: RawPage) -> tuple[OCRBlock, ...]:
+        """Recognize one page, degrading from GPU to CPU rather than failing.
+
+        ``rpred`` returns a generator, so GPU errors surface while parsing,
+        not at the call. The fallback is permanent for this engine instance:
+        a GPU that just OOM'd on one page will OOM on the next, and retrying
+        every page would cost a wasted GPU attempt each time.
+        """
+        from kraken import rpred
+
+        if self._model is None:
+            self._model = self._load_model()
+        try:
+            return self.parse_records(
+                rpred.rpred(self._model, image, segmentation), page.width, page.height
+            )
+        except Exception as exc:
+            if self.device == "cpu":
+                raise
+            _LOG.warning(
+                "Kraken GPU recognition failed on page %s (%s) — falling back to CPU",
+                page.number,
+                exc,
+            )
+            self._device = "cpu"
+            self._model = self._load_model()
+            return self.parse_records(
+                rpred.rpred(self._model, image, segmentation), page.width, page.height
+            )
+
+    def _load_model(self) -> Any:
+        """Load the recognition model, degrading to CPU if the GPU cannot take it."""
+        from kraken.lib import models
+
+        try:
+            return models.load_any(str(self.model_path), device=self.device)
+        except Exception as exc:
+            if self.device == "cpu":
+                raise
+            _LOG.warning("Kraken model load on %s failed (%s) — using CPU", self.device, exc)
+            self._device = "cpu"
+            return models.load_any(str(self.model_path), device="cpu")
 
     def parse_records(
         self, records: Iterable[Any], page_width: int, page_height: int
@@ -189,7 +265,7 @@ class KrakenEngine(IOCREngine):
                 model_hash=self._model_hash,
             ),
             model_hash=self._model_hash,
-            params=("cpu",),
+            params=(self.device,),
             timestamp=timestamp,
         )
         blocks: list[OCRBlock] = []

@@ -121,10 +121,23 @@ omniocr run book.pdf --max-pages 5 --json
 ```
 
 **Speed.** `--engine tesseract` is seconds per page. `--engine kraken` and the
-default `--engine ensemble` also run Kraken on CPU, which measured **minutes
-per page**, not seconds. Size any process timeout accordingly — a short
-timeout on the default engine reads as a hang, not slowness. `--engine
-tesseract` is the fast path for a first pass or a CI smoke check.
+default `--engine ensemble` run Kraken, which measured **minutes per page on
+CPU**. Size any process timeout accordingly — a short timeout on the default
+engine reads as a hang, not slowness. `--engine tesseract` is the fast path
+for a first pass or a CI smoke check.
+
+Kraken uses a **CUDA GPU automatically when one is available**, and falls back
+to CPU otherwise — no flag required. If the GPU is present but cannot take the
+model or a page (driver mismatch, out of memory), it degrades to CPU and logs
+a warning rather than failing the run. `omniocr doctor` reports which device
+will be used:
+
+```bash
+omniocr doctor --json | jq .kraken.device
+```
+
+The device that actually produced each line is recorded in its provenance, so
+a GPU and a CPU run are distinguishable after the fact.
 
 **Contract for unattended callers**
 

@@ -95,7 +95,14 @@ def _kraken_report(models_dir: Path = _MODELS_DIR) -> dict[str, Any]:
     except ImportError:
         installed = False
     models = sorted(str(path) for path in models_dir.glob("*.mlmodel"))
-    return {"installed": installed, "models": models}
+    report: dict[str, Any] = {"installed": installed, "models": models}
+    if installed:
+        # Report the device up front: it is the difference between minutes and
+        # seconds per page, and the caller sizes its timeouts on this.
+        from omniocr.infrastructure.kraken import select_device
+
+        report["device"] = select_device()
+    return report
 
 
 def _optional_module_report() -> dict[str, bool]:
@@ -231,6 +238,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(f"  langs   : {', '.join(tess['languages']) or '-'}")
         print(f"kraken    : {'yes' if env['kraken']['installed'] else 'NO'}")
         print(f"  models  : {len(env['kraken']['models'])} in {_MODELS_DIR}/")
+        if "device" in env["kraken"]:
+            print(f"  device  : {env['kraken']['device']}")
         for extra, present in sorted(env["extras"].items()):
             print(f"{extra:10}: {'yes' if present else 'NO'}")
         if problems:
