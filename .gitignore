@@ -5,6 +5,8 @@ __pycache__/
 .ruff_cache/
 .coverage
 *.egg-info/
+/build/
+/dist/
 .reasonix/
 *.db
 implementation_audit_report.md
