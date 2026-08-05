@@ -1,6 +1,0 @@
-/* Master Designer Minimalist CSS */
-body { font-family: sans-serif; margin: 20px; background-color: #f8f8f8; }
-header { border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }
-#upload-zone { padding: 20px; border: 2px dashed #007AFF; text-align: center; }
-#process-button { background-color: #007AFF; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
-/* ... (Responsive and Dark Mode CSS would be added here) ... */
