@@ -49,3 +49,11 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 no_implicit_optional = true
+
+# python-docx ships no inline types and no types-python-docx stub package
+# exists on PyPI (checked 2026-08-05). Its calls are genuinely untyped, not
+# a project defect — scope the exception to the one module that touches it
+# rather than loosening the strict gate globally.
+[[tool.mypy.overrides]]
+module = "omniocr.infrastructure.exporters"
+disallow_untyped_calls = false

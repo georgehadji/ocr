@@ -297,7 +297,12 @@ class DocxExporter(IExporter):
             doc = Document()
             style = doc.styles["Normal"]
             style.font.name = self._font_name
-            style._element.rPr.rFonts.set(qn("w:eastAsia"), self._font_name)
+            # `.rPr`/`.rFonts` are both None until a run/style has any
+            # formatting applied — a freshly styled document can hit that, so
+            # this would have been a real AttributeError at runtime, not just
+            # an unannotated type.
+            rpr = style._element.get_or_add_rPr()
+            rpr.get_or_add_rFonts().set(qn("w:eastAsia"), self._font_name)
             for page_index, page in enumerate(document.pages):
                 if page_index:
                     doc.add_page_break()
@@ -305,7 +310,8 @@ class DocxExporter(IExporter):
                     paragraph = doc.add_paragraph()
                     run = paragraph.add_run(line.text)
                     run.font.name = self._font_name
-                    run._element.rPr.rFonts.set(qn("w:eastAsia"), self._font_name)
+                    run_rpr = run._element.get_or_add_rPr()
+                    run_rpr.get_or_add_rFonts().set(qn("w:eastAsia"), self._font_name)
             doc.save(output)
             return Ok(output.getvalue())
         except ImportError:

@@ -27,7 +27,7 @@ jobs:
       - name: Check formatting
         run: ruff format --check packages tests
       - name: Check strict typing
-        run: mypy --strict --ignore-missing-imports --follow-imports=skip --python-version 3.11 packages/omniocr/src
+        run: mypy --strict --ignore-missing-imports --python-version 3.11 packages/omniocr/src
       - name: Check license isolation
         run: python scripts/check_license_isolation.py
       - name: Check architectural layering

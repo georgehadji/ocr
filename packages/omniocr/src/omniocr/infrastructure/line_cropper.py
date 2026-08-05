@@ -38,7 +38,10 @@ class PilLineCropper(ILineCropper):
 
             from PIL import Image
 
-            img = Image.open(BytesIO(page_image))
+            # Annotated to the base Image.Image: Image.open() returns the
+            # narrower ImageFile, but .convert() returns Image.Image, and the
+            # variable must hold either.
+            img: Image.Image = Image.open(BytesIO(page_image))
             if img.mode != "RGB":
                 img = img.convert("RGB")
 

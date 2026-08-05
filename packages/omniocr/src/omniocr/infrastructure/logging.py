@@ -37,4 +37,10 @@ def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
     import sys
 
     module_name = name or sys._getframe(1).f_globals.get("__name__", "omniocr")
-    return structlog.get_logger(module_name)
+    logger = structlog.get_logger(module_name)
+    # structlog.get_logger's return type is Any — the actual bound type
+    # depends on the configured logger_factory. configure_logging() above
+    # pins that to stdlib.LoggerFactory(), so this asserts a real runtime
+    # invariant rather than papering over an unknown with a cast.
+    assert isinstance(logger, structlog.stdlib.BoundLogger)
+    return logger

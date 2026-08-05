@@ -151,7 +151,7 @@ class RedisJobStore:
     def __init__(self, redis_url: str = "redis://localhost:6379/0") -> None:
         import redis as _redis
 
-        self._redis = _redis.from_url(redis_url)
+        self._redis: _redis.Redis = _redis.from_url(redis_url)
 
     def ping(self) -> bool:
         """Return True if the backing Redis server is reachable.
@@ -180,6 +180,10 @@ class RedisJobStore:
             raw = self._redis.get(f"omniocr:checkpoint:{job_id}")
             if raw is None:
                 return None
+            # redis-py types command returns as Awaitable[T] | T since the
+            # same stubs cover the sync and async clients — this instance is
+            # always the sync Redis from from_url(), so it's always bytes.
+            assert isinstance(raw, bytes)
             return _document_from_json(raw.decode("utf-8"))
         except Exception:
             return None

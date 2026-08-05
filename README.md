@@ -315,8 +315,7 @@ OCR/
 ├── editions/
 │   ├── desktop/                    # Streamlit review UI
 │   ├── server/                     # FastAPI + RQ
-│   ├── cloud/                      # FastAPI + Celery + Docker Compose
-│   ├── legacy-*/                   # Original editions (pre-migration)
+│   └── cloud/                      # FastAPI + Celery + Docker Compose
 ├── tests/
 │   ├── corpus/                     # Fixture images + ground truth
 │   ├── test_config.py …            # 136 tests across 20 files
