@@ -45,6 +45,13 @@ markers = [
 [tool.ruff]
 line-length = 100
 
+[tool.coverage.run]
+# Deliberate empty scaffold (docs/ARCHITECTURE.md locked scope: manuscript
+# HTR is out of scope until manuscript data is committed). There is no
+# behavior here to test — omit it rather than write a test that asserts
+# nothing, or count it as a real gap it isn't.
+omit = ["*/infrastructure/htr/*"]
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true

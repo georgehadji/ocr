@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/tests-285-success" alt="285 tests">
-  <img src="https://img.shields.io/badge/coverage-78%25-orange" alt="78% coverage">
+  <img src="https://img.shields.io/badge/tests-326-success" alt="326 tests">
+  <img src="https://img.shields.io/badge/coverage-85%25-green" alt="85% coverage">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
 </p>
 
