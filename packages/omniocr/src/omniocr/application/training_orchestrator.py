@@ -22,7 +22,6 @@ from omniocr.domain.errors import EngineError, TrainingError
 from omniocr.domain.models import ModelRef, OCRBlock, TenantContext
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.domain.training import (
-    EvaluationReport,
     ModelCandidate,
     PromotedModel,
 )
@@ -113,7 +112,7 @@ class TrainingOrchestrator:
         )
         if isinstance(samples_result, Err):
             return Err(samples_result.error)
-        samples = samples_result.value if hasattr(samples_result, "value") else []
+        samples = samples_result.value
 
         if not samples:
             _LOG.warning("no training samples after filtering")
@@ -123,9 +122,7 @@ class TrainingOrchestrator:
         export_result = self._exporter.export(samples, output_dir / "training_data")
         if isinstance(export_result, Err):
             return Err(export_result.error)
-        data_path = (
-            export_result.value if hasattr(export_result, "value") else output_dir / "training_data"
-        )
+        data_path = export_result.value
 
         # Stage 4: Train the model
         train_result = self._trainer.train(
@@ -135,7 +132,7 @@ class TrainingOrchestrator:
         )
         if isinstance(train_result, Err):
             return Err(train_result.error)
-        candidate = train_result.value if hasattr(train_result, "value") else None
+        candidate = train_result.value
         if candidate is None:
             return Err(TrainingError("trainer returned no candidate"))
 
@@ -155,28 +152,12 @@ class TrainingOrchestrator:
             return Err(parent_eval.error)
 
         # Stage 7: Promotion policy decides
-        candidate_report = (
-            candidate_eval.value
-            if hasattr(candidate_eval, "value")
-            else EvaluationReport(
-                model_hash="",
-                per_script_cer={},
-                per_script_wer={},
-                sample_count=0,
-                evaluated_on="test",
-            )
-        )
-        parent_report = (
-            parent_eval.value
-            if hasattr(parent_eval, "value")
-            else EvaluationReport(
-                model_hash="",
-                per_script_cer={},
-                per_script_wer={},
-                sample_count=0,
-                evaluated_on="test",
-            )
-        )
+        # Both are Ok here — the Err branches returned above. Substituting a
+        # zeroed EvaluationReport instead (as this once did) would feed the
+        # promotion policy fabricated CERs and could promote a model that was
+        # never actually evaluated.
+        candidate_report = candidate_eval.value
+        parent_report = parent_eval.value
 
         decision = self._promotion_policy.decide(
             candidate=candidate,
@@ -191,9 +172,7 @@ class TrainingOrchestrator:
             )
             return Ok(None)
 
-        promoted = decision.value if hasattr(decision, "value") else None
-        if promoted is None:
-            return Ok(None)
+        promoted = decision.value
 
         # Stage 8: Register the promoted model
         register_result = self._model_registry.register(promoted)

@@ -1,8 +1,18 @@
+"""Railway-oriented ``Result`` type.
+
+``Result`` is a *union alias*, not a base class. That distinction is what makes
+the type usable: with a base class, ``if isinstance(x, Err): return`` leaves
+mypy still seeing ``Result``, so ``x.value`` fails to type-check afterwards and
+call sites drift into ``hasattr(x, "value")`` or ``cast`` to silence it — both
+of which turn a contract violation into a silent wrong value. As a union,
+narrowing works in both branches and those workarounds become unnecessary.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import cast
-from typing import Callable, Generic, TypeVar
+from typing import Callable, Generic, TypeAlias, TypeVar
 
 
 T = TypeVar("T")
@@ -11,21 +21,23 @@ E = TypeVar("E")
 F = TypeVar("F")
 
 
-class Result(Generic[T, E]):
+class _ResultBase(Generic[T, E]):
+    """Shared combinators. Not part of the public API — use ``Result``."""
+
     def map(self, func: Callable[[T], U]) -> "Result[U, E]":
         if isinstance(self, Ok):
             return Ok(func(self.value))
-        return Err(cast(Err[T, E], self).error)
+        return Err(cast("Err[T, E]", self).error)
 
     def and_then(self, func: Callable[[T], "Result[U, E]"]) -> "Result[U, E]":
         if isinstance(self, Ok):
             return func(self.value)
-        return Err(cast(Err[T, E], self).error)
+        return Err(cast("Err[T, E]", self).error)
 
     def map_err(self, func: Callable[[E], F]) -> "Result[T, F]":
         if isinstance(self, Err):
             return Err(func(self.error))
-        return Ok(cast(Ok[T, E], self).value)
+        return Ok(cast("Ok[T, E]", self).value)
 
     def unwrap_or(self, default: T) -> T:
         return self.value if isinstance(self, Ok) else default
@@ -38,10 +50,13 @@ class Result(Generic[T, E]):
 
 
 @dataclass(frozen=True, slots=True)
-class Ok(Result[T, E]):
+class Ok(_ResultBase[T, E]):
     value: T
 
 
 @dataclass(frozen=True, slots=True)
-class Err(Result[T, E]):
+class Err(_ResultBase[T, E]):
     error: E
+
+
+Result: TypeAlias = Ok[T, E] | Err[T, E]

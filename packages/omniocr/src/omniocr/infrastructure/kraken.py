@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable
@@ -182,13 +183,27 @@ class KrakenEngine(IOCREngine):
         # page is ever recognized.
         self._device: str | None = None
         self._model: Any = None
+        # One engine instance is shared across the page-parallel workers of
+        # ADR-003, and both lazy fields below are written on first use. The
+        # lock keeps that to a single load instead of one per racing worker.
+        #
+        # Reentrant on purpose: _load_model() runs under this lock and reads
+        # the `device` property, which locks again. A plain Lock deadlocks the
+        # whole pipeline on the very first page.
+        #
+        # ponytail: one lock for the whole engine — recognition itself is the
+        # bottleneck at ~500s/page, so contention on a one-time load is noise.
+        # Split it only if profiling ever says otherwise.
+        self._lock = threading.RLock()
         self._model_hash = self._hash_model()
 
     @property
     def device(self) -> str:
         """The torch device in use — ``cuda`` when available, else ``cpu``."""
         if self._device is None:
-            self._device = select_device(self._requested_device)
+            with self._lock:
+                if self._device is None:
+                    self._device = select_device(self._requested_device)
         return self._device
 
     def extract(
@@ -221,7 +236,9 @@ class KrakenEngine(IOCREngine):
         from kraken import rpred
 
         if self._model is None:
-            self._model = self._load_model()
+            with self._lock:
+                if self._model is None:
+                    self._model = self._load_model()
         try:
             return self.parse_records(
                 rpred.rpred(self._model, image, segmentation), page.width, page.height
@@ -234,8 +251,9 @@ class KrakenEngine(IOCREngine):
                 page.number,
                 exc,
             )
-            self._device = "cpu"
-            self._model = self._load_model()
+            with self._lock:
+                self._device = "cpu"
+                self._model = self._load_model()
             return self.parse_records(
                 rpred.rpred(self._model, image, segmentation), page.width, page.height
             )

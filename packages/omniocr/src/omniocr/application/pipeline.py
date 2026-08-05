@@ -4,7 +4,7 @@ import logging
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Iterator, Protocol, Sequence, cast
+from typing import Iterable, Iterator, Protocol, Sequence, cast
 from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.domain.errors import EngineError, ExportError, IngestError, LayoutError, PipelineError
 from omniocr.domain.models import (
@@ -174,6 +174,7 @@ class PipelineOrchestrator:
         job_store: IJobStore | None = None,
         event_bus: IEventBus | None = None,
         max_workers: int | None = None,
+        checkpoint_every: int = 25,
     ) -> None:
         self._page_source = page_source or NullPageSource()
         self._image_processor = image_processor or PassthroughImageProcessor()
@@ -185,6 +186,9 @@ class PipelineOrchestrator:
         self._job_store = job_store
         self._event_bus = event_bus
         self._max_workers = max_workers
+        if checkpoint_every < 1:
+            raise ValueError("checkpoint_every must be >= 1")
+        self._checkpoint_every = checkpoint_every
         self._log = _get_logger("omniocr.pipeline")
 
     def run(
@@ -273,14 +277,9 @@ class PipelineOrchestrator:
                     PipelineEvent("page_completed", page_number, duration_ms=0.0)
                 )
             pages.append(result)
+            self._maybe_checkpoint(checkpoint_id, pages)
 
-            if self._job_store is not None and checkpoint_id is not None:
-                checkpoint_result = self._job_store.checkpoint(
-                    checkpoint_id, DocumentStructure(pages=tuple(pages))
-                )
-                if isinstance(checkpoint_result, Err):
-                    self._log.error("checkpoint_failed", error=str(checkpoint_result.error))
-
+        self._maybe_checkpoint(checkpoint_id, pages, force=True)
         return pages
 
     def _run_sequential(
@@ -327,14 +326,38 @@ class PipelineOrchestrator:
                 )
             pages.append(page)
 
-            if self._job_store is not None and checkpoint_id is not None:
-                checkpoint_result = self._job_store.checkpoint(
-                    checkpoint_id, DocumentStructure(pages=tuple(pages))
-                )
-                if isinstance(checkpoint_result, Err):
-                    return pages  # return partial results on checkpoint failure
+            if not self._maybe_checkpoint(checkpoint_id, pages):
+                return pages  # return partial results on checkpoint failure
 
+        self._maybe_checkpoint(checkpoint_id, pages, force=True)
         return pages
+
+    def _maybe_checkpoint(
+        self,
+        checkpoint_id: str | None,
+        pages: list[DocumentPage],
+        force: bool = False,
+    ) -> bool:
+        """Persist progress every ``checkpoint_every`` pages. Returns success.
+
+        Checkpointing serializes the whole accumulated document, so doing it
+        after every page costs O(n²) I/O over a book — worst exactly where the
+        target documents live (hundreds of pages). Batching trades at most
+        ``checkpoint_every`` pages of redone work on a crash for linear I/O.
+        ``force=True`` at the end of a run keeps the final checkpoint complete
+        regardless of where the batch boundary fell.
+        """
+        if self._job_store is None or checkpoint_id is None:
+            return True
+        if not force and len(pages) % self._checkpoint_every != 0:
+            return True
+        checkpoint_result = self._job_store.checkpoint(
+            checkpoint_id, DocumentStructure(pages=tuple(pages))
+        )
+        if isinstance(checkpoint_result, Err):
+            self._log.error("checkpoint_failed", error=str(checkpoint_result.error))
+            return False
+        return True
 
     def count_pages(self, document: bytes) -> int:
         """Return the number of pages in a document without processing them."""
@@ -377,13 +400,21 @@ class PipelineOrchestrator:
         ctx = context or TenantContext(
             organization_id="default", user_id="system", subscription_tier="desktop"
         )
+        # Only the parallel path needs every page up front, to fan out. The
+        # sequential path streams: materializing a 300-page scan here would
+        # hold every page image in memory at once and defeat the point of a
+        # page-streaming ingest, which is the whole reason this method exists.
+        parallel = self._max_workers is not None and self._max_workers > 1
         try:
+            if not parallel:
+                yield from self._iterate_sequentially(self._page_source.stream(document), ctx)
+                return
             raw_pages = list(self._page_source.stream(document))
         except PipelineError as exc:
             self._log.error("pipeline_failed", error=str(exc))
             return
 
-        if self._max_workers is not None and self._max_workers > 1 and len(raw_pages) > 1:
+        if len(raw_pages) > 1:
             page_results: dict[int, DocumentPage] = {}
             with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
                 future_to_page: dict[Future[DocumentPage], int] = {}
@@ -414,24 +445,34 @@ class PipelineOrchestrator:
                 self._log.info("page_completed", page=page_number, duration_ms=0.0)
                 yield (page_number, page)
         else:
-            for raw_page in raw_pages:
-                started_at = perf_counter()
-                try:
-                    page = self._process_page(raw_page, ctx)
-                except PipelineError as exc:
-                    page = DocumentPage(
-                        number=raw_page.number,
-                        width=getattr(raw_page, "width", 1),
-                        height=getattr(raw_page, "height", 1),
-                        failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
-                    )
-                    self._log.warning("page_failed", page=raw_page.number, error=str(exc))
-                else:
-                    duration = (perf_counter() - started_at) * 1000
-                    self._log.info(
-                        "page_completed", page=raw_page.number, duration_ms=round(duration, 1)
-                    )
-                yield (raw_page.number, page)
+            yield from self._iterate_sequentially(raw_pages, ctx)
+
+    def _iterate_sequentially(
+        self, raw_pages: Iterable[RawPage], ctx: TenantContext
+    ) -> Iterator[tuple[int, DocumentPage]]:
+        """Yield one processed page at a time, consuming the source lazily.
+
+        Takes an ``Iterable`` rather than a list so a generator streams through
+        untouched — one page in memory at a time regardless of document size.
+        """
+        for raw_page in raw_pages:
+            started_at = perf_counter()
+            try:
+                page = self._process_page(raw_page, ctx)
+            except PipelineError as exc:
+                page = DocumentPage(
+                    number=raw_page.number,
+                    width=getattr(raw_page, "width", 1),
+                    height=getattr(raw_page, "height", 1),
+                    failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
+                )
+                self._log.warning("page_failed", page=raw_page.number, error=str(exc))
+            else:
+                duration = (perf_counter() - started_at) * 1000
+                self._log.info(
+                    "page_completed", page=raw_page.number, duration_ms=round(duration, 1)
+                )
+            yield (raw_page.number, page)
 
     def _process_page(self, raw_page: RawPage, context: TenantContext) -> DocumentPage:
         processed = self._image_processor.process(raw_page, context)

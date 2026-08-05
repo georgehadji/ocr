@@ -6,20 +6,12 @@ API key validation, upload validation, and configurable engines.
 
 from __future__ import annotations
 
-from omniocr.application.pipeline import PipelineOrchestrator, SuggestOnlyCorrector
+from omniocr.application.pipeline import PipelineOrchestrator
+from omniocr.composition import create_ensemble_pipeline
 from omniocr.domain.models import Script, TenantContext
-from omniocr.infrastructure.ingest import DocumentPageSource
-from omniocr.infrastructure.preprocess import GrayscaleProcessor
-from omniocr.infrastructure.resilience import RetryingEngine
-from omniocr.application.reconcile import ConfidenceWeightedReconciler
-from omniocr.application.router import ScriptRouter
-from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
-from omniocr.infrastructure.exporters import MarkdownExporter
 from omniocr.infrastructure.jobs import SQLiteJobStore
-from omniocr.infrastructure.lexicons import lexicons_by_script
 from omniocr.infrastructure.security import validate_upload
 from omniocr.infrastructure.config import Settings
-from omniocr.infrastructure.tesseract import TesseractEngine
 
 
 def create_server_pipeline(
@@ -28,35 +20,17 @@ def create_server_pipeline(
     """Build a server-grade pipeline with retry resilience and persistence.
 
     Queuing is handled externally by RQ; the pipeline runs synchronously
-    inside the worker process.
+    inside the worker process. Only the job store is server-specific — engines,
+    routing and post-correction come from the shared composition root, so this
+    edition cannot drift from the invariants the core enforces.
     """
-    cfg = settings or Settings()
-
-    tesseract = RetryingEngine(
-        TesseractEngine(
-            cfg.app_name,
-            model_path=None,  # server deployments should pin a model path
-        )
-    )
-    kraken = RetryingEngine(KrakenEngine(""))
-    router = ScriptRouter(
-        by_script={
-            Script.ANCIENT: (kraken, tesseract),
-            Script.BYZANTINE: (kraken, tesseract),
-            Script.POLYTONIC: (kraken, tesseract),
-        },
-        default=(tesseract,),
-    )
-
-    return PipelineOrchestrator(
-        page_source=DocumentPageSource(),
-        image_processor=GrayscaleProcessor(),
-        layout_analyzer=KrakenLayoutAnalyzer(),
-        router=router,
-        reconciler=ConfidenceWeightedReconciler(),
-        post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
-        exporter=MarkdownExporter(),
+    cfg = settings or Settings.from_env()
+    return create_ensemble_pipeline(
+        tesseract_language=cfg.tesseract_language,
+        kraken_model_path=cfg.kraken_model_path,
+        script=Script.POLYTONIC,
         job_store=SQLiteJobStore("omniocr_jobs.db"),
+        vlm_api_key=cfg.vlm_api_key if cfg.enable_vlm else None,
     )
 
 

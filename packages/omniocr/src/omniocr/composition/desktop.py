@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.application.pipeline import PipelineOrchestrator
 from omniocr.infrastructure.tesseract import TesseractEngine
@@ -29,18 +31,6 @@ try:
     _VLM_AVAILABLE = True
 except ImportError:
     _VLM_AVAILABLE = False
-
-
-def create_desktop_pipeline(
-    script: Script = Script.UNKNOWN,
-    exporter: IExporter | None = None,
-    job_store: IJobStore | None = None,
-) -> PipelineOrchestrator:
-    return PipelineOrchestrator(
-        layout_analyzer=KrakenLayoutAnalyzer(script),
-        exporter=exporter or MarkdownExporter(),
-        job_store=job_store or InMemoryJobStore(),
-    )
 
 
 def create_tesseract_pipeline(
@@ -116,7 +106,12 @@ def create_ensemble_pipeline(
     if calamari_model_glob is not None:
         engine_map["calamari"] = retrying_calamari
 
-    router = ScriptRouter(by_script=by_script, default=default, engine_map=engine_map)
+    router = ScriptRouter(
+        by_script=by_script,
+        default=default,
+        engine_map=engine_map,
+        engine_factory=_build_engine_on_checkpoint,
+    )
     return PipelineOrchestrator(
         page_source=DocumentPageSource(),
         image_processor=GrayscaleProcessor(),
@@ -127,6 +122,17 @@ def create_ensemble_pipeline(
         exporter=exporter or MarkdownExporter(),
         job_store=job_store or InMemoryJobStore(),
     )
+
+
+def _build_engine_on_checkpoint(engine_family: str, checkpoint: Path) -> IOCREngine:
+    """Build an engine running a promoted fine-tuned checkpoint.
+
+    Only Kraken is fine-tunable here (``ketos``), so other families fall back
+    to a Kraken engine on the checkpoint rather than silently returning the
+    parent-weights engine — a promoted model must never route to the weights
+    it was promoted over.
+    """
+    return RetryingEngine(KrakenEngine(checkpoint))
 
 
 class _TesseractRouter:

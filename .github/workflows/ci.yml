@@ -30,6 +30,8 @@ jobs:
         run: mypy --strict --ignore-missing-imports --follow-imports=skip --python-version 3.11 packages/omniocr/src
       - name: Check license isolation
         run: python scripts/check_license_isolation.py
+      - name: Check architectural layering
+        run: python scripts/check_layering.py
       - name: Test CER regression gate
         run: python -m pytest tests/test_regression.py -v
       - name: Check security (bandit)

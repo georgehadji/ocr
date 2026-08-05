@@ -1,3 +1,4 @@
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -160,6 +161,85 @@ def test_load_model_degrades_to_cpu_when_gpu_load_fails(
     assert engine._load_model() == "cpu-model"
     assert attempts == ["cuda", "cpu"]
     assert engine.device == "cpu"
+
+
+class TestConcurrentModelLoad:
+    """One engine instance is shared across ADR-003's page-parallel workers."""
+
+    def test_model_is_loaded_once_under_concurrent_pages(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Racing workers must not each load their own copy of the weights."""
+        import threading
+
+        loads = 0
+        load_lock = threading.Lock()
+
+        def _load_any(path: str, device: str = "cpu") -> str:
+            nonlocal loads
+            with load_lock:
+                loads += 1
+            return "model"
+
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "kraken.lib",
+            SimpleNamespace(models=SimpleNamespace(load_any=_load_any)),
+        )
+        engine = KrakenEngine("missing-greek.mlmodel", device="cpu")
+
+        barrier = threading.Barrier(8)
+
+        def _worker() -> None:
+            barrier.wait()  # maximize the overlap on the lazy field
+            if engine._model is None:
+                with engine._lock:
+                    if engine._model is None:
+                        engine._model = engine._load_model()
+
+        threads = [threading.Thread(target=_worker) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        assert not any(t.is_alive() for t in threads), "deadlock: workers did not finish"
+        assert loads == 1, f"model loaded {loads} times, expected exactly 1"
+
+    def test_load_under_lock_does_not_deadlock_on_device_probe(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: _load_model reads `device`, which re-enters the lock.
+
+        With a non-reentrant Lock this hangs forever on the first page rather
+        than failing, so assert it completes rather than trusting it returns.
+        """
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "kraken.lib",
+            SimpleNamespace(models=SimpleNamespace(load_any=lambda path, device="cpu": "model")),
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "torch",
+            SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False)),
+        )
+        # device unresolved, so _load_model's `self.device` read re-enters.
+        engine = KrakenEngine("missing-greek.mlmodel")
+        assert engine._device is None
+
+        done = threading.Event()
+
+        def _load() -> None:
+            with engine._lock:
+                engine._model = engine._load_model()
+            done.set()
+
+        thread = threading.Thread(target=_load, daemon=True)
+        thread.start()
+
+        assert done.wait(timeout=10), "deadlock: _load_model blocked on the device probe"
+        assert engine._model == "model"
 
 
 def test_segment_converts_bad_records_into_err() -> None:

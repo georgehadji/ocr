@@ -1,9 +1,88 @@
 # Architecture Audit — OmniOCR
 
 **Protocol:** ARCH-AUDIT-V2 · EGFV epistemic labels
-**Commit audited:** `b0e06ba` (branch `fix/ci-gates-and-audit-corrections`)
-**Audit date:** 2026-08-02
-**Supersedes:** the 2026-07-27 audit (see *Supersession* below — three of its findings are now `[FALSE]`)
+**Commit audited:** `10a905a` + 2026-08-05 remediation (branch `fix/ci-gates-and-audit-corrections`)
+**Audit date:** 2026-08-02 · **remediation re-audit:** 2026-08-05
+**Supersedes:** the 2026-07-27 audit (see *Supersession* — three of its findings were `[FALSE]`)
+
+> ## Score: 7 → 9.5 / 10
+>
+> Every HIGH violation is closed, and each is now mechanically gated rather
+> than merely fixed. The remediation record is immediately below; the original
+> 2026-08-02 findings are preserved unedited underneath, so the delta stays
+> auditable instead of rewritten.
+
+---
+
+## Remediation — 2026-08-05
+
+Each item was re-verified by command *after* the change, never assumed.
+
+| Finding | Was | Status | Verification |
+|---|---|---|---|
+| Editions bypass the composition root (×3) | HIGH | **Closed** | 3/3 editions import `omniocr.composition`; adapter imports under `editions/` → **0** `[VERIFIED]` |
+| `RegistryAwareRouter` never resolves the promoted checkpoint | HIGH | **Closed** | `PromotedModel.checkpoint` added and populated; router resolves through an `engine_factory`, cached per checkpoint `[VERIFIED]` |
+| 6× `hasattr(x, "value")` defensive `Result` unwrapping | MEDIUM | **Closed at root** | `Result` made a union alias so narrowing works; `hasattr` unwrapping in core → **0** `[VERIFIED]` |
+| Shared `KrakenEngine` state under ADR-003 parallelism | UNKNOWN | **Closed** | `RLock` + double-checked load; 2 regression tests, one specifically for deadlock `[VERIFIED]` |
+| Checkpoint write amplification O(n²) | VERIFIED | **Closed** | batched (default 25) + forced final write; test asserts 3 writes for 10 pages `[VERIFIED]` |
+| No backpressure — `run_iteratively` materialized the document | VERIFIED | **Closed** | sequential path streams; test asserts only page 1 is produced before the first yield `[VERIFIED]` |
+| Layering enforced by documentation only | — | **Gated** | `scripts/check_layering.py` in CI; proven to fail on an injected violation `[VERIFIED]` |
+
+### Defects the remediation exposed
+
+Collapsing the hand-wired editions surfaced bugs the import-scan audit could
+not see. Each is a direct consequence of an edition wiring its own pipeline:
+
+1. `[VERIFIED]` **The desktop UI ran with no recognition engine.** Its default
+   path built a `PipelineOrchestrator` with no `router`, so `NullRouter`
+   returned no engines and every page recognized as empty.
+2. `[VERIFIED]` **The desktop UI used the VLM unaudited.** With VLM enabled it
+   routed *only* to `VLMEngine` with `default=()` — no box-grounded engine to
+   reconcile against, violating the faithfulness rule in CLAUDE.md §1.
+3. `[VERIFIED]` **Server and cloud constructed `KrakenEngine("")`** — an empty
+   model path, so Kraken could never load in either edition.
+4. `[VERIFIED]` **The server passed `cfg.app_name` as the Tesseract language**,
+   i.e. `TesseractEngine("omniocr")`.
+5. `[VERIFIED]` **`create_desktop_pipeline` had the same defect, in the
+   composition root itself** — no router, so `NullRouter` returned no engines.
+   It had zero callers, so it was deleted rather than fixed: an unused factory
+   with the most inviting name in the package is a trap, not an API.
+
+All four disappear by construction now that editions compose rather than wire.
+That is the argument for a composition root, demonstrated rather than asserted.
+
+### Why the `Result` change mattered
+
+`Result` was a *base class*, so `if isinstance(x, Err): return` left mypy still
+seeing `Result`, and `x.value` afterwards failed to type-check. That is *why*
+the `hasattr` workarounds existed — they were symptoms, not sloppiness.
+Redefining `Result` as a union alias (`Ok[T,E] | Err[T,E]`) fixed narrowing
+everywhere at once: the 6 `hasattr` sites **and** 3 previously unnoticed
+`# type: ignore` suppressions were deleted rather than relocated. The core now
+contains **zero** `type: ignore` comments under `mypy --strict` `[VERIFIED]`.
+
+### Score justification (rubric-anchored)
+
+Rubric 10 requires *"all layers correctly separated, patterns consistent,
+observable, testable, scalable"*.
+
+- **Layers separated** ✅ verified by scan *and* enforced by a CI gate
+- **Patterns consistent** ✅ one `Result` idiom, zero suppressions, editions uniform
+- **Testable** ✅ full suite green, new regressions for each fix
+- **Scalable** ✅ O(n²) checkpointing and eager materialization both removed;
+  engine state now thread-safe under the parallel path
+- **Observable** ⚠️ `IEventBus` + structured logging exist, but there is still
+  no metrics export — the `prometheus-client` seam is unbuilt
+
+**Deducted 0.5**, not 0, because of that observability gap plus two facts no
+refactor can fix: accuracy remains unproven on real scans (synthetic corpus),
+and the 339 MB target document has still never been processed end to end.
+Those are evidence gaps rather than structural ones, but a 10 would overclaim.
+
+### Gates
+
+`mypy --strict` 0 · `ruff check` 0 · `ruff format --check` 0 · `bandit` 0 ·
+licence isolation ✅ · **layering ✅ (new)** · full suite **0 failures**.
 
 ---
 
@@ -189,7 +268,10 @@ Absence is reported as a finding where it was checked.
 
 ## Phase 6 — Executive Summary
 
-### ARCHITECTURE SCORE: 7 / 10
+> Everything from here on is the **pre-remediation** 2026-08-02 assessment,
+> preserved unedited. For current state see *Remediation — 2026-08-05* above.
+
+### ARCHITECTURE SCORE: 7 / 10 *(pre-remediation; now 9.5)*
 
 Between rubric 8 ("minor drift in 1–2 modules, no critical violations") and 6 ("moderate drift, 1–2 high-severity violations"). The **core** rates 8–9: dependency rule verified clean by scan, ports real, composition root correct, faithfulness enforced structurally rather than by convention. The **edition layer** pulls it down — three modules carrying the same HIGH violation. No CRITICAL violation exists, which excludes 6.
 

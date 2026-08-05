@@ -77,14 +77,10 @@ def evaluate(
 
         raw_page = _CorpusRawPage(image_bytes)
         result = engine.extract(raw_page, context)
-        if not result.is_ok():
-            return Err(
-                TrainingError(
-                    f"engine failed on {page.page_id}: {result.error}"  # type: ignore[attr-defined]
-                )
-            )
+        if isinstance(result, Err):
+            return Err(TrainingError(f"engine failed on {page.page_id}: {result.error}"))
 
-        hypothesis = " ".join(block.text for block in result.value)  # type: ignore[attr-defined]
+        hypothesis = " ".join(block.text for block in result.value)
 
         script_texts.setdefault(page.script, []).append((gt_text, hypothesis))
 

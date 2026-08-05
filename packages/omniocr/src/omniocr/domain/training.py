@@ -94,11 +94,22 @@ class EvaluationReport:
 
 @dataclass(frozen=True, slots=True)
 class PromotedModel:
-    """A candidate that beat its parent on held-out data. Only this type is routable."""
+    """A candidate that beat its parent on held-out data. Only this type is routable.
+
+    ``checkpoint`` is what makes promotion mean anything at inference time: the
+    router needs the fine-tuned weights, not just the engine family name. It was
+    previously dropped here, so a promoted model routed to the *un*-fine-tuned
+    engine and every training run was a no-op downstream.
+    """
 
     model_ref: ModelRef
     report: EvaluationReport
     improvement_pct: float
+    checkpoint: Path
+
+    def __post_init__(self) -> None:
+        if not str(self.checkpoint):
+            raise ValueError("checkpoint must not be empty")
 
 
 __all__ = [

@@ -21,8 +21,7 @@ import streamlit as st
 from PIL import Image
 
 from omniocr.application.metrics import character_error_rate
-from omniocr.application.pipeline import PipelineOrchestrator, SuggestOnlyCorrector
-from omniocr.application.router import ScriptRouter
+from omniocr.composition import create_ensemble_pipeline
 from omniocr.domain.models import Script, TenantContext
 from omniocr.infrastructure.config import Settings
 from omniocr.infrastructure.exporters import MarkdownExporter
@@ -30,7 +29,6 @@ from omniocr.infrastructure.logging import configure_logging
 
 # Initialize structured logging for the edition.
 configure_logging("omniocr-review")
-from omniocr.infrastructure.lexicons import lexicons_by_script
 from omniocr.infrastructure.review import (
     ReviewDocument,
     build_review_document,
@@ -157,37 +155,26 @@ if uploaded_file is not None and st.session_state.review_document is None:
 
     with st.spinner("Initializing OCR pipeline…") if not session else st.spinner():
         cfg = Settings.from_env()
+        # Built by the shared composition root, never wired here. Hand-wiring
+        # this UI previously left it with no recognition engine at all in the
+        # default path, and — with VLM enabled — routed to the VLM alone with
+        # no box-grounded engine to reconcile against, breaking the
+        # faithfulness rule the rest of the system enforces.
         try:
-            from omniocr.infrastructure.ingest import DocumentPageSource
-            from omniocr.infrastructure.preprocess import GrayscaleProcessor
-            from omniocr.infrastructure.kraken import KrakenLayoutAnalyzer
-            page_source = DocumentPageSource()
-            image_processor = GrayscaleProcessor()
-            layout = KrakenLayoutAnalyzer(Script.POLYTONIC)
+            vlm_key = cfg.vlm_api_key if (cfg.enable_vlm and cfg.vlm_api_key) else None
+            pipeline = create_ensemble_pipeline(
+                tesseract_language=cfg.tesseract_language,
+                kraken_model_path=cfg.kraken_model_path,
+                script=Script.POLYTONIC,
+                exporter=MarkdownExporter(),
+                vlm_api_key=vlm_key,
+            )
         except ImportError as exc:
             st.error(f"Missing dependency: {exc}. Install: pip install -e '.[pdf,kraken,opencv]'")
             st.stop()
 
-        pipeline_kwargs: dict = {
-            "page_source": page_source,
-            "image_processor": image_processor,
-            "layout_analyzer": layout,
-            "post_corrector": SuggestOnlyCorrector(lexicons=lexicons_by_script()),
-            "exporter": MarkdownExporter(),
-        }
         if cfg.enable_vlm and cfg.vlm_api_key:
-            from omniocr.infrastructure.vlm import VLMEngine
-            pipeline_kwargs["router"] = ScriptRouter(
-                by_script={
-                    Script.ANCIENT: (VLMEngine(cfg.vlm_api_key),),
-                    Script.BYZANTINE: (VLMEngine(cfg.vlm_api_key),),
-                    Script.POLYTONIC: (VLMEngine(cfg.vlm_api_key),),
-                },
-                default=(),
-            )
             st.sidebar.info(f"VLM enabled: {cfg.vlm_api_key[:12]}…")
-
-        pipeline = PipelineOrchestrator(**pipeline_kwargs)
         ctx = TenantContext("desktop", "reviewer", "desktop")
         total = pipeline.count_pages(pdf_bytes)
         progress = st.sidebar.progress(0, f"OCR in progress — 0/{total} pages")

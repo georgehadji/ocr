@@ -94,7 +94,7 @@ def assemble_training_samples(
         if isinstance(crop_result, Err):
             return Err(crop_result.error)
 
-        crop_bytes = crop_result.value  # type: ignore[attr-defined]
+        crop_bytes = crop_result.value
         image_name = f"line-{correction.line_id}.png"
         image_path = output / image_name
         image_path.write_bytes(crop_bytes)

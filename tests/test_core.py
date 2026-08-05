@@ -258,7 +258,7 @@ def test_lexicons_by_script_returns_mapping() -> None:
     assert mapping[Script.PONTIAN].name == "pontian"
 
 
-def test_pipeline_checkpoints_each_completed_page() -> None:
+def test_pipeline_checkpoint_is_complete_at_end_of_run() -> None:
     class TwoPageSource:
         def stream(self, document: bytes):
             yield InMemoryPage(1, b"one", 10, 10)
@@ -274,6 +274,72 @@ def test_pipeline_checkpoints_each_completed_page() -> None:
     assert checkpoint is not None
     assert [page.number for page in checkpoint.pages] == [1, 2]
     assert [page.width for page in checkpoint.pages] == [10, 20]
+
+
+def test_pipeline_batches_checkpoints_instead_of_writing_every_page() -> None:
+    """Checkpointing serializes the whole document, so per-page writes are O(n²).
+
+    Batching must still leave a complete final checkpoint — otherwise a resume
+    would silently lose the pages after the last batch boundary.
+    """
+
+    class TenPageSource:
+        def stream(self, document: bytes):
+            for number in range(1, 11):
+                yield InMemoryPage(number, b"x", 10, 10)
+
+    class CountingStore(InMemoryJobStore):
+        writes = 0
+
+        def checkpoint(self, job_id, document):
+            CountingStore.writes += 1
+            return super().checkpoint(job_id, document)
+
+    store = CountingStore()
+    result = PipelineOrchestrator(
+        page_source=TenPageSource(), job_store=store, checkpoint_every=5
+    ).run(b"document", job_id="job-batch")
+
+    assert result.is_ok()
+    # pages 5 and 10 hit the boundary, plus the forced final write.
+    assert CountingStore.writes == 3, f"expected 3 batched writes, got {CountingStore.writes}"
+
+    checkpoint = store.load("job-batch")
+    assert checkpoint is not None
+    assert [page.number for page in checkpoint.pages] == list(range(1, 11))
+
+
+def test_run_iteratively_consumes_the_page_source_lazily() -> None:
+    """The streaming method must not materialize the document first.
+
+    Regression: it called ``list(stream(...))`` before processing, so a
+    300-page scan held every page image in memory at once — defeating the
+    page-streaming ingest this method exists to expose.
+    """
+    produced: list[int] = []
+
+    class TrackingSource:
+        def stream(self, document: bytes):
+            for number in range(1, 6):
+                produced.append(number)
+                yield InMemoryPage(number, b"x", 10, 10)
+
+    pipeline = PipelineOrchestrator(page_source=TrackingSource())
+    stream = pipeline.run_iteratively(b"document")
+
+    first_number, _ = next(stream)
+
+    assert first_number == 1
+    assert produced == [1], f"source was drained eagerly: produced {produced}"
+
+    # Draining the rest still yields every page, in order.
+    rest = [number for number, _ in stream]
+    assert rest == [2, 3, 4, 5]
+
+
+def test_checkpoint_every_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="checkpoint_every must be >= 1"):
+        PipelineOrchestrator(checkpoint_every=0)
 
 
 def test_sqlite_job_store_round_trips_document() -> None:

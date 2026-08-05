@@ -112,6 +112,7 @@ class BeatsParentOnHeldOut:
             ),
             report=candidate_report,
             improvement_pct=improvement_pct,
+            checkpoint=candidate.path,
         )
         return Ok(promoted)
 
