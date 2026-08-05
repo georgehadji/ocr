@@ -1,1 +1,0 @@
-streamlit run trainer_ui/app.py
