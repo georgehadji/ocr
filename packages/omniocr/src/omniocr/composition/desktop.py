@@ -61,6 +61,7 @@ def create_ensemble_pipeline(
     vlm_api_key: str | None = None,
     vlm_api_url: str | None = None,
     vlm_model: str = "google/gemini-3.5-flash-lite",
+    vlm_max_edge_px: int = 1400,
     calamari_model_glob: str | None = None,
 ) -> PipelineOrchestrator:
     """Build a CPU ensemble with script rules injected at the composition root.
@@ -84,7 +85,13 @@ def create_ensemble_pipeline(
 
     if vlm_api_key is not None:
         vlm = VLMEngine(
-            api_key=vlm_api_key, api_url=vlm_api_url or "https://api.openai.com/v1", model=vlm_model
+            api_key=vlm_api_key,
+            api_url=vlm_api_url or "https://api.openai.com/v1",
+            model=vlm_model,
+            # Ingest renders at 300 DPI for box-grounded Tesseract/Kraken; the
+            # VLM bills per tile and does not need it. Tune against the
+            # grounded/ungrounded ratio — see docs/VLM_COST_OPTIMIZATION.md.
+            max_edge_px=vlm_max_edge_px,
         )
         retrying_vlm = RetryingEngine(vlm)
         for script_key in (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC):

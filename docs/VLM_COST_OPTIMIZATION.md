@@ -13,11 +13,20 @@ The headline recommendation you'd expect — *"turn on prompt caching"* — **do
 not apply to this workload**, and the reason matters (§2). The actual cost is
 almost entirely **image tokens**, and there are three real levers:
 
-| # | Lever | Est. saving | Effort |
-|---|---|---|---|
-| 1 | Wire the `CachingEngine` that already exists but is used nowhere | 100% on re-runs | ~1 line |
-| 2 | Downscale the image before sending (300 DPI → ~150 DPI) | **~65–75%** | small |
-| 3 | Make the ingest DPI independent of the VLM send DPI | enables #2 safely | small |
+| # | Lever | Est. saving | Effort | Status |
+|---|---|---|---|---|
+| 1 | Downscale the image before sending (300 DPI → ~150 DPI) | **~65–75%** | small | **done** |
+| 2 | Persistent (not in-memory) result cache | 100% on re-runs | medium | open |
+| 3 | Measure `usage.prompt_tokens` on one real call | — | tiny | open (needs a key) |
+
+> **Correction (2026-08-06).** An earlier draft of this document listed
+> "wire the existing `CachingEngine`" as the top recommendation at ~1 line of
+> effort. That was wrong, and the error is worth recording: `CachingEngine` is
+> **in-memory**. Within a run every page is unique, so it never hits; across
+> runs the process exits and takes the cache with it. Wiring it as-is buys
+> essentially nothing but memory overhead. The finding that it is dead code
+> stands; the proposed fix did not. A cache only pays here if it **persists** —
+> see §3.
 
 ---
 
@@ -89,15 +98,25 @@ Consequences today:
   for pages that get reprocessed).
 - Two documents sharing a page (a reprint, a duplicated scan) pay twice.
 
-**Fix:** wrap the VLM in `CachingEngine` inside `create_ensemble_pipeline`.
-This is roughly a one-line change and needs no new code.
+**The obvious fix does not work.** Wrapping the VLM in `CachingEngine` inside
+`create_ensemble_pipeline` is one line, but it buys ~nothing:
 
-**Caveat — the current cache is in-memory only.** `OrderedDict`, `max_size=128`.
-For a 400-page book at default size it evicts continuously, and it does not
-survive a process restart. If it's worth caching VLM calls at all (it is —
-they're the expensive ones), it's worth a persistent variant keyed the same
-way. A SQLite-backed cache reusing the existing `sha256(page.content)` key
-would make resume genuinely free.
+- The cache is **in-memory** (`OrderedDict`, `max_size=128`).
+- Within a run, every page of a book is a different image, so the key never
+  repeats and the cache never hits. `_process_page` already prevents
+  double-calling within a single page via `engine_results`.
+- Across runs, the process exits and the cache dies with it.
+
+So it only helps for a genuinely duplicated page inside one run — rare.
+
+**What would actually pay: a persistent cache.** Same key
+(`sha256(page.content)` + org + custom model id), SQLite-backed, following the
+pattern already established by `SQLiteJobStore` and `SqliteCorrectionStore`.
+That makes a resumed or repeated run free rather than full price, which is the
+case that actually recurs (a 400-page book that crashes at page 380).
+
+**Gate it on measurement.** Worth building only if real runs repeat pages
+often enough to matter — which §7 step 1 tells you.
 
 ---
 
@@ -184,18 +203,36 @@ the number needed to measure it.
 
 ## 7. Recommended order
 
-1. **Measure first.** One instrumented call logging `usage.prompt_tokens`
-   settles §4 and gives a real per-page baseline. Everything else is sized off
-   that number.
-2. **Wire `CachingEngine` into `create_ensemble_pipeline`.** ~1 line, no new
-   code, eliminates all re-run cost.
-3. **Add an explicit VLM send-DPI**, defaulting to ~150, decoupled from ingest
-   DPI. Sweep against the grounded/ungrounded ratio to calibrate.
-4. **Then** consider a persistent (SQLite) cache if resume-cost matters in
-   practice — gate this on whether real runs actually resume often.
+1. ~~**Add an explicit VLM send resolution**, decoupled from ingest DPI.~~
+   **Done.** `VLMEngine(max_edge_px=1400)`, plumbed through
+   `create_ensemble_pipeline(vlm_max_edge_px=...)`. Caps the longest edge, so
+   a 300 DPI A5 page goes 1749×2480 → 987×1400: **12 tiles → 4**, ~3,096 →
+   ~1,032 tokens (**−67%**). Falls back to the original bytes if Pillow is
+   missing or the image won't decode — paying full price beats failing a page.
+   Returned boxes are scaled back to full-page space (see the regression note
+   in §7a).
+2. **Measure.** One call logging `usage.prompt_tokens` settles §4 (is `detail`
+   honoured?) and gives a real per-page baseline. Needs an API key, so it is
+   an operator step, not a code change.
+3. **Calibrate `max_edge_px`** by sweeping down and watching the
+   grounded/ungrounded ratio from `extract_guarded`. 1400 is a starting
+   default chosen for legibility headroom, not a measured optimum.
+4. **Persistent cache** — only if step 2 shows repeated pages are common
+   enough to justify it.
 
-Steps 1–3 are small and independent. Step 4 is only worth it if measurement
-says so.
+### 7a. Bug caught while implementing step 1
+
+The VLM reports bounding boxes in the pixel space of the image it was handed,
+and `_parse_response` previously used those coordinates verbatim. Downscaling
+therefore returned *downscaled* boxes, which would never overlap the
+full-resolution engine boxes — the grounding guard would have discarded every
+block, and **the VLM would have gone silently dead while still being billed on
+every page**. `_downscale` now returns `(bytes, scale)` and `_parse_response`
+divides by it. Covered by `TestCoordinateRoundTrip` in `tests/test_vlm.py`.
+
+This is the characteristic failure mode of this optimisation, and it is silent
+in exactly the direction that looks like success: cost drops, nothing errors,
+output quietly gets worse.
 
 ---
 
