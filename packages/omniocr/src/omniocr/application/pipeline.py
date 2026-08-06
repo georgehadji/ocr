@@ -490,7 +490,8 @@ class PipelineOrchestrator:
         page_lines: list[OCRLine] = []
         suggestions: list[Suggestion] = []
         engine_results: dict[int, Sequence[OCRBlock]] = {}
-        for segment in segment_values:
+        engine_assignments: dict[int, dict[int, list[OCRBlock]]] = {}
+        for segment_index, segment in enumerate(segment_values):
             engines = self._router.route(segment, context)
             candidate_lines: list[OCRLine] = []
             for engine in engines:
@@ -512,16 +513,15 @@ class PipelineOrchestrator:
                     else:
                         assert isinstance(extracted, Ok)
                         engine_results[engine_key] = extracted.value
+                    engine_assignments[engine_key] = self._assign_blocks(
+                        segment_values, engine_results[engine_key]
+                    )
                 # All of an engine's blocks inside this segment belong to the
                 # SAME line, so they compose into one candidate. Emitting one
                 # candidate per block would make a line's own words compete
                 # against each other and the reconciler would keep exactly one
                 # — silently discarding the rest of the line.
-                overlapping = tuple(
-                    block
-                    for block in engine_results[engine_key]
-                    if self._boxes_overlap(segment.bbox, block.bbox)
-                )
+                overlapping = tuple(engine_assignments[engine_key].get(segment_index, ()))
                 if overlapping:
                     candidate_lines.append(self._compose_line(segment, engine, overlapping))
             if not candidate_lines:
@@ -594,6 +594,45 @@ class PipelineOrchestrator:
             and first.y < second.bottom
             and second.y < first.bottom
         )
+
+    @staticmethod
+    def _overlap_area(first: BBox, second: BBox) -> int:
+        width = min(first.right, second.right) - max(first.x, second.x)
+        height = min(first.bottom, second.bottom) - max(first.y, second.y)
+        return width * height if width > 0 and height > 0 else 0
+
+    @classmethod
+    def _assign_blocks(
+        cls, segments: Sequence[OCRLine], blocks: Sequence[OCRBlock]
+    ) -> dict[int, list[OCRBlock]]:
+        """Assign every block to the one line it overlaps most.
+
+        A word belongs to exactly one line. Selecting by *any* non-zero
+        overlap did not enforce that: printed text lines are stacked boxes
+        whose bounds routinely graze their neighbours over ascenders and
+        descenders, so a word touching the next line by a pixel joined it too.
+
+        Measured on page 31 of the target document: **385 of 513 words (75%)
+        were claimed by more than one line** — 330 by two, 54 by three, one by
+        four. Each line therefore emitted its own words plus a slice of the
+        lines above and below, which is exactly what the first full run
+        produced: overlapping, lossy repetitions of the same sentence.
+
+        Ties keep the earliest segment, so the choice stays in reading order
+        and is deterministic. A block that overlaps nothing is dropped here —
+        the segment then has no candidate and falls back to its own text.
+        """
+        assignment: dict[int, list[OCRBlock]] = {}
+        for block in blocks:
+            best_index = -1
+            best_area = 0
+            for index, segment in enumerate(segments):
+                area = cls._overlap_area(segment.bbox, block.bbox)
+                if area > best_area:
+                    best_index, best_area = index, area
+            if best_index >= 0:
+                assignment.setdefault(best_index, []).append(block)
+        return assignment
 
     def export(
         self, document: DocumentStructure, context: TenantContext | None = None

@@ -282,3 +282,91 @@ def test_segment_with_no_overlapping_blocks_falls_back_to_the_empty_segment() ->
 
     assert len(page.lines) == 1
     assert page.lines[0].text == ""
+
+
+class TestBlocksBelongToExactlyOneLine:
+    """A word belongs to one line. Selecting by *any* non-zero overlap did not
+    enforce that.
+
+    Printed text lines are stacked boxes whose bounds routinely graze their
+    neighbours over ascenders and descenders, so a word touching the next line
+    by a pixel joined that line too. Measured on page 31 of the target
+    document: 385 of 513 words (75%) were claimed by more than one line. Each
+    line then emitted its own words plus slices of the lines above and below —
+    the first full run produced overlapping, lossy repetitions of the same
+    sentence.
+    """
+
+    @staticmethod
+    def _line(line_id: str, y: int, height: int = 20) -> OCRLine:
+        return OCRLine(
+            id=line_id,
+            text="",
+            confidence=Confidence(0.0),
+            bbox=BBox(x=0, y=y, w=500, h=height),
+            region_type=RegionType.MAIN_TEXT,
+            script=Script.POLYTONIC,
+        )
+
+    @staticmethod
+    def _word(word_id: str, y: int, height: int = 18) -> OCRBlock:
+        return OCRBlock(
+            id=word_id,
+            text=word_id,
+            confidence=Confidence(90.0),
+            bbox=BBox(x=10, y=y, w=40, h=height),
+            provenance=_run("tesseract"),
+        )
+
+    def test_a_word_grazing_the_next_line_is_not_claimed_by_both(self) -> None:
+        # Two stacked lines: 0-20 and 18-38, overlapping by 2px as real
+        # segmentation does. The word sits almost entirely in the first.
+        lines = [self._line("l1", y=0), self._line("l2", y=18)]
+        word = self._word("w", y=1, height=18)  # 1..19 — 18px in l1, 1px in l2
+
+        assignment = PipelineOrchestrator._assign_blocks(lines, [word])
+
+        assert list(assignment) == [0], "the word belongs only to the line containing most of it"
+        assert len(assignment[0]) == 1
+
+    def test_no_block_is_ever_placed_twice(self) -> None:
+        """The invariant, stated directly: total placements == unique blocks."""
+        lines = [self._line(f"l{i}", y=i * 18) for i in range(10)]
+        words = [self._word(f"w{i}", y=i * 18 + 1) for i in range(10)]
+
+        assignment = PipelineOrchestrator._assign_blocks(lines, words)
+        placed = [block for group in assignment.values() for block in group]
+
+        assert len(placed) == len(set(id(b) for b in placed))
+        assert len(placed) == len(words), "and none is lost"
+
+    def test_each_word_lands_on_its_own_line(self) -> None:
+        lines = [self._line(f"l{i}", y=i * 20) for i in range(3)]
+        words = [self._word(f"w{i}", y=i * 20 + 1) for i in range(3)]
+
+        assignment = PipelineOrchestrator._assign_blocks(lines, words)
+
+        assert {index: [b.id for b in group] for index, group in assignment.items()} == {
+            0: ["w0"],
+            1: ["w1"],
+            2: ["w2"],
+        }
+
+    def test_a_block_overlapping_nothing_is_dropped(self) -> None:
+        lines = [self._line("l1", y=0)]
+        far = self._word("w", y=5_000)
+
+        assert PipelineOrchestrator._assign_blocks(lines, [far]) == {}
+
+    def test_ties_keep_the_earlier_line_so_reading_order_is_stable(self) -> None:
+        """Deterministic placement matters more than which line wins."""
+        lines = [self._line("l1", y=0, height=20), self._line("l2", y=0, height=20)]
+        word = self._word("w", y=0, height=20)
+
+        assert list(PipelineOrchestrator._assign_blocks(lines, [word])) == [0]
+
+    def test_overlap_area_is_zero_for_disjoint_boxes(self) -> None:
+        assert PipelineOrchestrator._overlap_area(BBox(0, 0, 10, 10), BBox(50, 50, 10, 10)) == 0
+
+    def test_overlap_area_measures_the_intersection(self) -> None:
+        assert PipelineOrchestrator._overlap_area(BBox(0, 0, 10, 10), BBox(5, 5, 10, 10)) == 25
