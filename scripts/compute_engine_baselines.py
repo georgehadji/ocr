@@ -26,6 +26,7 @@ from pathlib import Path
 
 from omniocr.application.metrics import character_error_rate, word_error_rate
 from omniocr.domain.models import TenantContext
+from omniocr.domain.result import Err
 from omniocr.infrastructure.tesseract import TesseractEngine
 from omniocr.testing.fixtures import (
     list_fixture_ids,
@@ -72,7 +73,7 @@ def measure(fixture_id: str) -> dict[str, float]:
     reference = normalize(load_fixture_ground_truth(fixture_id))
     engine = TesseractEngine(language=language_for(fixture_id))
     result = engine.extract(_FixturePage(load_fixture_image_bytes(fixture_id)), _CONTEXT)
-    if not result.is_ok():
+    if isinstance(result, Err):
         raise RuntimeError(f"{fixture_id}: engine failed: {result.error}")
     hypothesis = normalize(" ".join(block.text for block in result.value))
     return {

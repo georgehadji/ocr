@@ -40,9 +40,7 @@ def _imports(path: Path, pattern: re.Pattern[str]) -> list[str]:
     return [line.strip() for line in text.splitlines() if pattern.search(line)]
 
 
-def _check(
-    label: str, roots: list[Path], pattern: re.Pattern[str], hint: str
-) -> list[str]:
+def _check(label: str, roots: list[Path], pattern: re.Pattern[str], hint: str) -> list[str]:
     problems: list[str] = []
     for root in roots:
         if not root.exists():

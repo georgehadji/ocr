@@ -17,9 +17,10 @@ import argparse
 import sys
 from pathlib import Path
 
-from omniocr.application.ground_truth import SampleSpecification
 from omniocr.application.promotion import BeatsParentOnHeldOut
 from omniocr.application.training_orchestrator import TrainingOrchestrator
+from omniocr.domain.corpus import SplitName
+from omniocr.domain.errors import TrainingError
 from omniocr.domain.models import ModelRef
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.domain.training import EvaluationReport
@@ -30,7 +31,6 @@ from omniocr.infrastructure.line_cropper import PilLineCropper
 from omniocr.infrastructure.mlflow_registry import MlflowModelRegistry
 from omniocr.infrastructure.models import sha256_file
 from omniocr.ports.interfaces import IEvaluator
-from omniocr.domain.corpus import SplitName
 
 
 class _CliEvaluator(IEvaluator):
@@ -39,9 +39,7 @@ class _CliEvaluator(IEvaluator):
     def __init__(self, base_model: Path) -> None:
         self._model_hash = sha256_file(base_model)
 
-    def evaluate(
-        self, engine: object, split: SplitName
-    ) -> Result[EvaluationReport, str]:
+    def evaluate(self, engine: object, split: SplitName) -> Result[EvaluationReport, TrainingError]:
         return Ok(
             EvaluationReport(
                 model_hash=self._model_hash,

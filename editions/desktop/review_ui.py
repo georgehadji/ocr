@@ -16,47 +16,90 @@ import hashlib
 import io
 import json
 from pathlib import Path
+from typing import Any
 
 import streamlit as st
 from PIL import Image
 
 from omniocr.application.metrics import character_error_rate
 from omniocr.composition import create_ensemble_pipeline
-from omniocr.domain.models import Script, TenantContext
+from omniocr.domain.models import DocumentPage, DocumentStructure, Script, TenantContext
+from omniocr.domain.result import Err
 from omniocr.infrastructure.config import Settings
+from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
 from omniocr.infrastructure.exporters import MarkdownExporter
 from omniocr.infrastructure.logging import configure_logging
+from omniocr.infrastructure.review import (
+    ReviewLine,
+    build_review_document,
+    group_suggestions_by_reason,
+    persist_reviewed_lines,
+)
 
 # Initialize structured logging for the edition.
 configure_logging("omniocr-review")
-from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
-from omniocr.infrastructure.review import (
-    persist_reviewed_lines,
-    ReviewDocument,
-    build_review_document,
-    group_suggestions_by_reason,
-)
 
 st.set_page_config(page_title="OmniOCR Review", layout="wide")
 
 # ---------- Polytonic keyboard ----------
 
 POLYTONIC_MAP: dict[str, str] = {
-    "a>": "ἀ", "a<": "ἁ", "a/>": "ἄ", "a/<": "ἅ",
-    "a=>": "ἂ", "a=<": "ἃ", "a~>": "ἆ", "a~<": "ἇ",
-    "A>": "Ἀ", "A<": "Ἁ", "A/>": "Ἄ", "A/<": "Ἅ",
-    "e>": "ἐ", "e<": "ἑ", "e/>": "ἔ", "e/<": "ἕ",
-    "E>": "Ἐ", "E<": "Ἑ",
-    "h>": "ἠ", "h<": "ἡ", "h/>": "ἤ", "h/<": "ἥ",
-    "h~>": "ἦ", "h~<": "ἧ", "H>": "Ἠ", "H<": "Ἡ",
-    "i>": "ἰ", "i<": "ἱ", "i/>": "ἴ", "i/<": "ἵ",
-    "i~>": "ἶ", "i~<": "ἷ", "I>": "Ἰ", "I<": "Ἱ",
-    "o>": "ὀ", "o<": "ὁ", "o/>": "ὄ", "o/<": "ὅ",
-    "O>": "Ὀ", "O<": "Ὁ",
-    "u>": "ὐ", "u<": "ὑ", "u/>": "ὔ", "u/<": "ὕ", "U<": "Ὑ",
-    "w>": "ὠ", "w<": "ὡ", "w/>": "ὤ", "w/<": "ὥ",
-    "w~>": "ὦ", "w~<": "ὧ", "W>": "Ὠ", "W<": "Ὡ",
-    "r>": "ῤ", "r<": "ῥ", "R<": "Ῥ",
+    "a>": "ἀ",
+    "a<": "ἁ",
+    "a/>": "ἄ",
+    "a/<": "ἅ",
+    "a=>": "ἂ",
+    "a=<": "ἃ",
+    "a~>": "ἆ",
+    "a~<": "ἇ",
+    "A>": "Ἀ",
+    "A<": "Ἁ",
+    "A/>": "Ἄ",
+    "A/<": "Ἅ",
+    "e>": "ἐ",
+    "e<": "ἑ",
+    "e/>": "ἔ",
+    "e/<": "ἕ",
+    "E>": "Ἐ",
+    "E<": "Ἑ",
+    "h>": "ἠ",
+    "h<": "ἡ",
+    "h/>": "ἤ",
+    "h/<": "ἥ",
+    "h~>": "ἦ",
+    "h~<": "ἧ",
+    "H>": "Ἠ",
+    "H<": "Ἡ",
+    "i>": "ἰ",
+    "i<": "ἱ",
+    "i/>": "ἴ",
+    "i/<": "ἵ",
+    "i~>": "ἶ",
+    "i~<": "ἷ",
+    "I>": "Ἰ",
+    "I<": "Ἱ",
+    "o>": "ὀ",
+    "o<": "ὁ",
+    "o/>": "ὄ",
+    "o/<": "ὅ",
+    "O>": "Ὀ",
+    "O<": "Ὁ",
+    "u>": "ὐ",
+    "u<": "ὑ",
+    "u/>": "ὔ",
+    "u/<": "ὕ",
+    "U<": "Ὑ",
+    "w>": "ὠ",
+    "w<": "ὡ",
+    "w/>": "ὤ",
+    "w/<": "ὥ",
+    "w~>": "ὦ",
+    "w~<": "ὧ",
+    "W>": "Ὠ",
+    "W<": "Ὡ",
+    "r>": "ῤ",
+    "r<": "ῥ",
+    "R<": "Ῥ",
     "'": "᾽",
 }
 
@@ -69,7 +112,27 @@ POLYTONIC_GROUPS: list[tuple[str, list[str]]] = [
     ("Upsilon", ["u>", "u<", "u/>", "u/<"]),
     ("Omega", ["w>", "w<", "w/>", "w/<", "w~>", "w~<"]),
     ("Rho", ["r>", "r<"]),
-    ("Uppercase", ["A>", "A<", "A/>", "A/<", "E>", "E<", "H>", "H<", "I>", "I<", "O>", "O<", "U<", "W>", "W<", "R<"]),
+    (
+        "Uppercase",
+        [
+            "A>",
+            "A<",
+            "A/>",
+            "A/<",
+            "E>",
+            "E<",
+            "H>",
+            "H<",
+            "I>",
+            "I<",
+            "O>",
+            "O<",
+            "U<",
+            "W>",
+            "W<",
+            "R<",
+        ],
+    ),
 ]
 
 
@@ -119,19 +182,20 @@ def _save_session(file_name: str, file_data: bytes) -> None:
     )
 
 
-def _load_session(file_data: bytes) -> dict | None:
+def _load_session(file_data: bytes) -> dict[str, Any] | None:
     """Load a saved session for the given file, or None."""
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     fhash = _file_hash(file_data)
     path = SESSION_DIR / f"{fhash}.json"
     if path.is_file():
-        return json.loads(path.read_text(encoding="utf-8"))
+        loaded: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        return loaded
     return None
 
 
 # ---------- Session state ----------
 
-for key, default in [
+_DEFAULTS: list[tuple[str, Any]] = [
     ("review_document", None),
     ("current_page", 0),
     ("ground_truth_lines", {}),
@@ -140,9 +204,27 @@ for key, default in [
     ("file_name", ""),
     ("saved", False),
     ("decoded_images", {}),  # page_number → PIL.Image cache for fast navigation
-]:
+]
+
+for key, default in _DEFAULTS:
     if key not in st.session_state:
         st.session_state[key] = default
+
+
+def _final_text(line: ReviewLine) -> str:
+    """The text a reader should see for ``line``: accepted > edited > raw OCR.
+
+    This precedence was written out inline at six call sites (search, both
+    exports, the diff pane, the editor, and the accuracy readout). Any one of
+    them drifting would silently show or export text that disagrees with what
+    the reviewer approved.
+    """
+    return str(
+        st.session_state.ground_truth_lines.get(
+            line.line_id,
+            st.session_state.edited_lines.get(line.line_id, line.text),
+        )
+    )
 
 
 # ---------- Sidebar ----------
@@ -151,8 +233,10 @@ st.sidebar.title("OmniOCR Review")
 st.sidebar.caption("Scholarly correction interface")
 
 if st.sidebar.button("🔄 New session", help="Clear all state and start fresh"):
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
+    # `state_key`, not `key`: at module scope this would rebind the `key` the
+    # defaults loop above uses, the same global-reuse trap as `page`.
+    for state_key in list(st.session_state.keys()):
+        del st.session_state[state_key]
     st.rerun()
 
 uploaded_file = st.sidebar.file_uploader(
@@ -174,7 +258,9 @@ if uploaded_file is not None and st.session_state.review_document is None:
     if session:
         st.session_state.ground_truth_lines = session.get("ground_truth_lines", {})
         st.session_state.edited_lines = session.get("edited_lines", {})
-        st.sidebar.success(f"Restored session with {len(session['ground_truth_lines'])} corrections")
+        st.sidebar.success(
+            f"Restored session with {len(session['ground_truth_lines'])} corrections"
+        )
 
     with st.spinner("Initializing OCR pipeline…") if not session else st.spinner():
         cfg = Settings.from_env()
@@ -201,12 +287,17 @@ if uploaded_file is not None and st.session_state.review_document is None:
         ctx = TenantContext("desktop", "reviewer", "desktop")
         total = pipeline.count_pages(pdf_bytes)
         progress = st.sidebar.progress(0, f"OCR in progress — 0/{total} pages")
-        pages: list = []
+        pages: list[DocumentPage] = []
 
-        for page_num, page in pipeline.run_iteratively(pdf_bytes, ctx):
-            pages.append(page)
-            if page.failures:
-                st.sidebar.warning(f"Page {page_num} failed: {page.failures[0].message}")
+        # `ocr_page`, not `page`: this is a Streamlit script, so every binding
+        # here is a module global. Reusing `page` made the pipeline's
+        # `DocumentPage` and the review pane's `ReviewPage` share one name —
+        # two types with different line objects (`OCRLine.id` vs
+        # `ReviewLine.line_id`) reachable through the same variable.
+        for page_num, ocr_page in pipeline.run_iteratively(pdf_bytes, ctx):
+            pages.append(ocr_page)
+            if ocr_page.failures:
+                st.sidebar.warning(f"Page {page_num} failed: {ocr_page.failures[0].message}")
             progress.progress(page_num / total, f"OCR in progress — {page_num}/{total} pages")
 
         progress.progress(1.0, "Complete — building review document")
@@ -214,6 +305,7 @@ if uploaded_file is not None and st.session_state.review_document is None:
         page_images = [b""] * len(pages)
         try:
             import fitz
+
             source = fitz.open(stream=pdf_bytes, filetype="pdf")
             for i in range(min(len(pages), len(source))):
                 pix = source[i].get_pixmap(dpi=150)
@@ -223,7 +315,6 @@ if uploaded_file is not None and st.session_state.review_document is None:
             pass
 
         # Build review document from pipeline output
-        from omniocr.domain.models import DocumentPage, DocumentStructure
         doc_struct = DocumentStructure(pages=tuple(pages))
         st.session_state.review_document = build_review_document(doc_struct, page_images)
         st.session_state.current_page = 0
@@ -248,7 +339,9 @@ if st.session_state.review_document is not None:
 
     col1, col2, col3 = st.sidebar.columns([3, 1, 1])
     with col1:
-        page_jump = st.number_input("Page", 1, total_pages, st.session_state.current_page + 1, label_visibility="collapsed")
+        page_jump = st.number_input(
+            "Page", 1, total_pages, st.session_state.current_page + 1, label_visibility="collapsed"
+        )
         if page_jump != st.session_state.current_page + 1:
             st.session_state.current_page = page_jump - 1
             st.rerun()
@@ -265,23 +358,31 @@ if st.session_state.review_document is not None:
 
     # --- Edit mode toggle ---
     st.sidebar.divider()
-    edit_mode = st.sidebar.checkbox("✏️ Edit mode", value=st.session_state.get("edit_mode", False), help="Show all lines as editable text inputs")
+    edit_mode = st.sidebar.checkbox(
+        "✏️ Edit mode",
+        value=st.session_state.get("edit_mode", False),
+        help="Show all lines as editable text inputs",
+    )
     st.session_state.edit_mode = edit_mode
 
     # --- Text search ---
-    query = st.sidebar.text_input("🔍 Search", placeholder="Search across all pages…", label_visibility="visible")
+    query = st.sidebar.text_input(
+        "🔍 Search", placeholder="Search across all pages…", label_visibility="visible"
+    )
     if query:
         results = []
         for p in doc.pages:
-            for l in p.lines:
-                text = st.session_state.ground_truth_lines.get(l.line_id, st.session_state.edited_lines.get(l.line_id, l.text))
+            for line_ in p.lines:
+                text = _final_text(line_)
                 if query.lower() in text.lower():
-                    results.append((p.number, l.line_id, text))
+                    results.append((p.number, line_.line_id, text))
         if results:
             st.sidebar.write(f"Found {len(results)} matches:")
             for pnum, lid, text in results[:15]:
                 snippet = text[:60] + "…" if len(text) > 60 else text
-                if st.sidebar.button(f"p.{pnum}: {snippet}", key=f"srch_{lid}", use_container_width=True):
+                if st.sidebar.button(
+                    f"p.{pnum}: {snippet}", key=f"srch_{lid}", use_container_width=True
+                ):
                     st.session_state.current_page = pnum - 1
                     st.rerun()
         else:
@@ -291,7 +392,7 @@ if st.session_state.review_document is not None:
     st.sidebar.divider()
     summary = group_suggestions_by_reason(doc)
     total_suggestions = sum(summary.values()) if summary else 0
-    low_conf = sum(1 for p in doc.pages for l in p.lines if l.is_low_confidence)
+    low_conf = sum(1 for p in doc.pages for line_ in p.lines if line_.is_low_confidence)
 
     if summary:
         st.sidebar.subheader(f"💡 {total_suggestions} Suggestions")
@@ -340,7 +441,7 @@ if st.session_state.review_document is not None:
                 reviewed_text=reviewed,
                 corrected_by=_reviewer_id(),
             )
-            if outcome.is_err():
+            if isinstance(outcome, Err):
                 st.sidebar.error(f"Could not commit corrections: {outcome.error}")
             else:
                 st.sidebar.success(f"Committed {outcome.value} corrections for training")
@@ -362,7 +463,9 @@ if st.session_state.review_document is not None:
             for combo in combos:
                 glyph = POLYTONIC_MAP.get(combo, "")
                 if glyph:
-                    if st.sidebar.button(f"{combo} → {glyph}", key=f"pb_{combo}", use_container_width=True):
+                    if st.sidebar.button(
+                        f"{combo} → {glyph}", key=f"pb_{combo}", use_container_width=True
+                    ):
                         st.session_state.pb_last = glyph
                         st.rerun()
     if st.session_state.get("pb_last"):
@@ -375,43 +478,62 @@ if st.session_state.review_document is not None:
     ctx = TenantContext("desktop", "export", "desktop")
 
     export_md = "\n\n".join(
-        f"## Page {p.number}\n\n" + "\n".join(
-            st.session_state.ground_truth_lines.get(l.line_id, st.session_state.edited_lines.get(l.line_id, l.text))
-            for l in p.lines
-        )
+        f"## Page {p.number}\n\n" + "\n".join(_final_text(line_) for line_ in p.lines)
         for p in doc.pages
     )
-    export_txt = "\n".join(
-        st.session_state.ground_truth_lines.get(l.line_id, st.session_state.edited_lines.get(l.line_id, l.text))
-        for p in doc.pages
-        for l in p.lines
-    )
+    export_txt = "\n".join(_final_text(line_) for p in doc.pages for line_ in p.lines)
 
     base = Path(file_name).stem
     col_md, col_txt = st.sidebar.columns(2)
     with col_md:
-        st.download_button("📄 .md", export_md.encode("utf-8"), f"{base}.md", use_container_width=True)
+        st.download_button(
+            "📄 .md", export_md.encode("utf-8"), f"{base}.md", use_container_width=True
+        )
     with col_txt:
-        st.download_button("📄 .txt", export_txt.encode("utf-8"), f"{base}.txt", use_container_width=True)
+        st.download_button(
+            "📄 .txt", export_txt.encode("utf-8"), f"{base}.txt", use_container_width=True
+        )
 
     # Searchable PDF export (requires PyMuPDF)
     if st.sidebar.button("📕 Export searchable PDF", use_container_width=True):
         try:
             from omniocr.infrastructure.exporters import SearchablePdfExporter
+
             # Reconstruct minimal DocumentStructure from ReviewDocument
-            from omniocr.domain.models import BBox, Confidence, DocumentPage as DP, DocumentStructure as DS, OCRLine
+            from omniocr.domain.models import (
+                BBox,
+                Confidence,
+                DocumentPage as DP,
+                DocumentStructure as DS,
+                OCRLine,
+            )
+
             pages_out = []
             for rp in doc.pages:
                 lines_out = []
                 for rl in rp.lines:
-                    text = st.session_state.ground_truth_lines.get(rl.line_id, st.session_state.edited_lines.get(rl.line_id, rl.text))
-                    lines_out.append(OCRLine(id=rl.line_id, text=text, confidence=Confidence(rl.confidence), bbox=BBox(rl.bbox.x, rl.bbox.y, rl.bbox.w, rl.bbox.h)))
-                pages_out.append(DP(number=rp.number, width=rp.width, height=rp.height, lines=tuple(lines_out)))
+                    text = _final_text(rl)
+                    lines_out.append(
+                        OCRLine(
+                            id=rl.line_id,
+                            text=text,
+                            confidence=Confidence(rl.confidence),
+                            bbox=BBox(rl.bbox.x, rl.bbox.y, rl.bbox.w, rl.bbox.h),
+                        )
+                    )
+                pages_out.append(
+                    DP(number=rp.number, width=rp.width, height=rp.height, lines=tuple(lines_out))
+                )
             export_doc = DS(pages=tuple(pages_out))
             exporter = SearchablePdfExporter(source_pdf=file_bytes)
             result = exporter.export(export_doc, TenantContext("desktop", "export", "desktop"))
-            if result.is_ok():
-                st.sidebar.download_button("⬇ Download PDF", result.value, f"{base}_searchable.pdf", use_container_width=True)
+            if not isinstance(result, Err):
+                st.sidebar.download_button(
+                    "⬇ Download PDF",
+                    result.value,
+                    f"{base}_searchable.pdf",
+                    use_container_width=True,
+                )
             else:
                 st.sidebar.error(str(result.error))
         except ImportError as exc:
@@ -424,9 +546,15 @@ if st.session_state.review_document is not None:
         st.sidebar.divider()
         with st.sidebar.expander(f"✅ {len(st.session_state.ground_truth_lines)} accepted"):
             for lid, text in st.session_state.ground_truth_lines.items():
-                orig = next((l.text for p in doc.pages for l in p.lines if l.line_id == lid), "")
+                orig = next(
+                    (line_.text for p in doc.pages for line_ in p.lines if line_.line_id == lid), ""
+                )
                 cer = character_error_rate(orig, text)
-                st.write(f"**{lid[:20]}**: {text[:40]}… *(CER: {cer:.3f})*" if len(text) > 40 else f"**{lid[:20]}**: {text}")
+                st.write(
+                    f"**{lid[:20]}**: {text[:40]}… *(CER: {cer:.3f})*"
+                    if len(text) > 40
+                    else f"**{lid[:20]}**: {text}"
+                )
 
 # ---------- Main review pane (tabs: Dashboard + Review) ----------
 
@@ -438,8 +566,12 @@ if st.session_state.review_document is not None:
 
     with tab_dashboard:
         st.subheader(f"{st.session_state.file_name}")
-        total_suggestions = sum(group_suggestions_by_reason(doc).values()) if group_suggestions_by_reason(doc) else 0
-        low_conf_count = sum(1 for p in doc.pages for l in p.lines if l.is_low_confidence)
+        total_suggestions = (
+            sum(group_suggestions_by_reason(doc).values())
+            if group_suggestions_by_reason(doc)
+            else 0
+        )
+        low_conf_count = sum(1 for p in doc.pages for line_ in p.lines if line_.is_low_confidence)
         failed_count = sum(1 for p in doc.pages if p.failures)
         accepted_count = len(st.session_state.ground_truth_lines)
 
@@ -451,15 +583,21 @@ if st.session_state.review_document is not None:
         col5.metric("Accepted", accepted_count)
 
         # Pages by confidence
-        page_scores = [(
-            p.number,
-            sum(l.confidence for l in p.lines) / max(len(p.lines), 1),
-            sum(1 for l in p.lines if l.is_low_confidence),
-        ) for p in doc.pages]
+        page_scores = [
+            (
+                p.number,
+                sum(line_.confidence for line_ in p.lines) / max(len(p.lines), 1),
+                sum(1 for line_ in p.lines if line_.is_low_confidence),
+            )
+            for p in doc.pages
+        ]
 
         if page_scores:
             st.subheader("Pages by Average Confidence")
-            chart_data = {"Page": [s[0] for s in page_scores], "Avg Confidence": [round(s[1], 1) for s in page_scores]}
+            chart_data = {
+                "Page": [s[0] for s in page_scores],
+                "Avg Confidence": [round(s[1], 1) for s in page_scores],
+            }
             st.bar_chart(chart_data, x="Page", y="Avg Confidence")
 
         # Suggestion breakdown
@@ -486,13 +624,26 @@ if st.session_state.review_document is not None:
         else:
             st.caption("View mode — toggle ✏️ Edit mode in sidebar to edit")
 
-        if 0 <= page_idx < len(doc.pages):
-            page = doc.pages[page_idx]
+        # Stop rather than fall through. `page` was bound only inside this
+        # check while everything below used it unconditionally, so an
+        # out-of-range index (a restored session pointing past a shorter
+        # document) left the whole review pane rendering a stale page from an
+        # earlier run — or raising NameError on the first load.
+        if not 0 <= page_idx < len(doc.pages):
+            st.warning(f"Page {page_idx + 1} is outside this document ({len(doc.pages)} pages).")
+            st.session_state.current_page = 0
+            st.stop()
+        page = doc.pages[page_idx]
 
         image_col, text_col = st.columns([3, 2])
 
         with image_col:
-            show_bbox = st.checkbox("📐 Show reading order", value=st.session_state.get("show_bbox", False), key="bbox_toggle", label_visibility="collapsed")
+            show_bbox = st.checkbox(
+                "📐 Show reading order",
+                value=st.session_state.get("show_bbox", False),
+                key="bbox_toggle",
+                label_visibility="collapsed",
+            )
             st.session_state.show_bbox = show_bbox
 
             if page.image_bytes:
@@ -507,6 +658,7 @@ if st.session_state.review_document is not None:
                 img = cached[page_num].copy()
                 if show_bbox:
                     from PIL import ImageDraw
+
                     draw = ImageDraw.Draw(img)
                     colors = ["#ff4444", "#44aaff", "#44ff44", "#ffaa00", "#ff44ff", "#44ffff"]
                     for idx, line in enumerate(page.lines):
@@ -524,12 +676,17 @@ if st.session_state.review_document is not None:
                 st.error(f"Failed: {f.message}")
 
             for line in page.lines:
-                display = st.session_state.ground_truth_lines.get(line.line_id, st.session_state.edited_lines.get(line.line_id, line.text))
+                display = _final_text(line)
                 changed = display != line.text
                 conf = line.confidence
 
                 if edit_mode:
-                    new_text = st.text_input(f"{line.line_id} ({conf:.0f}%)", value=display, key=f"em_{line.line_id}", label_visibility="collapsed")
+                    new_text = st.text_input(
+                        f"{line.line_id} ({conf:.0f}%)",
+                        value=display,
+                        key=f"em_{line.line_id}",
+                        label_visibility="collapsed",
+                    )
                     if new_text != display:
                         if new_text != line.text:
                             st.session_state.edited_lines[line.line_id] = new_text
@@ -537,7 +694,10 @@ if st.session_state.review_document is not None:
                             st.session_state.edited_lines.pop(line.line_id, None)
                         st.rerun()
                     for s in line.suggestions:
-                        if st.button(f"💡 {s.reason}: {s.suggestion_text[:30] if s.suggestion_text else 'flag'}", key=f"ems_{line.line_id}_{s.reason}"):
+                        if st.button(
+                            f"💡 {s.reason}: {s.suggestion_text[:30] if s.suggestion_text else 'flag'}",
+                            key=f"ems_{line.line_id}_{s.reason}",
+                        ):
                             st.session_state.ground_truth_lines[s.line_id] = s.suggestion_text
                             st.rerun()
                     st.caption(f"{conf:.0f}% · {line.script} · {line.region_type}")
@@ -567,7 +727,9 @@ if st.session_state.review_document is not None:
 
                 if not edit_mode:
                     with st.expander("✏️ Edit / suggestions"):
-                        new_text = st.text_area("Line", display, key=f"ta_{line.line_id}", label_visibility="collapsed")
+                        new_text = st.text_area(
+                            "Line", display, key=f"ta_{line.line_id}", label_visibility="collapsed"
+                        )
                         if new_text != display:
                             if new_text != line.text:
                                 st.session_state.edited_lines[line.line_id] = new_text
@@ -583,7 +745,9 @@ if st.session_state.review_document is not None:
                                 st.write(f"**{s.reason}**: flag only")
                             if s.reversible and s.suggestion_text:
                                 if st.button("Accept", key=akey):
-                                    st.session_state.ground_truth_lines[s.line_id] = s.suggestion_text
+                                    st.session_state.ground_truth_lines[s.line_id] = (
+                                        s.suggestion_text
+                                    )
                                     st.rerun()
 
                         with st.popover("⌨ Insert polytonic"):
@@ -598,32 +762,53 @@ if st.session_state.review_document is not None:
                                 glyph = POLYTONIC_MAP[combo]
                                 st.write(f"**{glyph}** (Ctrl+C)")
                                 if st.button("Insert at end", key=f"pb_ins_{line.line_id}"):
-                                    current = st.session_state.ground_truth_lines.get(line.line_id, st.session_state.edited_lines.get(line.line_id, line.text))
+                                    current = _final_text(line)
                                     st.session_state.edited_lines[line.line_id] = current + glyph
                                     st.rerun()
 
                 st.caption(f"{line.script} · {line.region_type} · #{line.reading_order}")
 
             # Engine comparison
-            has_blocks = any(len(l.blocks) > 0 for p in doc.pages for l in p.lines)
+            has_blocks = any(len(line_.blocks) > 0 for p in doc.pages for line_ in p.lines)
             if has_blocks:
                 with st.expander("⚖️ Engine comparison"):
-                    st.caption("Per-word blocks from each engine. Colors show per-block confidence.")
+                    st.caption(
+                        "Per-word blocks from each engine. Colors show per-block confidence."
+                    )
                     for line in page.lines[:10]:
                         if line.blocks:
-                            engines = {}
-                            for b in line.blocks:
-                                eng = b.provenance.engine if b.provenance else "unknown"
-                                engines.setdefault(eng, []).append(f"{b.text} ({b.confidence.value:.0f}%)")
+                            engines: dict[str, list[str]] = {}
+                            for block in line.blocks:
+                                eng = block.provenance.engine if block.provenance else "unknown"
+                                engines.setdefault(eng, []).append(
+                                    f"{block.text} ({block.confidence.value:.0f}%)"
+                                )
                             st.write(f"**{line.line_id}**")
                             for eng, tokens in engines.items():
-                                conf_color = "#28a745" if all(float(t.split("(")[-1].rstrip("%)")) > 70 for t in tokens) else "#dc3545"
-                                st.markdown(f"<span style='color:{conf_color};font-weight:bold'>{eng}</span>: {' '.join(tokens)}", unsafe_allow_html=True)
+                                conf_color = (
+                                    "#28a745"
+                                    if all(
+                                        float(t.split("(")[-1].rstrip("%)")) > 70 for t in tokens
+                                    )
+                                    else "#dc3545"
+                                )
+                                st.markdown(
+                                    f"<span style='color:{conf_color};font-weight:bold'>{eng}</span>: {' '.join(tokens)}",
+                                    unsafe_allow_html=True,
+                                )
 
             if st.session_state.ground_truth_lines:
                 with st.expander(f"✅ {len(st.session_state.ground_truth_lines)} corrections"):
                     for lid, text in st.session_state.ground_truth_lines.items():
-                        orig = next((l.text for p in doc.pages for l in p.lines if l.line_id == lid), "")
+                        orig = next(
+                            (
+                                line_.text
+                                for p in doc.pages
+                                for line_ in p.lines
+                                if line_.line_id == lid
+                            ),
+                            "",
+                        )
                         cer = character_error_rate(orig, text)
                         st.write(f"**{lid[:20]}**: {text} *(CER: {cer:.3f})*")
 

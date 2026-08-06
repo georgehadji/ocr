@@ -9,7 +9,7 @@ short-circuits with a typed error rather than raising.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -91,7 +91,7 @@ class TrainingOrchestrator:
             parent, ``None`` if the candidate was refused promotion (with a
             logged reason), or an error.
         """
-        run_id = f"train-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+        run_id = f"train-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
         params = dict(hyperparameters or {})
 
         # Stage 1: Collect accepted corrections

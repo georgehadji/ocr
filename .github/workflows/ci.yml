@@ -22,12 +22,25 @@ jobs:
         run: python -m pip install --upgrade pip && python -m pip install -e ".[dev,docx]"
       - name: Run tests with coverage
         run: python -m pytest --cov=packages/omniocr/src/omniocr --cov-report=term-missing --cov-fail-under=80
+      # editions/ and scripts/ are gated too. They were excluded until now,
+      # and that gap hid 19 lint findings and 71 typing errors — among them a
+      # Celery task enqueued with raw bytes under a JSON serializer (every
+      # Cloud submit failed), an export whose failure was swallowed into an
+      # empty file reported as "completed", and a status endpoint that
+      # returned an unrelated job's state.
       - name: Check lint
-        run: ruff check packages tests
+        run: ruff check packages tests editions scripts
       - name: Check formatting
-        run: ruff format --check packages tests
-      - name: Check strict typing
+        run: ruff format --check packages tests editions scripts
+      - name: Check strict typing (core)
         run: mypy --strict --ignore-missing-imports --python-version 3.11 packages/omniocr/src
+      # Separate invocation: the editions are sibling top-level packages, so
+      # they need --explicit-package-bases and the core src on MYPYPATH to
+      # resolve `editions.*` and `omniocr.*` in the same run.
+      - name: Check strict typing (editions, scripts)
+        run: mypy --strict --ignore-missing-imports --python-version 3.11 --explicit-package-bases editions scripts
+        env:
+          MYPYPATH: packages/omniocr/src:.
       - name: Check license isolation
         run: python scripts/check_license_isolation.py
       - name: Check architectural layering
