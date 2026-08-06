@@ -14,10 +14,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Tuple
 
 from omniocr.domain.corrections import Correction
+from omniocr.domain.errors import TrainingError
 from omniocr.domain.models import (
     BBox,
     Confidence,
@@ -28,6 +29,8 @@ from omniocr.domain.models import (
     Script,
     Suggestion,
 )
+from omniocr.domain.result import Err, Ok, Result
+from omniocr.ports.interfaces import ICorrectionStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,11 +176,62 @@ def review_line_to_correction(
         original_text=review_line.text,
         corrected_text=corrected_text,
         corrected_by=corrected_by,
-        corrected_at=datetime.utcnow().isoformat(),
+        corrected_at=datetime.now(timezone.utc).isoformat(),
         bbox=review_line.bbox,
         script=script,
         accepted=accepted,
     )
+
+
+def persist_reviewed_lines(
+    store: ICorrectionStore,
+    document: ReviewDocument,
+    reviewed_text: Mapping[str, str],
+    corrected_by: str,
+) -> Result[int, TrainingError]:
+    """Append the human-reviewed lines to the corrections store.
+
+    This is the link that gives the training pipeline anything to train on.
+    ``review_line_to_correction`` and ``SqliteCorrectionStore`` both existed;
+    nothing called them together, so accepted corrections lived only in
+    Streamlit session state and a JSON session file and never reached the
+    store that ``TrainingOrchestrator.all_accepted()`` reads.
+
+    Args:
+        store: Append-only corrections repository.
+        document: The reviewed document, used to resolve each line's page
+            number, bbox and script from its id.
+        reviewed_text: line_id → final human text. Lines absent from this map
+            were not touched by the reviewer and are not persisted — an
+            untouched OCR line is not ground truth (CLAUDE.md rule 1).
+        corrected_by: Reviewer identifier.
+
+    Returns:
+        The number of corrections appended, or the first store error.
+
+    Note:
+        The store is append-only by design, so calling this twice appends a
+        second generation of rows rather than updating the first. That is the
+        intended audit trail: a revised transcription is a new ``Correction``
+        with a later timestamp, and consumers order by ``corrected_at``.
+    """
+    appended = 0
+    for page in document.pages:
+        for line in page.lines:
+            final_text = reviewed_text.get(line.line_id)
+            if final_text is None:
+                continue
+            correction = review_line_to_correction(
+                review_line=line,
+                page_number=page.number,
+                corrected_text=final_text,
+                corrected_by=corrected_by,
+            )
+            result = store.append(correction)
+            if isinstance(result, Err):
+                return Err(result.error)
+            appended += 1
+    return Ok(appended)
 
 
 __all__ = [
@@ -187,5 +241,6 @@ __all__ = [
     "build_review_document",
     "build_review_page",
     "group_suggestions_by_reason",
+    "persist_reviewed_lines",
     "review_line_to_correction",
 ]

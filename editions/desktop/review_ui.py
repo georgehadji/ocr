@@ -29,7 +29,9 @@ from omniocr.infrastructure.logging import configure_logging
 
 # Initialize structured logging for the edition.
 configure_logging("omniocr-review")
+from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
 from omniocr.infrastructure.review import (
+    persist_reviewed_lines,
     ReviewDocument,
     build_review_document,
     group_suggestions_by_reason,
@@ -74,6 +76,27 @@ POLYTONIC_GROUPS: list[tuple[str, list[str]]] = [
 # ---------- Helpers ----------
 
 SESSION_DIR = Path.home() / ".omniocr" / "sessions"
+# Durable ground-truth store the training pipeline reads. Kept beside the
+# sessions dir, not in the CWD, so corrections are not scattered per-project.
+_CORRECTIONS_DB = Path.home() / ".omniocr" / "corrections.db"
+
+
+def _reviewer_id() -> str:
+    """Identify who made a correction — provenance the audit trail needs.
+
+    Falls back to the OS user; ``OMNIOCR_REVIEWER`` overrides it for shared
+    machines where the login name is not the scholar's identity.
+    """
+    import getpass
+    import os
+
+    override = os.environ.get("OMNIOCR_REVIEWER", "").strip()
+    if override:
+        return override
+    try:
+        return getpass.getuser()
+    except Exception:
+        return "unknown"
 
 
 def _file_hash(data: bytes) -> str:
@@ -299,6 +322,28 @@ if st.session_state.review_document is not None:
     if st.sidebar.button("💾 Save session", use_container_width=True):
         _save_session(file_name, file_bytes)
         st.sidebar.success("Session saved")
+
+    # Session state and the JSON session file are UI scratch space; the
+    # corrections store is the durable ground-truth record the training
+    # pipeline reads. Committing is explicit rather than firing on every
+    # accept click, because the store is append-only — persisting each
+    # intermediate keystroke would fill it with states the reviewer then
+    # undid, and every one of those would become a training row.
+    if st.sidebar.button("📚 Commit corrections for training", use_container_width=True):
+        reviewed = {**st.session_state.edited_lines, **st.session_state.ground_truth_lines}
+        if not reviewed:
+            st.sidebar.warning("No reviewed lines to commit")
+        else:
+            outcome = persist_reviewed_lines(
+                store=SqliteCorrectionStore(_CORRECTIONS_DB),
+                document=doc,
+                reviewed_text=reviewed,
+                corrected_by=_reviewer_id(),
+            )
+            if outcome.is_err():
+                st.sidebar.error(f"Could not commit corrections: {outcome.error}")
+            else:
+                st.sidebar.success(f"Committed {outcome.value} corrections for training")
     if st.sidebar.button("↩ Undo last action"):
         if st.session_state.ground_truth_lines:
             last_key = list(st.session_state.ground_truth_lines.keys())[-1]

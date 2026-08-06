@@ -22,6 +22,15 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 - `scripts/check_layering.py`, a CI gate enforcing the dependency rule
   mechanically: domain purity, inward dependencies, and no edition importing
   an adapter directly.
+- Review UI can now commit reviewed lines to the corrections store, so the
+  training pipeline finally has a data source. `review_line_to_correction` and
+  `SqliteCorrectionStore` both already existed but nothing called them
+  together — accepted corrections lived only in Streamlit session state and a
+  JSON session file, and `TrainingOrchestrator` read an empty store. The logic
+  lives in a testable `persist_reviewed_lines()`, not in the UI.
+- `VLMEngine(max_edge_px=...)` downscales pages before sending, cutting image
+  tokens ~67% (a 300 DPI A5 page goes from ~3,096 to ~1,032 tokens). See
+  `docs/VLM_COST_OPTIMIZATION.md`.
 - LICENSE (MIT), this CHANGELOG, CONTRIBUTING.md, SECURITY.md.
 
 ### Changed
@@ -93,3 +102,10 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 - `prototype/ocr.py` (the original Streamlit prototype) is retained pending
   a deliberate parity check against the current CLI/ensemble pipeline — not
   yet confirmed superseded on every dimension the plan requires.
+- `review_ui.py` still has no view-model split (~600 lines). The corrections
+  wiring above deliberately put its logic in `infrastructure/review.py` so it
+  is testable, but the UI file itself is unrefactored — see E-5 in
+  `implementation_plan.md`.
+- Whether `max_edge_px=1400` is the right default is unmeasured. It was chosen
+  for legibility headroom; calibrate against the grounded/ungrounded ratio from
+  `extract_guarded` once an API key is available.

@@ -16,6 +16,7 @@ from omniocr.domain.models import (
     Suggestion,
 )
 from omniocr.infrastructure.review import (
+    ReviewDocument,
     build_review_document,
     build_review_page,
     group_suggestions_by_reason,
@@ -184,3 +185,147 @@ def test_review_line_blocks_default_empty() -> None:
     """A line with no per-engine blocks yields an empty tuple, never None."""
     review = build_review_page(_page(1), b"")
     assert review.lines[0].blocks == ()
+
+
+class TestPersistReviewedLines:
+    """The link that gives the training pipeline data.
+
+    review_line_to_correction and SqliteCorrectionStore both already existed;
+    nothing called them together, so reviewed corrections never reached the
+    store TrainingOrchestrator.all_accepted() reads.
+    """
+
+    @staticmethod
+    def _document() -> ReviewDocument:
+        from omniocr.infrastructure.review import build_review_document
+
+        return build_review_document(DocumentStructure(pages=(_page(1),)), [b""])
+
+    def test_appends_only_lines_the_reviewer_touched(self, tmp_path) -> None:
+        """An untouched OCR line is not ground truth (CLAUDE.md rule 1)."""
+        from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
+        from omniocr.infrastructure.review import persist_reviewed_lines
+
+        store = SqliteCorrectionStore(tmp_path / "c.db")
+        document = self._document()
+        touched = document.pages[0].lines[0].line_id
+
+        result = persist_reviewed_lines(
+            store, document, {touched: "διορθωμένο"}, corrected_by="scholar"
+        )
+
+        assert result.is_ok()
+        assert result.value == 1
+        stored = list(store.all_accepted())
+        assert len(stored) == 1
+        assert stored[0].line_id == touched
+        assert stored[0].corrected_text == "διορθωμένο"
+        assert stored[0].corrected_by == "scholar"
+        store.close()
+
+    def test_persists_nothing_when_reviewer_touched_nothing(self, tmp_path) -> None:
+        from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
+        from omniocr.infrastructure.review import persist_reviewed_lines
+
+        store = SqliteCorrectionStore(tmp_path / "c.db")
+
+        result = persist_reviewed_lines(store, self._document(), {}, corrected_by="scholar")
+
+        assert result.is_ok()
+        assert result.value == 0
+        assert list(store.all_accepted()) == []
+        store.close()
+
+    def test_unknown_line_ids_are_ignored(self, tmp_path) -> None:
+        """A stale id from session state must not invent a correction."""
+        from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
+        from omniocr.infrastructure.review import persist_reviewed_lines
+
+        store = SqliteCorrectionStore(tmp_path / "c.db")
+
+        result = persist_reviewed_lines(
+            store, self._document(), {"no-such-line": "text"}, corrected_by="s"
+        )
+
+        assert result.is_ok()
+        assert result.value == 0
+        store.close()
+
+    def test_carries_page_number_bbox_and_script_from_the_line(self, tmp_path) -> None:
+        from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
+        from omniocr.infrastructure.review import persist_reviewed_lines
+
+        store = SqliteCorrectionStore(tmp_path / "c.db")
+        document = self._document()
+        line = document.pages[0].lines[0]
+
+        persist_reviewed_lines(store, document, {line.line_id: "τ"}, corrected_by="s")
+
+        stored = list(store.all_accepted())[0]
+        assert stored.page_number == document.pages[0].number
+        assert stored.bbox == line.bbox
+        assert stored.script.value == line.script
+        store.close()
+
+    def test_second_call_appends_rather_than_mutating(self, tmp_path) -> None:
+        """Append-only: a revised transcription is a new row, not an update.
+
+        This is the audit trail scholarship needs — the earlier reading stays
+        recoverable, and consumers order by corrected_at.
+        """
+        from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
+        from omniocr.infrastructure.review import persist_reviewed_lines
+
+        store = SqliteCorrectionStore(tmp_path / "c.db")
+        document = self._document()
+        line_id = document.pages[0].lines[0].line_id
+
+        persist_reviewed_lines(store, document, {line_id: "first"}, corrected_by="s")
+        persist_reviewed_lines(store, document, {line_id: "second"}, corrected_by="s")
+
+        stored = list(store.all_accepted())
+        assert len(stored) == 2
+        assert [c.corrected_text for c in stored] == ["first", "second"]
+        store.close()
+
+    def test_survives_restart(self, tmp_path) -> None:
+        """Corrections must outlive the process — the point of persisting."""
+        from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
+        from omniocr.infrastructure.review import persist_reviewed_lines
+
+        db = tmp_path / "c.db"
+        document = self._document()
+        line_id = document.pages[0].lines[0].line_id
+
+        store = SqliteCorrectionStore(db)
+        persist_reviewed_lines(store, document, {line_id: "μένει"}, corrected_by="s")
+        store.close()
+
+        reopened = SqliteCorrectionStore(db)
+        stored = list(reopened.all_accepted())
+        assert len(stored) == 1
+        assert stored[0].corrected_text == "μένει"
+        reopened.close()
+
+    def test_store_error_short_circuits_and_propagates(self, tmp_path) -> None:
+        from omniocr.domain.errors import CorrectionStoreError
+        from omniocr.domain.result import Err
+        from omniocr.infrastructure.review import persist_reviewed_lines
+
+        class _FailingStore:
+            def append(self, correction):
+                return Err(CorrectionStoreError("disk full"))
+
+            def for_document(self, document_id):
+                return []
+
+            def all_accepted(self):
+                return []
+
+        document = self._document()
+        line_id = document.pages[0].lines[0].line_id
+
+        result = persist_reviewed_lines(_FailingStore(), document, {line_id: "x"}, corrected_by="s")
+
+        assert result.is_err()
+        assert "disk full" in str(result.error)
