@@ -39,6 +39,26 @@ EXIT_ENVIRONMENT = 3  # a required engine/model/dependency is missing
 _MODELS_DIR = Path("models")
 _OUTPUT_DIR = Path("Outputs")  # default destination when --out is omitted
 
+
+def _emit_json(payload: dict[str, Any]) -> None:
+    """Write one JSON object to stdout as UTF-8, whatever the console codepage.
+
+    ``print()`` encodes through ``sys.stdout``, which on Windows is the active
+    console codepage — cp1253 on a Greek install, the exact machine this
+    project targets. A payload containing a Greek filename then reached the
+    caller as bytes that are not valid UTF-8, so ``json.loads`` on the other
+    end failed outright. Writing to the underlying buffer keeps the documented
+    contract true regardless of locale.
+    """
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is None:  # captured stdout in tests has no buffer
+        sys.stdout.write(encoded.decode("utf-8") + "\n")
+        return
+    buffer.write(encoded + b"\n")
+    buffer.flush()
+
+
 # Output format per --out extension. --format overrides.
 _FORMAT_BY_SUFFIX: dict[str, str] = {
     ".txt": "txt",
@@ -242,7 +262,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     payload = {"ok": not problems, "problems": problems, **env}
 
     if args.json:
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        _emit_json(payload)
     else:
         tess = env["tesseract"]
         print(f"tesseract : {'yes' if tess['available'] else 'NO'} ({tess['path'] or '-'})")
@@ -329,23 +349,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
     line_count = sum(len(page.lines) for page in pages)
     suggestion_count = sum(len(page.suggestions) for page in pages)
     if args.json:
-        print(
-            json.dumps(
-                {
-                    "ok": not failures,
-                    "input": str(source),
-                    "output": str(out),
-                    "format": fmt,
-                    "engine": args.engine,
-                    "script": args.script,
-                    "pages": len(pages),
-                    "lines": line_count,
-                    "suggestions": suggestion_count,
-                    "failures": failures,
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
+        _emit_json(
+            {
+                "ok": not failures,
+                "input": str(source),
+                "output": str(out),
+                "format": fmt,
+                "engine": args.engine,
+                "script": args.script,
+                "pages": len(pages),
+                "lines": line_count,
+                "suggestions": suggestion_count,
+                "failures": failures,
+            }
         )
     else:
         print(
@@ -426,6 +442,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    # Pin diagnostics to stderr before anything can log. Skipping this left
+    # structlog on its default PrintLogger, which writes to stdout — pipeline
+    # log lines then appeared *ahead of* the payload under --json and broke
+    # the "--json | jq is safe" contract this module documents.
+    try:
+        from omniocr.infrastructure.logging import configure_logging
+
+        configure_logging("omniocr-cli", stream=sys.stderr)
+    except ImportError:
+        pass  # structlog is a dev-only extra; a base install just logs less
     try:
         exit_code: int = args.func(args)
     except KeyboardInterrupt:

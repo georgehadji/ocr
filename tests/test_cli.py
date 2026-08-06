@@ -7,6 +7,7 @@ from if they drift: exit codes, JSON-on-stdout, and diagnostics-on-stderr.
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
@@ -176,6 +177,48 @@ class TestDoctorReportsTheDevice:
         cli.main(["doctor"])
 
         assert "note" not in capsys.readouterr().out
+
+
+class TestJsonIsAlwaysUtf8:
+    """``--json`` is the contract an unattended caller parses.
+
+    ``print()`` encodes through the console codepage — cp1253 on the Greek
+    Windows install this project targets — so a payload holding a Greek
+    filename reached the caller as bytes that were not valid UTF-8 and
+    ``json.loads`` failed outright.
+    """
+
+    def test_payload_is_written_as_utf8_bytes(self, monkeypatch) -> None:
+        written = io.BytesIO()
+
+        class _Cp1253Stdout:
+            """Stands in for a console that cannot encode Greek."""
+
+            encoding = "cp1253"
+            buffer = written
+
+            def write(self, text: str) -> int:
+                raise UnicodeEncodeError("cp1253", text, 0, 1, "cannot encode")
+
+            def flush(self) -> None:
+                pass
+
+        monkeypatch.setattr(cli.sys, "stdout", _Cp1253Stdout())
+
+        cli._emit_json({"input": "Πολυχρονιάδης Δεδούσης 2.0.pdf", "ok": True})
+
+        payload = json.loads(written.getvalue().decode("utf-8"))
+        assert payload["input"] == "Πολυχρονιάδης Δεδούσης 2.0.pdf"
+
+    def test_greek_text_survives_the_round_trip(self, monkeypatch) -> None:
+        written = io.BytesIO()
+        monkeypatch.setattr(
+            cli.sys, "stdout", type("S", (), {"buffer": written, "flush": lambda self: None})()
+        )
+
+        cli._emit_json({"lines": ["ΤΑ ΒΥΖΑΝΤΙΝΑ ΜΝΗΜΕΙ͂Α", "ΤῊΣ ΘΕΣΣΑΛΟΝΙΚΗΣ"]})
+
+        assert json.loads(written.getvalue().decode("utf-8"))["lines"][1] == "ΤῊΣ ΘΕΣΣΑΛΟΝΙΚΗΣ"
 
 
 def test_environment_problems_flags_missing_kraken_model() -> None:

@@ -7,17 +7,53 @@ in production.
 
 from __future__ import annotations
 
-from typing import cast
+import logging
+import sys
+from typing import IO, cast
 
 import structlog
 from structlog.typing import FilteringBoundLogger
 
+_HANDLER_MARK = "_omniocr_handler"
 
-def configure_logging(app_name: str = "omniocr", level: str = "INFO") -> None:
-    """Configure structlog with sensible development defaults.
 
-    Call once at the edition composition root before any pipeline runs.
+def configure_logging(
+    app_name: str = "omniocr",
+    level: str = "INFO",
+    stream: IO[str] | None = None,
+) -> None:
+    """Configure structlog to write diagnostics to ``stream`` (default stderr).
+
+    Call once at a composition root before any pipeline runs.
+
+    Two things here are load-bearing, and both were previously wrong in
+    opposite directions:
+
+    * **A handler is installed.** This routed structlog through stdlib logging
+      but never gave the root logger a handler, so every edition that called
+      it logged into a void — ``logging.lastResort`` drops anything below
+      WARNING.
+    * **The stream is stderr.** Callers that skip this function get
+      structlog's own default ``PrintLogger``, which writes to **stdout**.
+      That put log lines ahead of the payload in ``omniocr run --json`` and
+      broke the "``--json | jq`` is safe" contract the CLI documents.
+
+    Re-entrant: repeat calls replace this module's handler rather than
+    stacking duplicates, so a Streamlit script rerunning top to bottom does
+    not multiply every log line.
     """
+    target = stream if stream is not None else sys.stderr
+
+    root = logging.getLogger()
+    for existing in list(root.handlers):
+        if getattr(existing, _HANDLER_MARK, False):
+            root.removeHandler(existing)
+    handler = logging.StreamHandler(target)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    setattr(handler, _HANDLER_MARK, True)
+    root.addHandler(handler)
+    root.setLevel(level)
+
     structlog.configure(
         processors=[
             structlog.stdlib.filter_by_level,
@@ -27,7 +63,10 @@ def configure_logging(app_name: str = "omniocr", level: str = "INFO") -> None:
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
-            structlog.dev.ConsoleRenderer(),
+            # colors=False: these lines are read from pipes and log files at
+            # least as often as from a terminal, and ANSI escapes in a
+            # captured log are noise.
+            structlog.dev.ConsoleRenderer(colors=False),
         ],
         context_class=dict,
         logger_factory=structlog.stdlib.LoggerFactory(),
