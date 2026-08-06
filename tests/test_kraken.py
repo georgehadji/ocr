@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from omniocr.domain.errors import LayoutError
-from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer, select_device
+from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
 
 
 def test_kraken_records_become_provenanced_blocks() -> None:
@@ -57,52 +57,11 @@ def test_bounds_rejects_unrecognized_record_instead_of_guessing() -> None:
 
 
 class TestDeviceSelection:
-    """Kraken must use a GPU when one is usable and fall back to CPU otherwise."""
+    """The engine must use a GPU when one is usable and fall back to CPU otherwise.
 
-    def test_prefers_cuda_when_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "torch",
-            SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True)),
-        )
-
-        assert select_device() == "cuda"
-
-    def test_falls_back_to_cpu_when_no_gpu(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "torch",
-            SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False)),
-        )
-
-        assert select_device() == "cpu"
-
-    def test_falls_back_to_cpu_when_cuda_probe_raises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A driver mismatch raises rather than returning False — still not fatal."""
-
-        def _boom() -> bool:
-            raise RuntimeError("CUDA driver version is insufficient")
-
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "torch",
-            SimpleNamespace(cuda=SimpleNamespace(is_available=_boom)),
-        )
-
-        assert select_device() == "cpu"
-
-    def test_explicit_preference_short_circuits_detection(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "torch",
-            SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True)),
-        )
-
-        assert select_device("cpu") == "cpu"
+    Selection itself is covered in ``test_device.py``; these two are about how
+    ``KrakenEngine`` consumes the answer.
+    """
 
     def test_engine_construction_does_not_probe_the_device(
         self, monkeypatch: pytest.MonkeyPatch

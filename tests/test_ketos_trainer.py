@@ -149,7 +149,7 @@ def test_train_includes_optional_hyperparameters_in_command(
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
-    trainer = KetosTrainer(device="cuda")
+    trainer = KetosTrainer(device="cuda:0")
 
     result = trainer.train(
         data_dir,
@@ -162,4 +162,61 @@ def test_train_includes_optional_hyperparameters_in_command(
     assert "--batch-size" in captured_cmd and "8" in captured_cmd
     assert "--decay" in captured_cmd and "0.9" in captured_cmd
     assert "--momentum" in captured_cmd and "0.99" in captured_cmd
-    assert "--device" in captured_cmd and "cuda" in captured_cmd
+    assert "--device" in captured_cmd and "cuda:0" in captured_cmd
+
+
+class TestDeviceSelection:
+    """Fine-tuning is the most GPU-sensitive step; it must not silently use CPU."""
+
+    @staticmethod
+    def _capture_device(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, trainer: KetosTrainer
+    ) -> str:
+        data_dir = _make_train_data(tmp_path)
+        parent_path = _make_parent_model(tmp_path)
+        expected_output = data_dir.parent / "ketos_finetuned.mlmodel"
+        captured: list[str] = []
+
+        def _fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            captured.extend(cmd)
+            expected_output.write_bytes(b"model")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", _fake_run)
+        assert trainer.train(data_dir, _parent_ref(parent_path), {}).is_ok()
+        return captured[captured.index("--device") + 1]
+
+    def test_defaults_to_the_detected_device_not_hardcoded_cpu(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Regression: the default was the literal string "cpu", so a GPU box
+        fine-tuned on CPU for hours and nothing said why."""
+        monkeypatch.setattr(
+            "omniocr.infrastructure.ketos_trainer.select_device", lambda pref: "cuda:0"
+        )
+
+        assert self._capture_device(monkeypatch, tmp_path, KetosTrainer()) == "cuda:0"
+
+    def test_falls_back_to_cpu_with_no_gpu(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "omniocr.infrastructure.ketos_trainer.select_device", lambda pref: "cpu"
+        )
+
+        assert self._capture_device(monkeypatch, tmp_path, KetosTrainer()) == "cpu"
+
+    def test_construction_does_not_probe_the_device(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Composition roots build the trainer eagerly; probing imports torch."""
+        probed = False
+
+        def _probe(pref: str | None) -> str:
+            nonlocal probed
+            probed = True
+            return "cpu"
+
+        monkeypatch.setattr("omniocr.infrastructure.ketos_trainer.select_device", _probe)
+
+        KetosTrainer()
+
+        assert probed is False

@@ -95,6 +95,7 @@ def test_doctor_json_goes_to_stdout(capsys, monkeypatch) -> None:
                 "languages": ["ell", "grc"],
             },
             "kraken": {"installed": True, "models": ["models/a.mlmodel"]},
+            "device": {"selected": "cpu"},
             "extras": {"pdf": True, "docx": True, "opencv": True, "pillow": True},
         },
     )
@@ -114,6 +115,7 @@ def test_doctor_exits_environment_when_language_pack_missing(capsys, monkeypatch
         lambda: {
             "tesseract": {"available": True, "path": "/usr/bin/tesseract", "languages": ["eng"]},
             "kraken": {"installed": True, "models": ["models/a.mlmodel"]},
+            "device": {"selected": "cpu"},
             "extras": {"pdf": True, "docx": True, "opencv": True, "pillow": True},
         },
     )
@@ -123,6 +125,57 @@ def test_doctor_exits_environment_when_language_pack_missing(capsys, monkeypatch
     assert code == cli.EXIT_ENVIRONMENT
     assert payload["ok"] is False
     assert any("ell, grc" in problem or "grc" in problem for problem in payload["problems"])
+
+
+class TestDoctorReportsTheDevice:
+    """ "Do I have a GPU?" is the question `doctor` exists to answer."""
+
+    @staticmethod
+    def _env(device: dict[str, str]) -> dict[str, object]:
+        return {
+            "tesseract": {
+                "available": True,
+                "path": "/usr/bin/tesseract",
+                "languages": ["ell", "grc"],
+            },
+            "kraken": {"installed": True, "models": ["models/a.mlmodel"]},
+            "device": device,
+            "extras": {"pdf": True, "docx": True, "opencv": True, "pillow": True},
+        }
+
+    def test_device_is_top_level_not_nested_under_kraken(self, capsys, monkeypatch) -> None:
+        """Fine-tuning uses the same device, so it is not a Kraken sub-field."""
+        monkeypatch.setattr(cli, "_environment", lambda: self._env({"selected": "cuda:0"}))
+
+        cli.main(["doctor", "--json"])
+
+        assert json.loads(capsys.readouterr().out)["device"]["selected"] == "cuda:0"
+
+    def test_text_output_prints_the_device(self, capsys, monkeypatch) -> None:
+        monkeypatch.setattr(cli, "_environment", lambda: self._env({"selected": "cuda:0"}))
+
+        cli.main(["doctor"])
+
+        assert "device    : cuda:0" in capsys.readouterr().out
+
+    def test_text_output_prints_the_note_when_cpu_is_explainable(self, capsys, monkeypatch) -> None:
+        """A bare "cpu" hides the difference between no GPU and the wrong torch wheel."""
+        monkeypatch.setattr(
+            cli,
+            "_environment",
+            lambda: self._env({"selected": "cpu", "note": "torch 2.10.0+cpu is a CPU-only build."}),
+        )
+
+        cli.main(["doctor"])
+
+        assert "CPU-only build" in capsys.readouterr().out
+
+    def test_no_note_is_printed_when_there_is_nothing_to_explain(self, capsys, monkeypatch) -> None:
+        monkeypatch.setattr(cli, "_environment", lambda: self._env({"selected": "cuda:0"}))
+
+        cli.main(["doctor"])
+
+        assert "note" not in capsys.readouterr().out
 
 
 def test_environment_problems_flags_missing_kraken_model() -> None:

@@ -22,31 +22,10 @@ from omniocr.domain.models import (
     TenantContext,
 )
 from omniocr.domain.result import Err, Ok, Result
+from omniocr.infrastructure.device import CPU, is_accelerator, select_device
 from omniocr.ports.interfaces import ILayoutAnalyzer, IOCREngine, RawPage
 
 _LOG = logging.getLogger("omniocr.kraken")
-
-
-def select_device(preferred: str | None = None) -> str:
-    """Return the torch device Kraken should use: CUDA when usable, else CPU.
-
-    ``preferred`` short-circuits detection, so a caller can pin a device (and
-    tests can exercise both paths on a machine with no GPU).
-
-    Availability is probed defensively: a torch build without CUDA, a driver
-    mismatch, or a machine with no GPU can each raise here rather than simply
-    returning ``False``, and none of those is a reason to fail the run.
-    """
-    if preferred is not None:
-        return preferred
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            return "cuda"
-    except Exception as exc:  # ImportError, driver/CUDA init failures
-        _LOG.debug("CUDA probe failed, using CPU: %s", exc)
-    return "cpu"
 
 
 def _open_bilevel(content: bytes) -> Any:
@@ -199,7 +178,7 @@ class KrakenEngine(IOCREngine):
 
     @property
     def device(self) -> str:
-        """The torch device in use — ``cuda`` when available, else ``cpu``."""
+        """The torch device in use — an accelerator when available, else ``cpu``."""
         if self._device is None:
             with self._lock:
                 if self._device is None:
@@ -244,7 +223,7 @@ class KrakenEngine(IOCREngine):
                 rpred.rpred(self._model, image, segmentation), page.width, page.height
             )
         except Exception as exc:
-            if self.device == "cpu":
+            if not is_accelerator(self.device):
                 raise
             _LOG.warning(
                 "Kraken GPU recognition failed on page %s (%s) — falling back to CPU",
@@ -252,7 +231,7 @@ class KrakenEngine(IOCREngine):
                 exc,
             )
             with self._lock:
-                self._device = "cpu"
+                self._device = CPU
                 self._model = self._load_model()
             return self.parse_records(
                 rpred.rpred(self._model, image, segmentation), page.width, page.height
@@ -265,11 +244,11 @@ class KrakenEngine(IOCREngine):
         try:
             return models.load_any(str(self.model_path), device=self.device)
         except Exception as exc:
-            if self.device == "cpu":
+            if not is_accelerator(self.device):
                 raise
             _LOG.warning("Kraken model load on %s failed (%s) — using CPU", self.device, exc)
-            self._device = "cpu"
-            return models.load_any(str(self.model_path), device="cpu")
+            self._device = CPU
+            return models.load_any(str(self.model_path), device=CPU)
 
     def parse_records(
         self, records: Iterable[Any], page_width: int, page_height: int

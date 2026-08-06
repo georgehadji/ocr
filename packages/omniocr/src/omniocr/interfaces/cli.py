@@ -96,12 +96,22 @@ def _kraken_report(models_dir: Path = _MODELS_DIR) -> dict[str, Any]:
         installed = False
     models = sorted(str(path) for path in models_dir.glob("*.mlmodel"))
     report: dict[str, Any] = {"installed": installed, "models": models}
-    if installed:
-        # Report the device up front: it is the difference between minutes and
-        # seconds per page, and the caller sizes its timeouts on this.
-        from omniocr.infrastructure.kraken import select_device
+    return report
 
-        report["device"] = select_device()
+
+def _device_report() -> dict[str, Any]:
+    """Report the compute device up front.
+
+    It is the difference between minutes and seconds per page, the caller
+    sizes its timeouts on it, and it governs fine-tuning as well as
+    recognition — so it is a top-level fact, not a Kraken sub-field.
+    """
+    from omniocr.infrastructure.device import device_note, select_device
+
+    report: dict[str, Any] = {"selected": select_device()}
+    note = device_note()
+    if note is not None:
+        report["note"] = note
     return report
 
 
@@ -122,6 +132,7 @@ def _environment() -> dict[str, Any]:
     return {
         "tesseract": _tesseract_report(),
         "kraken": _kraken_report(),
+        "device": _device_report(),
         "extras": _optional_module_report(),
     }
 
@@ -238,8 +249,9 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(f"  langs   : {', '.join(tess['languages']) or '-'}")
         print(f"kraken    : {'yes' if env['kraken']['installed'] else 'NO'}")
         print(f"  models  : {len(env['kraken']['models'])} in {_MODELS_DIR}/")
-        if "device" in env["kraken"]:
-            print(f"  device  : {env['kraken']['device']}")
+        print(f"device    : {env['device']['selected']}")
+        if "note" in env["device"]:
+            print(f"  note    : {env['device']['note']}")
         for extra, present in sorted(env["extras"].items()):
             print(f"{extra:10}: {'yes' if present else 'NO'}")
         if problems:

@@ -17,6 +17,7 @@ from omniocr.domain.errors import TrainingError
 from omniocr.domain.models import ModelRef
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.domain.training import ModelCandidate
+from omniocr.infrastructure.device import select_device
 from omniocr.infrastructure.models import sha256_file
 from omniocr.ports.interfaces import ITrainer
 
@@ -33,10 +34,13 @@ class KetosTrainer(ITrainer):
     def __init__(
         self,
         timeout_seconds: int = 7200,
-        device: str = "cpu",
+        device: str | None = None,
     ) -> None:
         self._timeout = timeout_seconds
-        self._device = device
+        # Resolved per-run in `train()`, not here: probing CUDA imports torch,
+        # and the composition root builds this trainer whether or not a
+        # training run is ever started.
+        self._requested_device = device
 
     def train(
         self,
@@ -67,6 +71,12 @@ class KetosTrainer(ITrainer):
         # Build output path
         output_path = data.parent / "ketos_finetuned.mlmodel"
 
+        # Fine-tuning is the most GPU-sensitive step in the project — an epoch
+        # that takes minutes on a GPU takes hours on CPU. `select_device`
+        # returns `cuda:0`, not `cuda`, because ketos' own `to_ptl_device`
+        # splits the string on ":" and indexes [1] unconditionally.
+        device = select_device(self._requested_device)
+
         # Build command
         epochs = params.get("epochs", "10")
         cmd = [
@@ -77,7 +87,7 @@ class KetosTrainer(ITrainer):
             "info",
             "train",
             "--device",
-            self._device,
+            device,
             "--load",
             str(parent_path),
             "--train",
@@ -99,10 +109,11 @@ class KetosTrainer(ITrainer):
             cmd.extend(["--momentum", params["momentum"]])
 
         _LOG.info(
-            "ketos_train_start train_json=%s parent=%s epochs=%s",
+            "ketos_train_start train_json=%s parent=%s epochs=%s device=%s",
             str(train_json),
             str(parent_path),
             epochs,
+            device,
         )
 
         try:
