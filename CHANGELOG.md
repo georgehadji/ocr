@@ -16,9 +16,18 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 - `omniocr doctor` reports engine, language-pack, model, and — for Kraken —
   device availability, so a missing `grc` pack surfaces as a clear message
   instead of a silent test skip.
-- Kraken now selects a CUDA GPU automatically when one is usable and falls
-  back to CPU otherwise, degrading rather than failing if the GPU can't take
-  the model or a page.
+- Device selection is now project-wide in `infrastructure/device.py`, shared by
+  the recognizer, the fine-tuner, and `omniocr doctor`. It picks CUDA, then
+  MPS, then CPU, and degrades rather than failing if a GPU can't take the model
+  or a page. `KetosTrainer` previously hardcoded `device="cpu"` — fine-tuning,
+  the most GPU-sensitive step in the project, ran on CPU even on a GPU machine
+  and nothing said why. The CUDA answer is `cuda:0`, never a bare `cuda`,
+  because `kraken.ketos.util.to_ptl_device` splits on `:` and indexes `[1]`
+  unconditionally.
+- `omniocr doctor` reports the device at top level and explains a CPU answer
+  when the cause is fixable — "no GPU in this machine" and "a GPU the installed
+  torch wheel cannot address" are very different problems and only one is a
+  one-command fix.
 - `scripts/check_layering.py`, a CI gate enforcing the dependency rule
   mechanically: domain purity, inward dependencies, and no edition importing
   an adapter directly.
@@ -32,6 +41,46 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
   tokens ~67% (a 300 DPI A5 page goes from ~3,096 to ~1,032 tokens). See
   `docs/VLM_COST_OPTIMIZATION.md`.
 - LICENSE (MIT), this CHANGELOG, CONTRIBUTING.md, SECURITY.md.
+
+### Fixed — defects found by widening the CI gate to `editions/` and `scripts/`
+CI linted `packages tests` and typed only `packages/omniocr/src`. The
+composition roots and entry points users actually run were outside every gate.
+Widening it surfaced 19 lint findings and 71 typing errors, including:
+- **Cloud `POST /ocr/submit` failed whenever Celery was importable.** The app
+  sets `task_serializer="json"` and the route enqueued raw `bytes` plus a live
+  `Settings` dataclass — neither JSON-encodable — so the enqueue raised before
+  the worker saw a job. The payload is now base64; the never-read
+  `settings_json` parameter is gone from both editions.
+- **A failed export was reported as `"completed"`.** Cloud substituted `b""`,
+  wrote an empty `.md`, and returned success; the caller downloaded an empty
+  file with no signal that anything had gone wrong.
+- **`/ocr/status` returned an unrelated job's state**, picking
+  `next(j["task_id"] for j in _jobs.values())` — an arbitrary other job.
+- **The server's async path could never serve a result.** The worker returned
+  bytes into RQ's result backend, nothing moved them to disk, and
+  `/ocr/result` read `results/{job_id}.md`, so every queued job 404'd.
+- **The review UI shared one module global for two page types.** Streamlit runs
+  the script top to bottom, so `page` was both the pipeline's `DocumentPage`
+  and the review pane's `ReviewPage` (`OCRLine.id` vs `ReviewLine.line_id`),
+  and it was bound only inside a range check that everything below ignored.
+
+### Fixed — the `--json` contract, which the CLI documented but did not honor
+- Log lines went to **stdout**, ahead of the payload: nothing called
+  `configure_logging`, so structlog fell back to its default `PrintLogger`.
+  `omniocr run --json | jq` failed on the first `page_completed` line.
+- The payload was **not UTF-8**. `print()` encodes through the console
+  codepage — cp1253 on a Greek Windows install, this project's target
+  platform — so `json.loads(stdout.decode("utf-8"))` raised
+  `invalid continuation byte`. It is now written to `sys.stdout.buffer`.
+- Fixing the above exposed the opposite defect: `configure_logging` routed
+  structlog through stdlib logging but **never installed a handler**, so every
+  edition that called it had been logging into a void.
+
+### Fixed — lexicon lookups missed on essentially every token
+Tokens were compared byte-for-byte against NFC word lists, so a decomposed
+page flagged *every word on it* as "not in lexicon", and `θεοτόκος,` missed on
+its comma. `SetLexicon` now normalizes both sides; only the lookup is
+normalized, so suggestions still report the original token verbatim.
 
 ### Changed
 - **Kraken recognition, previously completely broken, now works.** It fed a
