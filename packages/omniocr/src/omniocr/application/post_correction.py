@@ -21,6 +21,33 @@ from omniocr.domain.result import Ok, Result
 from omniocr.ports.interfaces import ILexicon, IPostCorrector
 
 
+def _lexicon_key(token: str) -> str:
+    """Reduce a whitespace token to the form a lexicon is keyed on.
+
+    Two mismatches previously made every lookup miss, so every word on the
+    page was flagged "not in lexicon" — a flood of false suggestions on
+    exactly the polytonic material this project targets:
+
+    * **Normalization.** Bundled lexicons are NFC. The lookup used
+      ``line.text`` raw, and Greek OCR output is not guaranteed NFC — this
+      very method raises a ``unicode_nfc`` suggestion about that three checks
+      earlier, then ignored it here. In NFD, ``εὐαγγέλιον`` is a different
+      string and never matches.
+    * **Punctuation.** ``str.split()`` breaks on whitespace only, so
+      ``θεοτόκος,`` carried its comma into the lookup.
+
+    Only the *lookup* is normalized. The suggestion still reports the original
+    token, so nothing rewrites the recognized text (CLAUDE.md rule 1).
+    """
+    normalized = unicodedata.normalize("NFC", token)
+    return normalized.strip("".join(_PUNCTUATION)).lower()
+
+
+# Editorial punctuation that attaches to a word in printed Greek. Greek uses
+# ano teleia (·) and the erotimatiko (;) where English uses ; and ?.
+_PUNCTUATION: frozenset[str] = frozenset(".,;:·!?()[]{}«»\"'’‘“”—–-…")
+
+
 class SuggestOnlyCorrector(IPostCorrector):
     """Run conservative checks while preserving the recognized source text.
 
@@ -134,7 +161,8 @@ class SuggestOnlyCorrector(IPostCorrector):
         lexicon = self._lexicons.get(line.script)
         if lexicon is not None:
             for token in line.text.split():
-                if token and not lexicon.contains(token):
+                lookup = _lexicon_key(token)
+                if lookup and not lexicon.contains(lookup):
                     suggestions.append(
                         Suggestion(
                             line_id=line.id,
