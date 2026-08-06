@@ -220,3 +220,41 @@ def test_segment_converts_bad_records_into_err() -> None:
 
     assert result.is_err()
     assert "unrecognized Kraken segmentation record" in str(result.error)
+
+
+class TestEngineBoundsMatchTheAnalyzer:
+    """The two Kraken entry points must read geometry the same way.
+
+    They had drifted. ``KrakenLayoutAnalyzer._bounds`` was fixed to read
+    ``BBoxLine.bbox`` and to raise on an unknown shape; ``KrakenEngine._bounds``
+    was not. It read ``record.line``, which Kraken 7's ``rpred`` sets to
+    ``None`` on every ``BBoxOCRRecord``, so both of its fallbacks fired for
+    every line on every page and stamped all 53 lines of a real page with the
+    identical full-page box. Recognition was correct; the geometry was
+    fabricated, and downstream the whole page collapsed onto one text line.
+    """
+
+    def test_reads_the_bbox_of_a_recognition_record(self) -> None:
+        """Kraken 7 ``rpred`` yields ``BBoxOCRRecord(bbox=[x0, y0, x1, y1])``."""
+        record = SimpleNamespace(bbox=[324, 102, 978, 118])
+
+        assert KrakenEngine._bounds(record, 1339, 1890) == (324, 102, 978, 118)
+
+    def test_a_record_without_geometry_raises_instead_of_claiming_the_page(self) -> None:
+        """The defect, stated directly: `line=None` used to mean "whole page"."""
+        with pytest.raises(LayoutError, match="unrecognized Kraken segmentation record"):
+            KrakenEngine._bounds(SimpleNamespace(line=None), 1339, 1890)
+
+    def test_parsed_blocks_get_distinct_boxes_not_one_page_box(self) -> None:
+        """Two records on different rows must not share a bounding box."""
+        engine = KrakenEngine("missing-greek.mlmodel")
+        records = [
+            SimpleNamespace(prediction="πρῶτος", confidences=[0.9], bbox=[10, 10, 200, 30]),
+            SimpleNamespace(prediction="δεύτερος", confidences=[0.9], bbox=[10, 40, 200, 60]),
+        ]
+
+        blocks = engine.parse_records(records, 1339, 1890)
+
+        boxes = {(b.bbox.x, b.bbox.y, b.bbox.w, b.bbox.h) for b in blocks}
+        assert len(boxes) == 2, "each line keeps its own geometry"
+        assert all(b.bbox.w < 1339 for b in blocks), "no block claims the full page width"

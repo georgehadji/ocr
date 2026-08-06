@@ -108,3 +108,80 @@ def test_verify_returns_false_when_hash_mismatches(tmp_path: Path) -> None:
     manifest.add(_entry(sha256="not-the-real-hash"))
 
     assert manifest.verify("greek-porson", model_path) is False
+
+
+class TestDefaultSelection:
+    """Model choice was decided by `sorted(glob(...))[0]` — a filename.
+
+    Measured on page 31 of the target document, the three bundled Kraken
+    models score 0.038, 0.147 and 0.264 CER; the alphabetically first one is
+    the 0.264. See docs/ENGINE_ACCURACY.md.
+    """
+
+    @staticmethod
+    def _manifest(tmp_path: Path, entries: list[dict[str, object]]) -> ModelManifest:
+        path = tmp_path / "manifest.json"
+        path.write_text(json.dumps({"models": entries}), encoding="utf-8")
+        return ModelManifest(path)
+
+    @staticmethod
+    def _entry(name: str, **extra: object) -> dict[str, object]:
+        base: dict[str, object] = {
+            "engine": "kraken",
+            "name": name,
+            "source": "s",
+            "licence": "CC-BY-4.0",
+            "sha256": "deadbeef",
+        }
+        base.update(extra)
+        return base
+
+    def test_returns_the_entry_flagged_default(self, tmp_path: Path) -> None:
+        manifest = self._manifest(
+            tmp_path,
+            [
+                self._entry("a-alphabetically-first.mlmodel"),
+                self._entry("z-best.mlmodel", default=True),
+            ],
+        )
+
+        chosen = manifest.default_for("kraken")
+
+        assert chosen is not None
+        assert chosen.name == "z-best.mlmodel", "the flag wins, not the filename"
+
+    def test_returns_none_when_no_default_is_declared(self, tmp_path: Path) -> None:
+        """Callers must be able to fall back rather than fail."""
+        manifest = self._manifest(tmp_path, [self._entry("only.mlmodel")])
+
+        assert manifest.default_for("kraken") is None
+
+    def test_does_not_return_another_engines_default(self, tmp_path: Path) -> None:
+        manifest = self._manifest(
+            tmp_path, [self._entry("t.traineddata", engine="tesseract", default=True)]
+        )
+
+        assert manifest.default_for("kraken") is None
+
+    def test_default_survives_a_save_reload_round_trip(self, tmp_path: Path) -> None:
+        """`add()` rewrites the whole file; the flag must not be dropped."""
+        manifest = self._manifest(tmp_path, [self._entry("best.mlmodel", default=True)])
+
+        manifest.add(
+            ManifestEntry(
+                engine="kraken", name="other.mlmodel", source="s", licence="l", sha256="h"
+            )
+        )
+        reloaded = ModelManifest(tmp_path / "manifest.json")
+
+        assert reloaded.default_for("kraken") is not None
+        assert reloaded.default_for("kraken").name == "best.mlmodel"
+
+
+def test_shipped_manifest_declares_exactly_one_kraken_default() -> None:
+    """The real manifest, not a fixture: ambiguity here silently picks a model."""
+    manifest = ModelManifest("models/manifest.json")
+    defaults = [e for e in manifest.all() if e.engine == "kraken" and e.default]
+
+    assert len(defaults) == 1, f"expected one default, found {[e.name for e in defaults]}"
+    assert defaults[0].name == "greek-german_serifs_bsb10234118.mlmodel"

@@ -26,6 +26,12 @@ class ManifestEntry:
     sha256: str
     description: str = ""
     params: tuple[str, ...] = field(default_factory=tuple)
+    # Marks the model to reach for when the caller names none. Measured, not
+    # assumed: on page 31 of the target document the three bundled Kraken
+    # models scored 0.038, 0.147 and 0.264 CER. Selection had been
+    # `sorted(glob(...))[0]`, which picked the 0.264 one — 4.7x worse than
+    # Tesseract on the same page — purely because of its filename.
+    default: bool = False
 
 
 class ModelManifest:
@@ -55,10 +61,22 @@ class ModelManifest:
                     sha256=item["sha256"],
                     description=item.get("description", ""),
                     params=tuple(item.get("params", [])),
+                    default=bool(item.get("default", False)),
                 )
                 self._entries[entry.name] = entry
         except (json.JSONDecodeError, KeyError, ValueError):
             pass
+
+    def default_for(self, engine: str) -> ManifestEntry | None:
+        """Return the model to use for ``engine`` when the caller names none.
+
+        ``None`` when the manifest declares no default, so a caller can fall
+        back rather than fail — but it should say what it is falling back to.
+        """
+        for entry in self._entries.values():
+            if entry.engine == engine and entry.default:
+                return entry
+        return None
 
     def add(self, entry: ManifestEntry) -> None:
         """Add or update a manifest entry."""
@@ -95,6 +113,7 @@ class ModelManifest:
                     "sha256": e.sha256,
                     "description": e.description,
                     "params": list(e.params),
+                    "default": e.default,
                 }
                 for e in self._entries.values()
             ]

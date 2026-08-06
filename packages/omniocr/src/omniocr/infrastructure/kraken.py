@@ -119,9 +119,17 @@ class KrakenLayoutAnalyzer(ILayoutAnalyzer):
                 x0, y0, x1, y1 = values
                 return x0, y0, max(1, x1 - x0), max(1, y1 - y0)
 
-        geometry = getattr(record, "boundary", None) or getattr(record, "polygon", None)
+        # ``line`` is the polygon a baseline recognition record carries. It is
+        # checked last: ``BBoxOCRRecord`` defines it as ``None`` while holding
+        # a real ``bbox``, so preferring it would reintroduce the empty-geometry
+        # path this method exists to reject.
+        geometry = (
+            getattr(record, "boundary", None)
+            or getattr(record, "polygon", None)
+            or getattr(record, "line", None)
+        )
         if geometry is None and isinstance(record, dict):
-            geometry = record.get("boundary") or record.get("polygon")
+            geometry = record.get("boundary") or record.get("polygon") or record.get("line")
         if geometry:
             points = list(geometry)
             if points and isinstance(points[0], (tuple, list)):
@@ -270,9 +278,7 @@ class KrakenEngine(IOCREngine):
             text = str(getattr(record, "prediction", "")).strip()
             if not text:
                 continue
-            x, y, right, bottom = self._bounds(
-                getattr(record, "line", None), page_width, page_height
-            )
+            x, y, right, bottom = self._bounds(record, page_width, page_height)
             values = [float(value) for value in getattr(record, "confidences", ())]
             confidence = sum(values) / len(values) * 100 if values else 0.0
             blocks.append(
@@ -287,15 +293,23 @@ class KrakenEngine(IOCREngine):
         return tuple(blocks)
 
     @staticmethod
-    def _bounds(line: Any, page_width: int, page_height: int) -> tuple[int, int, int, int]:
-        if not line:
-            return 0, 0, page_width, page_height
-        points = list(line)
-        if points and isinstance(points[0], (tuple, list)):
-            xs = [int(point[0]) for point in points]
-            ys = [int(point[1]) for point in points]
-            return min(xs), min(ys), max(xs), max(ys)
-        return 0, 0, page_width, page_height
+    def _bounds(record: Any, page_width: int, page_height: int) -> tuple[int, int, int, int]:
+        """Return ``(x, y, right, bottom)`` for one recognition record.
+
+        Delegates to the analyzer's geometry reader so the two Kraken entry
+        points cannot drift — the same reason ``_open_bilevel`` is shared.
+
+        They had drifted. The analyzer was fixed to read ``BBoxLine.bbox`` and
+        to raise rather than assume a full page; this method was not, and it
+        read ``record.line``, which Kraken 7's ``rpred`` sets to ``None`` on
+        every ``BBoxOCRRecord``. Both fallbacks here therefore fired for every
+        line on every page, stamping all 53 lines of a page with the identical
+        full-page box. Recognition was correct and the geometry was a
+        fabrication, so the whole page collapsed onto whichever text line it
+        happened to overlap most.
+        """
+        x, y, width, height = KrakenLayoutAnalyzer._bounds(record, page_width, page_height)
+        return x, y, x + width, y + height
 
     def _hash_model(self) -> str:
         try:

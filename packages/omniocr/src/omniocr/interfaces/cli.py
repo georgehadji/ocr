@@ -222,12 +222,34 @@ def _default_output_path(source: Path, fmt: str) -> Path:
 
 
 def _resolve_model(explicit: str | None) -> str:
+    """Choose the Kraken model: explicit, else the manifest default.
+
+    Selection used to be ``sorted(glob("*.mlmodel"))[0]`` — alphabetical, so
+    the choice was decided by a filename. That is not a detail. Measured on
+    page 31 of the target document, the three bundled models score 0.038,
+    0.147 and 0.264 CER, and the alphabetically first one is the 0.264 —
+    4.7x worse than Tesseract on the same page, while the best is 1.5x
+    better. The manifest now says which one to use and why.
+    """
     if explicit is not None:
         return explicit
     candidates = sorted(_MODELS_DIR.glob("*.mlmodel"))
     if not candidates:
         raise FileNotFoundError(
             f"no Kraken model found in {_MODELS_DIR}/ — pass --model or see models/README.md"
+        )
+
+    from omniocr.infrastructure.model_manifest import ModelManifest
+
+    preferred = ModelManifest(_MODELS_DIR / "manifest.json").default_for("kraken")
+    if preferred is not None:
+        chosen = _MODELS_DIR / preferred.name
+        if chosen.is_file():
+            return str(chosen)
+        print(
+            f"manifest default {preferred.name} is missing from {_MODELS_DIR}/ — "
+            f"falling back to {candidates[0].name}",
+            file=sys.stderr,
         )
     return str(candidates[0])
 
@@ -422,7 +444,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--lang", default="grc", help="Tesseract language pack (default: grc)")
     run.add_argument(
-        "--model", default=None, help="Kraken .mlmodel path (default: first in models/)"
+        "--model",
+        default=None,
+        help="Kraken .mlmodel path (default: the model flagged in models/manifest.json)",
     )
     run.add_argument(
         "--max-pages",

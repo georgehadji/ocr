@@ -404,15 +404,45 @@ def test_redis_job_store_round_trips_document() -> None:
 
 
 def test_redis_job_store_ping_reports_unreachable_server() -> None:
-    """RedisJobStore.ping() returns False when no Redis server is reachable."""
+    """RedisJobStore.ping() returns False rather than raising when Redis is down.
+
+    The connection failure is injected instead of relying on a real port.
+    This previously pointed at the default localhost:6379 and so asserted the
+    *absence* of a service: it passed only on a machine with no Redis running,
+    and this project's own ``editions/cloud/orchestration/docker-compose.yml``
+    starts one. It failed the moment a developer had Redis up, which says
+    nothing about ``ping()``. Aiming at a closed port instead is no better on
+    Windows, where an unreachable port stalls on SYN retries rather than
+    refusing.
+    """
     pytest.importorskip("redis")
 
     from omniocr.infrastructure.jobs import RedisJobStore
 
-    # The default localhost:6379 has no server in the test environment, so
-    # ping() must report unreachable (False) rather than raise.
     store = RedisJobStore("redis://localhost:6379/0")
+
+    def _unreachable() -> bool:
+        raise ConnectionError("Error 111 connecting to localhost:6379")
+
+    store._redis.ping = _unreachable  # type: ignore[method-assign]
+
     assert store.ping() is False
+
+
+def test_redis_job_store_ping_reports_a_reachable_server() -> None:
+    """The other half: ``ping()`` must say True when the server answers.
+
+    Without this, a ``ping()`` hardcoded to ``return False`` would pass the
+    unreachable test above and look correct.
+    """
+    pytest.importorskip("redis")
+
+    from omniocr.infrastructure.jobs import RedisJobStore
+
+    store = RedisJobStore("redis://localhost:6379/0")
+    store._redis.ping = lambda: True  # type: ignore[method-assign]
+
+    assert store.ping() is True
 
 
 def test_settings_loads_redis_url_from_env() -> None:
