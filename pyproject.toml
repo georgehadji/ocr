@@ -65,6 +65,12 @@ line-length = 100
 omit = ["*/infrastructure/htr/*"]
 
 [tool.mypy]
+# Comma-separated on purpose. This lived in CI as MYPYPATH="packages/omniocr/src:."
+# which is a POSIX path list: on Windows the separator is ';', so the whole
+# string read as one nonexistent directory, `omniocr` stopped resolving, and
+# --ignore-missing-imports quietly turned IEvaluator into Any — 2 errors on the
+# windows legs only. mypy splits this field on commas on every platform.
+mypy_path = "packages/omniocr/src,."
 python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true

@@ -39,12 +39,12 @@ jobs:
       - name: Check strict typing (core)
         run: mypy --strict --ignore-missing-imports --python-version 3.11 packages/omniocr/src
       # Separate invocation: the editions are sibling top-level packages, so
-      # they need --explicit-package-bases and the core src on MYPYPATH to
-      # resolve `editions.*` and `omniocr.*` in the same run.
+      # they need --explicit-package-bases to resolve `editions.*` and
+      # `omniocr.*` in the same run. The search path itself now lives in
+      # pyproject's mypy_path — as an env var it had to be spelled with a
+      # platform-specific separator, and the POSIX one broke Windows.
       - name: Check strict typing (editions, scripts)
         run: mypy --strict --ignore-missing-imports --python-version 3.11 --explicit-package-bases editions scripts
-        env:
-          MYPYPATH: packages/omniocr/src:.
       - name: Check license isolation
         run: python scripts/check_license_isolation.py
       - name: Check architectural layering
