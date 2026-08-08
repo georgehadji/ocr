@@ -33,8 +33,8 @@ class TestTrainingSample:
 
 
 class TestModelCandidate:
-    def test_valid_candidate(self) -> None:
-        path = Path("/tmp/test_model.mlmodel")
+    def test_valid_candidate(self, tmp_path: Path) -> None:
+        path = tmp_path / "test_model.mlmodel"
         path.touch()
         mc = ModelCandidate(
             path=path,
@@ -43,7 +43,6 @@ class TestModelCandidate:
             run_id="run-1",
         )
         assert mc.model_hash == "a" * 64
-        path.unlink()
 
     def test_nonexistent_path_raises(self) -> None:
         with pytest.raises(ValueError, match="model path does not exist"):
@@ -79,9 +78,9 @@ class TestEvaluationReport:
 
 
 class TestTypeStateTransition:
-    def test_candidate_not_promotable_directly(self) -> None:
+    def test_candidate_not_promotable_directly(self, tmp_path: Path) -> None:
         """ModelCandidate cannot be used as PromotedModel without a policy decision."""
-        path = Path("/tmp/cand.mlmodel")
+        path = tmp_path / "cand.mlmodel"
         path.touch()
         mc = ModelCandidate(
             path=path,
@@ -90,4 +89,3 @@ class TestTypeStateTransition:
             run_id="run-1",
         )
         assert not isinstance(mc, PromotedModel)
-        path.unlink()
