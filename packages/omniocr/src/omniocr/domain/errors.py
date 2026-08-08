@@ -19,3 +19,15 @@ class LayoutError(PipelineError):
 
 class ExportError(PipelineError):
     pass
+
+
+class TrainingError(PipelineError):
+    """Base class for training pipeline errors."""
+
+
+class PromotionRefused(TrainingError):
+    """A model candidate did not meet the promotion criteria."""
+
+
+class CorrectionStoreError(TrainingError):
+    """Persistence failure in the corrections store."""

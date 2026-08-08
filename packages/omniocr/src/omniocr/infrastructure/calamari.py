@@ -10,7 +10,7 @@ calamari_ocr in a separate environment or as a subprocess dependency.
 
 from __future__ import annotations
 
-import subprocess
+import subprocess  # nosec B404 - argv list, no shell, isolation is the point (BUILD_PLAN §4.8)
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,19 +55,19 @@ class CalamariEngine(IOCREngine):
         self, page: RawPage, context: TenantContext
     ) -> Result[Sequence[OCRBlock], EngineError]:
         try:
-            import glob
-
             with tempfile.TemporaryDirectory() as tmpdir:
                 image_path = Path(tmpdir) / "page.png"
                 image_path.write_bytes(page.content)
 
                 cmd = [
                     "calamari-predict",
-                    "--files", str(image_path),
-                    "--checkpoint", self._model_glob,
+                    "--files",
+                    str(image_path),
+                    "--checkpoint",
+                    self._model_glob,
                     *self._args,
                 ]
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603 - argv list, no shell
                     cmd,
                     capture_output=True,
                     text=True,
@@ -95,9 +95,7 @@ class CalamariEngine(IOCREngine):
         except Exception as exc:
             return Err(EngineError(f"Calamari extraction failed: {exc}"))
 
-    def _parse_output(
-        self, output: str, page_width: int, page_height: int
-    ) -> list[OCRBlock]:
+    def _parse_output(self, output: str, page_width: int, page_height: int) -> list[OCRBlock]:
         """Convert Calamari JSON output into immutable domain blocks."""
         import json
 

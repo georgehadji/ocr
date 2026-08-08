@@ -1,3 +1,15 @@
+from omniocr.domain.corrections import Correction, GroundTruthLine
+from omniocr.domain.corpus import CorpusPage, DEFAULT_RATIOS, SplitName, SplitRatios
+from omniocr.domain.errors import (
+    CorrectionStoreError,
+    EngineError,
+    ExportError,
+    IngestError,
+    LayoutError,
+    PipelineError,
+    PromotionRefused,
+    TrainingError,
+)
 from omniocr.domain.models import (
     BBox,
     Confidence,
@@ -16,24 +28,50 @@ from omniocr.domain.models import (
     TenantContext,
 )
 from omniocr.domain.result import Err, Ok, Result
+from omniocr.domain.training import (
+    EvaluationReport,
+    ModelCandidate,
+    PromotedModel,
+    TrainingRun,
+    TrainingSample,
+)
 
 __all__ = [
     "BBox",
     "Confidence",
+    "Correction",
+    "CorrectionStoreError",
+    "CorpusPage",
+    "DEFAULT_RATIOS",
     "DocumentPage",
     "DocumentStructure",
+    "EngineError",
     "EngineRun",
     "Err",
+    "EvaluationReport",
+    "ExportError",
+    "GroundTruthLine",
+    "IngestError",
+    "LayoutError",
+    "ModelCandidate",
     "ModelRef",
     "OCRBlock",
     "OCRLine",
     "OCRParagraph",
     "Ok",
     "PageFailure",
+    "PipelineError",
     "PipelineEvent",
+    "PromotedModel",
+    "PromotionRefused",
     "RegionType",
     "Result",
     "Script",
+    "SplitName",
+    "SplitRatios",
     "Suggestion",
     "TenantContext",
+    "TrainingError",
+    "TrainingRun",
+    "TrainingSample",
 ]

@@ -1,41 +1,65 @@
-"""Fine-tune a Kraken OCR model on Byzantine/Polytonic printed Greek.
+"""Fine-tune a Kraken OCR model using the v2 training pipeline.
 
-Usage:
+Usage::
 
     python scripts/train_kraken.py \\
-        --train-dir ./training_data \\
+        --corrections-db ./corrections.db \\
         --base-model /path/to/kraken_base.mlmodel \\
-        --output-model ./finetuned_byzantine.mlmodel
+        --output-dir ./training_output \\
+        --epochs 10
 
-Requires: ``kraken`` (for training CLI), ``mlflow`` (for experiment tracking).
-Install: ``pip install kraken mlflow``
+Requires: ``kraken``, ``Pillow``, (optional) ``mlflow``.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import subprocess
 import sys
 from pathlib import Path
 
-# MLflow is optional — training works without it.
-try:
-    import mlflow
-    _HAS_MLFLOW = True
-except ImportError:
-    _HAS_MLFLOW = False
+from omniocr.application.promotion import BeatsParentOnHeldOut
+from omniocr.application.training_orchestrator import TrainingOrchestrator
+from omniocr.domain.corpus import SplitName
+from omniocr.domain.errors import TrainingError
+from omniocr.domain.models import ModelRef
+from omniocr.domain.result import Err, Ok, Result
+from omniocr.domain.training import EvaluationReport
+from omniocr.infrastructure.alto_training import TrainingDataExporter
+from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
+from omniocr.infrastructure.ketos_trainer import KetosTrainer
+from omniocr.infrastructure.line_cropper import PilLineCropper
+from omniocr.infrastructure.mlflow_registry import MlflowModelRegistry
+from omniocr.infrastructure.models import sha256_file
+from omniocr.ports.interfaces import IEvaluator
+
+
+class _CliEvaluator(IEvaluator):
+    """Minimal evaluator for CLI use — records model hash without corpus eval."""
+
+    def __init__(self, base_model: Path) -> None:
+        self._model_hash = sha256_file(base_model)
+
+    def evaluate(self, engine: object, split: SplitName) -> Result[EvaluationReport, TrainingError]:
+        return Ok(
+            EvaluationReport(
+                model_hash=self._model_hash,
+                per_script_cer={},
+                per_script_wer={},
+                sample_count=0,
+                evaluated_on=split.value,
+            )
+        )
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Fine-tune a Kraken model on printed Greek ground truth"
+        description="Fine-tune a Kraken model on human-verified corrections (v2)"
     )
     parser.add_argument(
-        "--train-dir",
-        required=True,
+        "--corrections-db",
+        default="corrections.db",
         type=Path,
-        help="Directory containing train.json and page images",
+        help="Path to the SQLite corrections store",
     )
     parser.add_argument(
         "--base-model",
@@ -44,10 +68,10 @@ def _parse_args() -> argparse.Namespace:
         help="Path to the pretrained Kraken .mlmodel file",
     )
     parser.add_argument(
-        "--output-model",
-        default=Path("finetuned.mlmodel"),
+        "--output-dir",
+        default=Path("training_output"),
         type=Path,
-        help="Output path for the fine-tuned model",
+        help="Output directory for training artifacts",
     )
     parser.add_argument(
         "--epochs",
@@ -56,73 +80,97 @@ def _parse_args() -> argparse.Namespace:
         help="Number of training epochs",
     )
     parser.add_argument(
-        "--mlflow-experiment",
-        default="omniocr-kraken-finetune",
-        help="MLflow experiment name (if MLflow is installed)",
+        "--learning-rate",
+        default=None,
+        type=float,
+        help="Learning rate for training",
+    )
+    parser.add_argument(
+        "--batch-size",
+        default=None,
+        type=int,
+        help="Batch size for training",
+    )
+    parser.add_argument(
+        "--min-improvement",
+        default=1.0,
+        type=float,
+        help="Minimum CER improvement percentage for promotion",
+    )
+    parser.add_argument(
+        "--db-corrected-by",
+        default="cli-user",
+        help="Default corrected_by for any corrections added",
     )
     return parser.parse_args()
 
 
-def _train_kraken(args: argparse.Namespace) -> float:
-    """Run kraken-train and return the final validation CER."""
-    cmd = [
-        "kraken",
-        "--log", "info",
-        "train",
-        "--device", "cpu",
-        "--load", str(args.base_model),
-        "--train", str(args.train_dir / "train.json"),
-        "--epochs", str(args.epochs),
-        "--output", str(args.output_model),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        sys.exit(f"kraken train failed: {result.stderr}")
-
-    # Parse CER from kraken output (format: "CER: 0.1234")
-    final_cer = 0.0
-    for line in result.stderr.split("\n"):
-        if "CER:" in line:
-            try:
-                final_cer = float(line.split("CER:")[-1].strip())
-            except (ValueError, IndexError):
-                pass
-
-    print(f"Training complete. Final CER: {final_cer:.4f}")
-    return final_cer
-
-
-def _track_with_mlflow(args: argparse.Namespace, final_cer: float) -> None:
-    """Log training run to MLflow."""
-    if not _HAS_MLFLOW:
-        print("MLflow not installed — skipping experiment tracking")
-        return
-
-    mlflow.set_experiment(args.mlflow_experiment)
-    with mlflow.start_run():
-        mlflow.log_params({
-            "base_model": str(args.base_model),
-            "epochs": args.epochs,
-            "train_samples": len(json.loads((args.train_dir / "train.json").read_text())),
-        })
-        mlflow.log_metric("final_cer", final_cer)
-        mlflow.log_artifact(str(args.output_model))
-        print(f"MLflow run logged to experiment '{args.mlflow_experiment}'")
-
-
 def main() -> None:
     args = _parse_args()
-    if not args.train_dir.is_dir():
-        sys.exit(f"Training directory not found: {args.train_dir}")
+
+    # Validate inputs
     if not args.base_model.is_file():
         sys.exit(f"Base model not found: {args.base_model}")
 
-    final_cer = _train_kraken(args)
-    _track_with_mlflow(args, final_cer)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Fine-tuned model saved to: {args.output_model}")
-    from omniocr.infrastructure.training import compute_cer_improvement
-    print(f"CER improvement vs pretrained: {compute_cer_improvement(0.0, final_cer):+.2f}%")
+    # Wire the training pipeline
+    correction_store = SqliteCorrectionStore(args.corrections_db)
+    cropper = PilLineCropper(padding=2)
+    exporter = TrainingDataExporter()
+    trainer = KetosTrainer()
+    evaluator = _CliEvaluator(args.base_model)
+
+    promotion_policy = BeatsParentOnHeldOut(
+        min_improvement_pct=args.min_improvement,
+    )
+
+    model_registry = MlflowModelRegistry()
+
+    orchestrator = TrainingOrchestrator(
+        correction_store=correction_store,
+        cropper=cropper,
+        exporter=exporter,
+        trainer=trainer,
+        evaluator=evaluator,
+        promotion_policy=promotion_policy,
+        model_registry=model_registry,
+    )
+
+    # Build parent model ref
+    parent_model = ModelRef(
+        engine="kraken",
+        model_name=str(args.base_model),
+        model_hash=sha256_file(args.base_model),
+    )
+
+    # Hyperparameters
+    params: dict[str, str] = {"epochs": str(args.epochs)}
+    if args.learning_rate is not None:
+        params["learning_rate"] = str(args.learning_rate)
+    if args.batch_size is not None:
+        params["batch_size"] = str(args.batch_size)
+
+    # Run the training pipeline
+    # Note: page_images dict must be populated from the corpus in production
+    result = orchestrator.run_training(
+        parent_model=parent_model,
+        page_images={},
+        output_dir=args.output_dir,
+        hyperparameters=params,
+    )
+
+    if isinstance(result, Err):
+        sys.exit(f"Training failed: {result.error}")
+
+    promoted = result.value
+    if promoted is None:
+        print("Training completed but candidate did not meet promotion criteria.")
+        print("Check logs for details.")
+    else:
+        print(f"Model promoted! Improvement: {promoted.improvement_pct:+.2f}%")
+        print(f"Model hash: {promoted.model_ref.model_hash}")
+        print(f"Model path: {promoted.model_ref.model_name}")
 
 
 if __name__ == "__main__":

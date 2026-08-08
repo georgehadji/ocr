@@ -18,5 +18,6 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-# Import the worker function so RQ can discover it.
-from editions.server.composition import run_ocr_job  # noqa: F401
+# Import the worker function so RQ can discover it. E402 is unavoidable here:
+# the import only resolves after the sys.path insert above.
+from editions.server.composition import run_ocr_job  # noqa: E402,F401

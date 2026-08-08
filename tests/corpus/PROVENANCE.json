@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "Provenance and tier for every corpus fixture. A fixture with no entry here",
+    "is rejected by tests/test_corpus_provenance.py.",
+    "",
+    "tier 'synthetic' — machine-rendered from a known string. Proves the harness",
+    "computes CER and that an engine reads Greek at all. MUST NOT back an accuracy",
+    "claim: the render has no scan noise, no historical typeface, no skew, and its",
+    "ground truth is the input string rather than a human transcription.",
+    "",
+    "tier 'scan' — a real page image with a human diplomatic transcription.",
+    "The only tier accuracy baselines may be computed from. Requires 'source',",
+    "'licence', and 'transcribed_by'."
+  ],
+  "fixtures": {
+    "modern-1": {
+      "tier": "synthetic",
+      "script": "modern",
+      "generated_by": "scripts/generate_fixtures.py",
+      "typeface": "Arial",
+      "note": "Modern sans-serif. Out of domain for the committed Kraken models, which are trained on 19c Porson/German-serif print."
+    },
+    "polytonic-1": {
+      "tier": "synthetic",
+      "script": "polytonic",
+      "generated_by": "scripts/generate_fixtures.py",
+      "typeface": "Arial",
+      "note": "Committed Tesseract baseline is CER 0.0 — a font round-trip, not a recognition result."
+    },
+    "ancient-1": {
+      "tier": "synthetic",
+      "script": "ancient",
+      "generated_by": "scripts/generate_fixtures.py",
+      "typeface": "Arial"
+    },
+    "byzantine-1": {
+      "tier": "synthetic",
+      "script": "byzantine",
+      "generated_by": "scripts/generate_fixtures.py",
+      "typeface": "Arial",
+      "note": "Named 'byzantine' but rendered in Arial — no Byzantine typeface, no ligatures. Does not exercise what the name implies."
+    }
+  }
+}

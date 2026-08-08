@@ -10,15 +10,17 @@ Celery worker: celery -A editions.cloud.celery_app worker --loglevel=info
 
 from __future__ import annotations
 
-import json
+import base64
 import uuid
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import Response
 
+from omniocr.domain.result import Err
 from omniocr.infrastructure.config import Settings
 from omniocr.infrastructure.logging import configure_logging
 
@@ -38,11 +40,13 @@ app.add_middleware(
 )
 
 settings = Settings.from_env()
-_jobs: dict[str, dict] = {}
+# ponytail: in-process job index — a second uvicorn worker will not see these.
+# Move to Redis if the Cloud edition is ever run with more than one API process.
+_jobs: dict[str, dict[str, Any]] = {}
 
 
 @app.get("/health")
-def health() -> dict:
+def health() -> dict[str, Any]:
     return {"status": "ok", "app": settings.app_name, "tenant": "multi"}
 
 
@@ -51,7 +55,7 @@ async def submit_ocr(
     file: UploadFile = File(...),
     job_id: str | None = Form(None),
     tenant_id: str | None = Form("default"),
-):
+) -> dict[str, Any]:
     """Submit a document for OCR processing.
 
     Multi-tenant: each ``tenant_id`` gets isolated job tracking. The
@@ -69,7 +73,8 @@ async def submit_ocr(
     try:
         from editions.cloud.tasks import process_ocr
 
-        task = process_ocr.delay(data, settings)
+        # base64, not raw bytes: the Celery app serializes tasks as JSON.
+        task = process_ocr.delay(base64.b64encode(data).decode("ascii"))
         _jobs[job_key] = {
             "status": "queued",
             "filename": file.filename,
@@ -78,54 +83,69 @@ async def submit_ocr(
         }
     except ImportError:
         # Fallback: synchronous processing (for development without Celery)
+        from omniocr.domain.models import TenantContext
+
         from editions.cloud.composition import create_cloud_pipeline
 
         pipeline = create_cloud_pipeline(settings)
-        from omniocr.domain.models import TenantContext
 
-        ctx = TenantContext(organization_id=tenant_id or "default", user_id="cloud", subscription_tier="cloud")
+        ctx = TenantContext(
+            organization_id=tenant_id or "default", user_id="cloud", subscription_tier="cloud"
+        )
         run_result = pipeline.run(data, ctx)
-        if run_result.is_err():
+        if isinstance(run_result, Err):
             _jobs[job_key] = {"status": "failed", "error": str(run_result.error)}
             return {"job_id": job_uid, "status": "failed"}
 
         export_result = pipeline.export(run_result.value, ctx)
-        result_bytes = export_result.value if export_result.is_ok() else b""
+        # A failed export is a failed job. This previously substituted b"",
+        # wrote an empty .md, and still reported "completed" — the caller
+        # downloaded an empty file with no indication anything went wrong.
+        if isinstance(export_result, Err):
+            _jobs[job_key] = {"status": "failed", "error": str(export_result.error)}
+            return {"job_id": job_uid, "status": "failed"}
 
         result_path = Path("cloud_results") / f"{job_uid}.md"
         result_path.parent.mkdir(parents=True, exist_ok=True)
-        result_path.write_bytes(result_bytes)
+        result_path.write_bytes(export_result.value)
         _jobs[job_key] = {"status": "completed", "filename": file.filename, "tenant_id": tenant_id}
 
     return {"job_id": job_uid, "status": _jobs[job_key]["status"]}
 
 
 @app.get("/ocr/status/{job_id}")
-def job_status(job_id: str, tenant_id: str | None = "default") -> dict:
+def job_status(job_id: str, tenant_id: str | None = "default") -> dict[str, Any]:
     """Poll the status of an OCR job (scoped to tenant)."""
     job_key = f"{tenant_id}:{job_id}"
     job = _jobs.get(job_key)
     if job is None:
-        # Check Celery result backend
+        raise HTTPException(404, "Job not found")
+
+    # A queued job's live state lives in the Celery backend, not in `_jobs`,
+    # which is only ever updated at submit time. This previously ran solely in
+    # the `job is None` branch and picked `next(j["task_id"] for j in
+    # _jobs.values())` — an arbitrary *other* job's task — so it reported a
+    # stranger's status under this job's id, and never ran for a job that
+    # existed.
+    task_id = job.get("task_id")
+    if task_id:
         try:
             from celery.result import AsyncResult
+
             from editions.cloud.celery_app import app as celery_app
 
-            task_id = next(
-                (j["task_id"] for j in _jobs.values() if j.get("task_id")),
-                None,
-            )
-            if task_id:
-                async_result = AsyncResult(task_id, app=celery_app)
-                return {"job_id": job_id, "task_status": async_result.status, "tenant_id": tenant_id}
+            return {
+                "job_id": job_id,
+                **job,
+                "task_status": AsyncResult(task_id, app=celery_app).status,
+            }
         except ImportError:
             pass
-        raise HTTPException(404, "Job not found")
     return {"job_id": job_id, **job}
 
 
 @app.get("/ocr/result/{job_id}")
-def job_result(job_id: str, tenant_id: str | None = "default"):
+def job_result(job_id: str, tenant_id: str | None = "default") -> Response:
     """Download the OCR result for a completed job."""
     job_key = f"{tenant_id}:{job_id}"
     job = _jobs.get(job_key)

@@ -7,8 +7,13 @@ name = "omniocr"
 version = "0.1.0"
 description = "OmniOCR core library"
 requires-python = ">=3.11"
-readme = "docs/BUILD_PLAN.md"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = []
+
+[project.scripts]
+omniocr = "omniocr.interfaces.cli:main"
 
 [project.optional-dependencies]
 desktop = []
@@ -21,7 +26,20 @@ vlm = []
 calamari = ["calamari-ocr>=2.0"]
 cloud = ["fastapi>=0.115", "uvicorn[standard]>=0.32", "celery[redis]>=5.6", "redis>=5.0", "python-multipart>=0.0.18"]
 server = ["fastapi>=0.115", "uvicorn[standard]>=0.32", "rq>=2.0", "redis>=5.0", "python-multipart>=0.0.18"]
-dev = ["pytest", "pytest-cov", "ruff", "mypy", "pre-commit", "build", "bandit", "pip-audit", "structlog>=26.0"]
+# Pillow and hypothesis are imported directly by the test suite, so they
+# belong here even though Pillow is also a runtime dep of the tesseract and
+# training extras: `pip install -e .[dev]` has to be enough to run `pytest`.
+# It was not — CI installs only [dev,docx] and four test modules failed to
+# import, while local runs passed on a venv that happened to carry both.
+# ruff is capped deliberately. It was unpinned, so CI resolved whatever was
+# newest: 0.16.2 widened the default rule set (I001, B008, BLE001, TRY004) and
+# reported 174 errors against code that 0.15.20 passes clean — a red build from
+# an upstream release, with no commit behind it. Adopting those rules is a
+# separate, deliberate change: B008 fires on FastAPI's own `File(...)`/`Form(...)`
+# argument defaults, so it needs configuration, not edits. Raise the cap when
+# the new rules have been triaged.
+dev = ["pytest", "pytest-cov", "ruff>=0.15.20,<0.16", "mypy", "pre-commit", "build", "bandit", "pip-audit", "structlog>=26.0", "hypothesis>=6.0", "Pillow>=10.0", "httpx>=0.27"]
+training = ["kraken>=6.0", "mlflow>=2.20", "Pillow>=10.0"]
 
 [tool.setuptools]
 package-dir = {"" = "packages/omniocr/src"}
@@ -32,13 +50,46 @@ where = ["packages/omniocr/src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "slow: marks tests as slow (Kraken model inference, end-to-end training); run with --runslow or pytest -m slow",
+]
 
 [tool.ruff]
 line-length = 100
 
+[tool.coverage.run]
+# Deliberate empty scaffold (docs/ARCHITECTURE.md locked scope: manuscript
+# HTR is out of scope until manuscript data is committed). There is no
+# behavior here to test — omit it rather than write a test that asserts
+# nothing, or count it as a real gap it isn't.
+omit = ["*/infrastructure/htr/*"]
+
 [tool.mypy]
+# Comma-separated on purpose. This lived in CI as MYPYPATH="packages/omniocr/src:."
+# which is a POSIX path list: on Windows the separator is ';', so the whole
+# string read as one nonexistent directory, `omniocr` stopped resolving, and
+# --ignore-missing-imports quietly turned IEvaluator into Any — 2 errors on the
+# windows legs only. mypy splits this field on commas on every platform.
+mypy_path = "packages/omniocr/src,."
 python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 no_implicit_optional = true
+
+# python-docx ships no inline types and no types-python-docx stub package
+# exists on PyPI (checked 2026-08-05). Its calls are genuinely untyped, not
+# a project defect — scope the exception to the one module that touches it
+# rather than loosening the strict gate globally.
+[[tool.mypy.overrides]]
+module = "omniocr.infrastructure.exporters"
+disallow_untyped_calls = false
+
+# redis-py ships py.typed, but `from_url` takes an unannotated `**kwargs`, so
+# --strict counts the call as untyped. The return is typed (`-> "Redis"`), so
+# nothing downstream loses checking. This only became visible once CI started
+# installing the cloud/server extras; before that redis was absent and
+# --ignore-missing-imports quietly typed the whole call as Any.
+[[tool.mypy.overrides]]
+module = "omniocr.infrastructure.jobs"
+disallow_untyped_calls = false

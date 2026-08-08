@@ -34,3 +34,10 @@
 **Context:** Desktop, Server, and Cloud editions need different progress-reporting mechanisms.
 **Decision:** `IEventBus` protocol with synchronous `InMemoryEventBus` implementation. Pipeline publishes `page_completed`/`page_failed` events with timing. Editions subscribe as needed.
 **Consequences:** Desktop polls synchronously. Server/Cloud use event-driven updates. No edition-specific code in the pipeline.
+
+## ADR-006: ThreadPoolExecutor for Page-Level Parallelism
+
+**Status:** Accepted
+**Context:** Sequential page processing bottlenecks multi-hundred-page documents.
+**Decision:** Optional `max_workers` parameter enables `ThreadPoolExecutor`-based page-level parallelism. Tesseract and Kraken release the GIL during inference, achieving real parallelism with threads.
+**Consequences:** Wall-clock time scales with worker count. Default `None` preserves synchronous behavior. Results always reassembled in page-number order. See `docs/adr/003-threadpoolexecutor-parallelism.md` for full details.

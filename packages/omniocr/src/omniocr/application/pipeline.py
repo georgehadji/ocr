@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import logging
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from time import perf_counter
-import unicodedata
-from typing import Iterator, Mapping, Sequence
+from typing import Iterable, Iterator, Protocol, Sequence, cast
 from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.domain.errors import EngineError, ExportError, IngestError, LayoutError, PipelineError
 from omniocr.domain.models import (
@@ -20,14 +21,11 @@ from omniocr.domain.models import (
     TenantContext,
 )
 from omniocr.domain.result import Err, Ok, Result
-from omniocr.infrastructure.lexicon import SetLexicon
-from omniocr.infrastructure.logging import get_logger
 from omniocr.ports.interfaces import (
     IEventBus,
     IExporter,
     IImageProcessor,
     IJobStore,
-    ILexicon,
     ILayoutAnalyzer,
     IOCREngine,
     IPageSource,
@@ -36,6 +34,56 @@ from omniocr.ports.interfaces import (
     IRouter,
     RawPage,
 )
+
+__all__ = [
+    "FirstCandidateReconciler",
+    "InMemoryPage",
+    "NullPageSource",
+    "NullRouter",
+    "PassthroughImageProcessor",
+    "PipelineOrchestrator",
+    "SingleLineLayoutAnalyzer",
+    # Re-exported for composition roots and edition UIs.
+    "SuggestOnlyCorrector",
+    "build_document",
+]
+
+
+def _get_logger(name: str) -> _StructuredLogger:
+    """Return a structlog logger if available, else a stdlib-backed adapter.
+
+    ``structlog`` is a dev-only extra, not a core dependency, so a base
+    install must not crash when structured keyword fields (``page=``,
+    ``duration_ms=``) are passed to log calls.
+    """
+    try:
+        import structlog
+
+        return cast("_StructuredLogger", structlog.get_logger(name))
+    except ImportError:
+        return _StdlibLoggerAdapter(logging.getLogger(name))
+
+
+class _StructuredLogger(Protocol):
+    def info(self, event: str, **kwargs: object) -> None: ...
+    def warning(self, event: str, **kwargs: object) -> None: ...
+    def error(self, event: str, **kwargs: object) -> None: ...
+
+
+class _StdlibLoggerAdapter:
+    """Adapts stdlib ``logging.Logger`` to accept structlog-style keyword fields."""
+
+    def __init__(self, logger: logging.Logger) -> None:
+        self._logger = logger
+
+    def info(self, event: str, **kwargs: object) -> None:
+        self._logger.info(event, extra=kwargs)
+
+    def error(self, event: str, **kwargs: object) -> None:
+        self._logger.error(event, extra=kwargs)
+
+    def warning(self, event: str, **kwargs: object) -> None:
+        self._logger.warning(event, extra=kwargs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +130,21 @@ class NullRouter:
         return (self._engine,) if self._engine is not None else ()
 
 
+class _DefaultTextExporter:
+    """Minimal ``IExporter`` default: one line per recognized segment.
+
+    Kept local (not imported from ``infrastructure``) so ``application``
+    does not depend on a concrete adapter package. Real editions inject a
+    richer exporter (Markdown/DOCX/PDF/ALTO) via composition.
+    """
+
+    def export(
+        self, document: DocumentStructure, context: TenantContext
+    ) -> Result[bytes, ExportError]:
+        lines = [line.text for page in document.pages for line in page.lines]
+        return Ok("\n".join(lines).encode("utf-8"))
+
+
 class FirstCandidateReconciler:
     def reconcile(
         self, candidates: Sequence[OCRLine], context: TenantContext
@@ -89,16 +152,6 @@ class FirstCandidateReconciler:
         if not candidates:
             return Err(EngineError("no OCR candidates available"))
         return Ok(candidates[0])
-
-
-
-
-class PlainTextExporter:
-    def export(
-        self, document: DocumentStructure, context: TenantContext
-    ) -> Result[bytes, ExportError]:
-        lines = [line.text for page in document.pages for line in page.lines]
-        return Ok("\n".join(lines).encode("utf-8"))
 
 
 def build_document(
@@ -120,6 +173,8 @@ class PipelineOrchestrator:
         exporter: IExporter | None = None,
         job_store: IJobStore | None = None,
         event_bus: IEventBus | None = None,
+        max_workers: int | None = None,
+        checkpoint_every: int = 25,
     ) -> None:
         self._page_source = page_source or NullPageSource()
         self._image_processor = image_processor or PassthroughImageProcessor()
@@ -127,10 +182,14 @@ class PipelineOrchestrator:
         self._router = router or NullRouter()
         self._reconciler = reconciler or FirstCandidateReconciler()
         self._post_corrector = post_corrector or SuggestOnlyCorrector()
-        self._exporter = exporter or PlainTextExporter()
+        self._exporter = exporter or _DefaultTextExporter()
         self._job_store = job_store
         self._event_bus = event_bus
-        self._log = get_logger("pipeline")
+        self._max_workers = max_workers
+        if checkpoint_every < 1:
+            raise ValueError("checkpoint_every must be >= 1")
+        self._checkpoint_every = checkpoint_every
+        self._log = _get_logger("omniocr.pipeline")
 
     def run(
         self,
@@ -151,61 +210,161 @@ class PipelineOrchestrator:
         )
         completed_numbers = {page.number for page in pages}
         self._log.info("pipeline_start", page_count=len(pages), resume=resume_job_id is not None)
+
         try:
             page_stream = self._page_source.stream(document)
-            for raw_page in page_stream:
-                if raw_page.number in completed_numbers:
-                    continue
-                started_at = perf_counter()
+            raw_pages = list(page_stream)
+        except PipelineError as exc:
+            return Err(exc)
+
+        # Filter out already-completed pages (from checkpoint resume).
+        pending = [rp for rp in raw_pages if rp.number not in completed_numbers]
+
+        if self._max_workers is not None and self._max_workers > 1 and len(pending) > 1:
+            pages = self._run_parallel(pending, ctx, pages, checkpoint_id)
+        else:
+            pages = self._run_sequential(pending, ctx, pages, checkpoint_id)
+
+        return Ok(DocumentStructure(pages=tuple(pages)))
+
+    def _run_parallel(
+        self,
+        raw_pages: list[RawPage],
+        ctx: TenantContext,
+        pages: list[DocumentPage],
+        checkpoint_id: str | None,
+    ) -> list[DocumentPage]:
+        """Process pages concurrently with a ThreadPoolExecutor.
+
+        Results are collected in page-number order. Per-page failures are
+        isolated — a failed page produces a ``DocumentPage`` with a
+        ``PageFailure`` entry and does not abort the whole run.
+        Event-bus and job-store operations are serialized in order after
+        all pages finish to avoid threading issues in those adapters.
+        """
+        page_results: dict[int, DocumentPage] = {}
+        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+            future_to_page: dict[Future[DocumentPage], int] = {}
+            for raw_page in raw_pages:
+                future = executor.submit(self._process_page, raw_page, ctx)
+                future_to_page[future] = raw_page.number
+
+            for future in as_completed(future_to_page):
+                page_number = future_to_page[future]
                 try:
-                    page = self._process_page(raw_page, ctx)
-                except PipelineError as exc:
-                    page = DocumentPage(
-                        number=raw_page.number,
-                        width=getattr(raw_page, "width", 1),
-                        height=getattr(raw_page, "height", 1),
+                    page_results[page_number] = future.result()
+                except Exception as exc:
+                    # Map to the raw page that failed.
+                    raw = next(rp for rp in raw_pages if rp.number == page_number)
+                    page_results[page_number] = DocumentPage(
+                        number=page_number,
+                        width=getattr(raw, "width", 1),
+                        height=getattr(raw, "height", 1),
                         failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
                     )
                     if self._event_bus is not None:
                         self._event_bus.publish(
-                            PipelineEvent(
-                                "page_failed",
-                                raw_page.number,
-                                str(exc),
-                                (perf_counter() - started_at) * 1000,
-                            )
+                            PipelineEvent("page_failed", page_number, str(exc), 0.0)
                         )
-                    self._log.warning("page_failed", page=raw_page.number, error=str(exc))
-                else:
-                    duration = (perf_counter() - started_at) * 1000
-                    if self._event_bus is not None:
-                        self._event_bus.publish(
-                            PipelineEvent(
-                                "page_completed",
-                                raw_page.number,
-                                duration_ms=duration,
-                            )
-                        )
-                    self._log.info("page_completed", page=raw_page.number, duration_ms=round(duration, 1))
-                pages.append(page)
-                completed_numbers.add(raw_page.number)
+                    self._log.warning("page_failed", page=page_number, error=str(exc))
 
-                if self._job_store is not None and checkpoint_id is not None:
-                    checkpoint_result = self._job_store.checkpoint(
-                        checkpoint_id, DocumentStructure(pages=tuple(pages))
+        # Reassemble in page-number order.
+        for raw_page in raw_pages:
+            page_number = raw_page.number
+            result = page_results[page_number]
+            if self._event_bus is not None and not result.failures:
+                self._event_bus.publish(
+                    PipelineEvent("page_completed", page_number, duration_ms=0.0)
+                )
+            pages.append(result)
+            self._maybe_checkpoint(checkpoint_id, pages)
+
+        self._maybe_checkpoint(checkpoint_id, pages, force=True)
+        return pages
+
+    def _run_sequential(
+        self,
+        raw_pages: list[RawPage],
+        ctx: TenantContext,
+        pages: list[DocumentPage],
+        checkpoint_id: str | None,
+    ) -> list[DocumentPage]:
+        """Process pages one at a time in the calling thread (original path)."""
+        for raw_page in raw_pages:
+            started_at = perf_counter()
+            try:
+                page = self._process_page(raw_page, ctx)
+            except Exception as exc:
+                page = DocumentPage(
+                    number=raw_page.number,
+                    width=getattr(raw_page, "width", 1),
+                    height=getattr(raw_page, "height", 1),
+                    failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
+                )
+                if self._event_bus is not None:
+                    self._event_bus.publish(
+                        PipelineEvent(
+                            "page_failed",
+                            raw_page.number,
+                            str(exc),
+                            (perf_counter() - started_at) * 1000,
+                        )
                     )
-                    if isinstance(checkpoint_result, Err):
-                        return Err(checkpoint_result.error)
-        except PipelineError as exc:
-            return Err(exc)
+                self._log.warning("page_failed", page=raw_page.number, error=str(exc))
+            else:
+                duration = (perf_counter() - started_at) * 1000
+                if self._event_bus is not None:
+                    self._event_bus.publish(
+                        PipelineEvent(
+                            "page_completed",
+                            raw_page.number,
+                            duration_ms=duration,
+                        )
+                    )
+                self._log.info(
+                    "page_completed", page=raw_page.number, duration_ms=round(duration, 1)
+                )
+            pages.append(page)
 
-        return Ok(DocumentStructure(pages=tuple(pages)))
+            if not self._maybe_checkpoint(checkpoint_id, pages):
+                return pages  # return partial results on checkpoint failure
+
+        self._maybe_checkpoint(checkpoint_id, pages, force=True)
+        return pages
+
+    def _maybe_checkpoint(
+        self,
+        checkpoint_id: str | None,
+        pages: list[DocumentPage],
+        force: bool = False,
+    ) -> bool:
+        """Persist progress every ``checkpoint_every`` pages. Returns success.
+
+        Checkpointing serializes the whole accumulated document, so doing it
+        after every page costs O(n²) I/O over a book — worst exactly where the
+        target documents live (hundreds of pages). Batching trades at most
+        ``checkpoint_every`` pages of redone work on a crash for linear I/O.
+        ``force=True`` at the end of a run keeps the final checkpoint complete
+        regardless of where the batch boundary fell.
+        """
+        if self._job_store is None or checkpoint_id is None:
+            return True
+        if not force and len(pages) % self._checkpoint_every != 0:
+            return True
+        checkpoint_result = self._job_store.checkpoint(
+            checkpoint_id, DocumentStructure(pages=tuple(pages))
+        )
+        if isinstance(checkpoint_result, Err):
+            self._log.error("checkpoint_failed", error=str(checkpoint_result.error))
+            return False
+        return True
 
     def count_pages(self, document: bytes) -> int:
         """Return the number of pages in a document without processing them."""
         # PyMuPDF: fast page count from PDF header without streaming.
         try:
             import fitz
+
             source = fitz.open(stream=document, filetype="pdf")
             count = len(source)
             source.close()
@@ -226,30 +385,94 @@ class PipelineOrchestrator:
         ``Result`` — it yields pages as they finish so the caller can
         report progress in real time. Per-page failures are wrapped in
         ``DocumentPage`` with a ``PageFailure`` entry.
+
+        When ``max_workers > 1`` is configured, pages are collected from
+        the source, submitted to a ``ThreadPoolExecutor``, and yielded in
+        page-number order after all complete. This trades streaming
+        progress for reduced wall-clock time on multi-page documents.
+
+        Error behaviour: If the page source itself raises a
+        ``PipelineError`` (e.g. corrupt document, I/O failure), the
+        generator exits silently — no page is yielded for the failing
+        stream position. Callers that need an explicit error signal
+        should use ``run()`` instead, which returns a ``Result``.
         """
         ctx = context or TenantContext(
             organization_id="default", user_id="system", subscription_tier="desktop"
         )
+        # Only the parallel path needs every page up front, to fan out. The
+        # sequential path streams: materializing a 300-page scan here would
+        # hold every page image in memory at once and defeat the point of a
+        # page-streaming ingest, which is the whole reason this method exists.
+        parallel = self._max_workers is not None and self._max_workers > 1
         try:
-            page_stream = self._page_source.stream(document)
-            for raw_page in page_stream:
-                started_at = perf_counter()
-                try:
-                    page = self._process_page(raw_page, ctx)
-                except PipelineError as exc:
-                    page = DocumentPage(
-                        number=raw_page.number,
-                        width=getattr(raw_page, "width", 1),
-                        height=getattr(raw_page, "height", 1),
-                        failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
-                    )
-                    self._log.warning("page_failed", page=raw_page.number, error=str(exc))
-                else:
-                    duration = (perf_counter() - started_at) * 1000
-                    self._log.info("page_completed", page=raw_page.number, duration_ms=round(duration, 1))
-                yield (raw_page.number, page)
+            if not parallel:
+                yield from self._iterate_sequentially(self._page_source.stream(document), ctx)
+                return
+            raw_pages = list(self._page_source.stream(document))
         except PipelineError as exc:
             self._log.error("pipeline_failed", error=str(exc))
+            return
+
+        if len(raw_pages) > 1:
+            page_results: dict[int, DocumentPage] = {}
+            with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+                future_to_page: dict[Future[DocumentPage], int] = {}
+                for raw_page in raw_pages:
+                    future = executor.submit(self._process_page, raw_page, ctx)
+                    future_to_page[future] = raw_page.number
+
+                for future in as_completed(future_to_page):
+                    page_number = future_to_page[future]
+                    try:
+                        page_results[page_number] = future.result()
+                    except Exception as exc:
+                        raw = next(rp for rp in raw_pages if rp.number == page_number)
+                        page_results[page_number] = DocumentPage(
+                            number=page_number,
+                            width=getattr(raw, "width", 1),
+                            height=getattr(raw, "height", 1),
+                            failures=(
+                                PageFailure(error_type=type(exc).__name__, message=str(exc)),
+                            ),
+                        )
+                        self._log.warning("page_failed", page=page_number, error=str(exc))
+
+            # Yield in page-number order.
+            for raw_page in raw_pages:
+                page_number = raw_page.number
+                page = page_results[page_number]
+                self._log.info("page_completed", page=page_number, duration_ms=0.0)
+                yield (page_number, page)
+        else:
+            yield from self._iterate_sequentially(raw_pages, ctx)
+
+    def _iterate_sequentially(
+        self, raw_pages: Iterable[RawPage], ctx: TenantContext
+    ) -> Iterator[tuple[int, DocumentPage]]:
+        """Yield one processed page at a time, consuming the source lazily.
+
+        Takes an ``Iterable`` rather than a list so a generator streams through
+        untouched — one page in memory at a time regardless of document size.
+        """
+        for raw_page in raw_pages:
+            started_at = perf_counter()
+            try:
+                page = self._process_page(raw_page, ctx)
+            except PipelineError as exc:
+                page = DocumentPage(
+                    number=raw_page.number,
+                    width=getattr(raw_page, "width", 1),
+                    height=getattr(raw_page, "height", 1),
+                    failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
+                )
+                self._log.warning("page_failed", page=raw_page.number, error=str(exc))
+            else:
+                duration = (perf_counter() - started_at) * 1000
+                self._log.info(
+                    "page_completed", page=raw_page.number, duration_ms=round(duration, 1)
+                )
+            yield (raw_page.number, page)
 
     def _process_page(self, raw_page: RawPage, context: TenantContext) -> DocumentPage:
         processed = self._image_processor.process(raw_page, context)
@@ -267,31 +490,40 @@ class PipelineOrchestrator:
         page_lines: list[OCRLine] = []
         suggestions: list[Suggestion] = []
         engine_results: dict[int, Sequence[OCRBlock]] = {}
-        for segment in segment_values:
+        engine_assignments: dict[int, dict[int, list[OCRBlock]]] = {}
+        for segment_index, segment in enumerate(segment_values):
             engines = self._router.route(segment, context)
             candidate_lines: list[OCRLine] = []
             for engine in engines:
                 engine_key = id(engine)
                 if engine_key not in engine_results:
                     extracted = engine.extract(processed_page, context)
-                    engine_results[engine_key] = (
-                        extracted.value if isinstance(extracted, Ok) else ()
-                    )
-                blocks = engine_results[engine_key]
-                for block in blocks:
-                    if not self._boxes_overlap(segment.bbox, block.bbox):
-                        continue
-                    candidate_lines.append(
-                        OCRLine(
-                            id=f"{segment.id}-{block.id}",
-                            text=block.text,
-                            confidence=block.confidence,
-                            bbox=block.bbox,
-                            script=segment.script,
-                            blocks=(block,),
-                            provenance=block.provenance,
+                    if isinstance(extracted, Err):
+                        # An engine failing is survivable — the others still
+                        # vote — but it must never be silent. An ensemble that
+                        # quietly degrades to one engine looks identical to a
+                        # healthy one from the outside.
+                        engine_results[engine_key] = ()
+                        self._log.warning(
+                            "engine_failed",
+                            page=raw_page.number,
+                            engine=getattr(engine, "name", type(engine).__name__),
+                            error=str(extracted.error),
                         )
+                    else:
+                        assert isinstance(extracted, Ok)
+                        engine_results[engine_key] = extracted.value
+                    engine_assignments[engine_key] = self._assign_blocks(
+                        segment_values, engine_results[engine_key]
                     )
+                # All of an engine's blocks inside this segment belong to the
+                # SAME line, so they compose into one candidate. Emitting one
+                # candidate per block would make a line's own words compete
+                # against each other and the reconciler would keep exactly one
+                # — silently discarding the rest of the line.
+                overlapping = tuple(engine_assignments[engine_key].get(segment_index, ()))
+                if overlapping:
+                    candidate_lines.append(self._compose_line(segment, engine, overlapping))
             if not candidate_lines:
                 candidate_lines.append(segment)
             chosen = self._reconciler.reconcile(candidate_lines, context)
@@ -315,6 +547,46 @@ class PipelineOrchestrator:
         )
 
     @staticmethod
+    def _compose_line(segment: OCRLine, engine: IOCREngine, blocks: Sequence[OCRBlock]) -> OCRLine:
+        """Compose one engine's blocks within a segment into a single candidate line.
+
+        Block order is the engine's own emission order — Tesseract and Kraken
+        both emit in reading order. Re-sorting here would substitute a layout
+        heuristic for the engine's own judgement, which is an orthographic
+        decision this layer is not permitted to make.
+
+        Confidence is the mean over contributing blocks, so a line is only as
+        trustworthy as its words. Every block is retained on the line so the
+        review UI can show per-engine disagreement and exporters can emit
+        word-level boxes for the searchable-PDF text layer.
+        """
+        texts = [block.text for block in blocks if block.text]
+        confidences = [block.confidence.value for block in blocks]
+        mean_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+        return OCRLine(
+            id=f"{segment.id}-{engine.name}",
+            text=" ".join(texts),
+            confidence=Confidence(mean_confidence),
+            bbox=PipelineOrchestrator._union_bbox(blocks) or segment.bbox,
+            script=segment.script,
+            region_type=segment.region_type,
+            reading_order=segment.reading_order,
+            blocks=tuple(blocks),
+            provenance=blocks[0].provenance if blocks else None,
+        )
+
+    @staticmethod
+    def _union_bbox(blocks: Sequence[OCRBlock]) -> BBox | None:
+        """Smallest box enclosing every block, or None when there are none."""
+        if not blocks:
+            return None
+        left = min(block.bbox.x for block in blocks)
+        top = min(block.bbox.y for block in blocks)
+        right = max(block.bbox.right for block in blocks)
+        bottom = max(block.bbox.bottom for block in blocks)
+        return BBox(x=left, y=top, w=max(1, right - left), h=max(1, bottom - top))
+
+    @staticmethod
     def _boxes_overlap(first: BBox, second: BBox) -> bool:
         return (
             first.x < second.right
@@ -322,6 +594,45 @@ class PipelineOrchestrator:
             and first.y < second.bottom
             and second.y < first.bottom
         )
+
+    @staticmethod
+    def _overlap_area(first: BBox, second: BBox) -> int:
+        width = min(first.right, second.right) - max(first.x, second.x)
+        height = min(first.bottom, second.bottom) - max(first.y, second.y)
+        return width * height if width > 0 and height > 0 else 0
+
+    @classmethod
+    def _assign_blocks(
+        cls, segments: Sequence[OCRLine], blocks: Sequence[OCRBlock]
+    ) -> dict[int, list[OCRBlock]]:
+        """Assign every block to the one line it overlaps most.
+
+        A word belongs to exactly one line. Selecting by *any* non-zero
+        overlap did not enforce that: printed text lines are stacked boxes
+        whose bounds routinely graze their neighbours over ascenders and
+        descenders, so a word touching the next line by a pixel joined it too.
+
+        Measured on page 31 of the target document: **385 of 513 words (75%)
+        were claimed by more than one line** — 330 by two, 54 by three, one by
+        four. Each line therefore emitted its own words plus a slice of the
+        lines above and below, which is exactly what the first full run
+        produced: overlapping, lossy repetitions of the same sentence.
+
+        Ties keep the earliest segment, so the choice stays in reading order
+        and is deterministic. A block that overlaps nothing is dropped here —
+        the segment then has no candidate and falls back to its own text.
+        """
+        assignment: dict[int, list[OCRBlock]] = {}
+        for block in blocks:
+            best_index = -1
+            best_area = 0
+            for index, segment in enumerate(segments):
+                area = cls._overlap_area(segment.bbox, block.bbox)
+                if area > best_area:
+                    best_index, best_area = index, area
+            if best_index >= 0:
+                assignment.setdefault(best_index, []).append(block)
+        return assignment
 
     def export(
         self, document: DocumentStructure, context: TenantContext | None = None

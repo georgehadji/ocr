@@ -9,6 +9,9 @@ _DEFAULT_DESKTOP_MODE = True
 _DEFAULT_ENABLE_VLM = False
 _DEFAULT_ENABLE_CALAMARI = False
 _DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
+_DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+_DEFAULT_TESSERACT_LANGUAGE = "grc+ell+eng"
+_DEFAULT_KRAKEN_MODEL_PATH = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +21,12 @@ class Settings:
     enable_vlm: bool = _DEFAULT_ENABLE_VLM
     enable_calamari: bool = _DEFAULT_ENABLE_CALAMARI
     max_upload_bytes: int = _DEFAULT_MAX_UPLOAD_BYTES
+    redis_url: str = _DEFAULT_REDIS_URL
+    # Engine selection lives here so server/cloud editions configure recognition
+    # instead of hardcoding it. Both previously passed an empty Kraken model
+    # path, and the server passed ``app_name`` as the Tesseract language.
+    tesseract_language: str = _DEFAULT_TESSERACT_LANGUAGE
+    kraken_model_path: str = _DEFAULT_KRAKEN_MODEL_PATH
     vlm_api_key: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
@@ -25,6 +34,8 @@ class Settings:
             raise ValueError("app_name must not be empty")
         if self.max_upload_bytes <= 0:
             raise ValueError("max_upload_bytes must be positive")
+        if not self.redis_url.strip():
+            raise ValueError("redis_url must not be empty")
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Settings":
@@ -35,7 +46,14 @@ class Settings:
             desktop_mode=_env_bool(values, "OMNIOCR_DESKTOP_MODE", _DEFAULT_DESKTOP_MODE),
             enable_vlm=_env_bool(values, "OMNIOCR_ENABLE_VLM", _DEFAULT_ENABLE_VLM),
             enable_calamari=_env_bool(values, "OMNIOCR_ENABLE_CALAMARI", _DEFAULT_ENABLE_CALAMARI),
-            max_upload_bytes=_env_int(values, "OMNIOCR_MAX_UPLOAD_BYTES", _DEFAULT_MAX_UPLOAD_BYTES),
+            max_upload_bytes=_env_int(
+                values, "OMNIOCR_MAX_UPLOAD_BYTES", _DEFAULT_MAX_UPLOAD_BYTES
+            ),
+            redis_url=values.get("OMNIOCR_REDIS_URL", _DEFAULT_REDIS_URL),
+            tesseract_language=values.get(
+                "OMNIOCR_TESSERACT_LANGUAGE", _DEFAULT_TESSERACT_LANGUAGE
+            ),
+            kraken_model_path=values.get("OMNIOCR_KRAKEN_MODEL_PATH", _DEFAULT_KRAKEN_MODEL_PATH),
             vlm_api_key=values.get("OMNIOCR_VLM_API_KEY"),
         )
 

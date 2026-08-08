@@ -1,10 +1,23 @@
 from __future__ import annotations
 
-from typing import Iterator, Protocol, Sequence
+from pathlib import Path
+from typing import Iterator, Mapping, Protocol, Sequence
 
-from omniocr.domain.models import DocumentStructure, OCRBlock, OCRLine, Suggestion, TenantContext
+from omniocr.domain.corrections import Correction
+from omniocr.domain.corpus import CorpusPage, SplitName
+from omniocr.domain.errors import EngineError, ExportError, IngestError, LayoutError, TrainingError
+from omniocr.domain.models import (
+    BBox,
+    DocumentStructure,
+    ModelRef,
+    OCRBlock,
+    OCRLine,
+    Script,
+    Suggestion,
+    TenantContext,
+)
 from omniocr.domain.result import Result
-from omniocr.domain.errors import EngineError, ExportError, IngestError, LayoutError
+from omniocr.domain.training import EvaluationReport, ModelCandidate, PromotedModel, TrainingSample
 
 
 class RawPage(Protocol):
@@ -87,17 +100,80 @@ class EngineFamily(str):
     pass
 
 
+class ILineCropper(Protocol):
+    """Crop a page image to a line-level region by bounding box."""
+
+    def crop(self, page_image: bytes, bbox: BBox) -> Result[bytes, TrainingError]: ...
+
+
+class ICorrectionStore(Protocol):
+    """Append-only repository for human-verified corrections."""
+
+    def append(self, correction: Correction) -> Result[None, TrainingError]: ...
+
+    def for_document(self, document_id: str) -> Sequence[Correction]: ...
+
+    def all_accepted(self) -> Sequence[Correction]: ...
+
+
+class ITrainingDataExporter(Protocol):
+    """Export training samples into a format consumable by a trainer backend."""
+
+    def export(
+        self, samples: Sequence[TrainingSample], out: Path
+    ) -> Result[Path, TrainingError]: ...
+
+
+class ITrainer(Protocol):
+    """Train or fine-tune a model. Returns ModelCandidate, never PromotedModel."""
+
+    def train(
+        self, data: Path, parent: ModelRef, params: Mapping[str, str]
+    ) -> Result[ModelCandidate, TrainingError]: ...
+
+
+class IModelRegistry(Protocol):
+    """Registry for promoted models that the router can query."""
+
+    def register(self, model: PromotedModel) -> Result[None, TrainingError]: ...
+
+    def promoted_for_script(self, script: Script) -> PromotedModel | None: ...
+
+    def promoted_for_typeface(self, typeface: str) -> PromotedModel | None: ...
+
+
+class IEvaluator(Protocol):
+    """Evaluate an OCR engine against a held-out corpus split."""
+
+    def evaluate(
+        self, engine: IOCREngine, split: SplitName
+    ) -> Result[EvaluationReport, TrainingError]: ...
+
+
+class ICorpusRepository(Protocol):
+    """Repository over structured corpus pages."""
+
+    def pages(self, split: SplitName, script: Script | None = None) -> Sequence[CorpusPage]: ...
+
+
 __all__ = [
+    "ICorrectionStore",
+    "ICorpusRepository",
+    "IEvaluator",
     "IEventBus",
     "IExporter",
     "IImageProcessor",
     "IJobStore",
     "ILexicon",
     "ILayoutAnalyzer",
+    "ILineCropper",
+    "IModelRegistry",
     "IOCREngine",
     "IPageSource",
     "IPostCorrector",
     "IReconciler",
     "IRouter",
+    "ITrainer",
+    "ITrainingDataExporter",
     "RawPage",
 ]

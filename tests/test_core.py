@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.application.pipeline import (
     InMemoryPage,
@@ -7,7 +9,7 @@ from omniocr.application.pipeline import (
     PipelineOrchestrator,
     build_document,
 )
-from omniocr.infrastructure.lexicon import SetLexicon
+from omniocr.ports.lexicon import SetLexicon
 from omniocr.domain.models import (
     BBox,
     Confidence,
@@ -157,17 +159,12 @@ def test_suggest_only_corrector_expands_abbreviations_reversibly() -> None:
     disabled = SuggestOnlyCorrector(abbreviations={}).correct(
         line, TenantContext("org", "user", "desktop")
     )
-    default = SuggestOnlyCorrector().correct(
-        line, TenantContext("org", "user", "desktop")
-    )
+    default = SuggestOnlyCorrector().correct(line, TenantContext("org", "user", "desktop"))
 
     assert disabled.is_ok()
     assert not any(s.reason == "reversible_abbreviation_expansion" for s in disabled.value)
     assert default.is_ok()
-    assert any(
-        s.suggestion_text == "ἄνθρωπος καὶ τὰ λοιπά" and s.reversible
-        for s in default.value
-    )
+    assert any(s.suggestion_text == "ἄνθρωπος καὶ τὰ λοιπά" and s.reversible for s in default.value)
     assert line.text == source
 
 
@@ -261,7 +258,7 @@ def test_lexicons_by_script_returns_mapping() -> None:
     assert mapping[Script.PONTIAN].name == "pontian"
 
 
-def test_pipeline_checkpoints_each_completed_page() -> None:
+def test_pipeline_checkpoint_is_complete_at_end_of_run() -> None:
     class TwoPageSource:
         def stream(self, document: bytes):
             yield InMemoryPage(1, b"one", 10, 10)
@@ -279,6 +276,72 @@ def test_pipeline_checkpoints_each_completed_page() -> None:
     assert [page.width for page in checkpoint.pages] == [10, 20]
 
 
+def test_pipeline_batches_checkpoints_instead_of_writing_every_page() -> None:
+    """Checkpointing serializes the whole document, so per-page writes are O(n²).
+
+    Batching must still leave a complete final checkpoint — otherwise a resume
+    would silently lose the pages after the last batch boundary.
+    """
+
+    class TenPageSource:
+        def stream(self, document: bytes):
+            for number in range(1, 11):
+                yield InMemoryPage(number, b"x", 10, 10)
+
+    class CountingStore(InMemoryJobStore):
+        writes = 0
+
+        def checkpoint(self, job_id, document):
+            CountingStore.writes += 1
+            return super().checkpoint(job_id, document)
+
+    store = CountingStore()
+    result = PipelineOrchestrator(
+        page_source=TenPageSource(), job_store=store, checkpoint_every=5
+    ).run(b"document", job_id="job-batch")
+
+    assert result.is_ok()
+    # pages 5 and 10 hit the boundary, plus the forced final write.
+    assert CountingStore.writes == 3, f"expected 3 batched writes, got {CountingStore.writes}"
+
+    checkpoint = store.load("job-batch")
+    assert checkpoint is not None
+    assert [page.number for page in checkpoint.pages] == list(range(1, 11))
+
+
+def test_run_iteratively_consumes_the_page_source_lazily() -> None:
+    """The streaming method must not materialize the document first.
+
+    Regression: it called ``list(stream(...))`` before processing, so a
+    300-page scan held every page image in memory at once — defeating the
+    page-streaming ingest this method exists to expose.
+    """
+    produced: list[int] = []
+
+    class TrackingSource:
+        def stream(self, document: bytes):
+            for number in range(1, 6):
+                produced.append(number)
+                yield InMemoryPage(number, b"x", 10, 10)
+
+    pipeline = PipelineOrchestrator(page_source=TrackingSource())
+    stream = pipeline.run_iteratively(b"document")
+
+    first_number, _ = next(stream)
+
+    assert first_number == 1
+    assert produced == [1], f"source was drained eagerly: produced {produced}"
+
+    # Draining the rest still yields every page, in order.
+    rest = [number for number, _ in stream]
+    assert rest == [2, 3, 4, 5]
+
+
+def test_checkpoint_every_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="checkpoint_every must be >= 1"):
+        PipelineOrchestrator(checkpoint_every=0)
+
+
 def test_sqlite_job_store_round_trips_document() -> None:
     store = SQLiteJobStore(":memory:")
     original = build_document((), page_number=3, width=300, height=400)
@@ -289,6 +352,108 @@ def test_sqlite_job_store_round_trips_document() -> None:
 
     assert result.is_ok()
     assert loaded == original
+
+
+def test_redis_job_store_round_trips_document() -> None:
+    """RedisJobStore persists and reloads a checkpoint.
+
+    Uses a stub ``redis`` client in place of a live server so the JSON
+    serialization/deserialization round-trip is verified deterministically.
+    Skipped automatically if the ``redis`` package is unavailable, per
+    the implementation plan's ``pytest.importorskip`` requirement.
+    """
+    pytest.importorskip("redis")
+
+    from omniocr.infrastructure.jobs import RedisJobStore
+
+    class StubRedis:
+        """Minimal in-memory stand-in mimicking ``redis`` set/get semantics."""
+
+        def __init__(self) -> None:
+            self._data: dict[str, str] = {}
+
+        def set(self, key: str, value: str) -> None:
+            self._data[key] = value
+
+        def get(self, key: str) -> bytes | None:
+            raw = self._data.get(key)
+            return raw.encode("utf-8") if raw is not None else None
+
+    store = RedisJobStore()
+    store._redis = StubRedis()  # substitute a stub client so no live server is needed
+
+    original = build_document(
+        (
+            OCRLine(
+                id="l1", text="ἄνθρωπος", confidence=Confidence(92.0), bbox=BBox(0, 0, 100, 20)
+            ),
+            OCRLine(id="l2", text="λόγος", confidence=Confidence(88.0), bbox=BBox(0, 20, 80, 20)),
+        ),
+        page_number=1,
+        width=500,
+        height=700,
+    )
+
+    result = store.checkpoint("job-redis", original)
+    loaded = store.load("job-redis")
+
+    assert result.is_ok()
+    assert loaded is not None
+    assert loaded == original
+    assert loaded.pages[0].lines[0].text == "ἄνθρωπος"  # polytonic survives round-trip
+
+
+def test_redis_job_store_ping_reports_unreachable_server() -> None:
+    """RedisJobStore.ping() returns False rather than raising when Redis is down.
+
+    The connection failure is injected instead of relying on a real port.
+    This previously pointed at the default localhost:6379 and so asserted the
+    *absence* of a service: it passed only on a machine with no Redis running,
+    and this project's own ``editions/cloud/orchestration/docker-compose.yml``
+    starts one. It failed the moment a developer had Redis up, which says
+    nothing about ``ping()``. Aiming at a closed port instead is no better on
+    Windows, where an unreachable port stalls on SYN retries rather than
+    refusing.
+    """
+    pytest.importorskip("redis")
+
+    from omniocr.infrastructure.jobs import RedisJobStore
+
+    store = RedisJobStore("redis://localhost:6379/0")
+
+    def _unreachable() -> bool:
+        raise ConnectionError("Error 111 connecting to localhost:6379")
+
+    store._redis.ping = _unreachable  # type: ignore[method-assign]
+
+    assert store.ping() is False
+
+
+def test_redis_job_store_ping_reports_a_reachable_server() -> None:
+    """The other half: ``ping()`` must say True when the server answers.
+
+    Without this, a ``ping()`` hardcoded to ``return False`` would pass the
+    unreachable test above and look correct.
+    """
+    pytest.importorskip("redis")
+
+    from omniocr.infrastructure.jobs import RedisJobStore
+
+    store = RedisJobStore("redis://localhost:6379/0")
+    store._redis.ping = lambda: True  # type: ignore[method-assign]
+
+    assert store.ping() is True
+
+
+def test_settings_loads_redis_url_from_env() -> None:
+    """Settings reads OMNIOCR_REDIS_URL, defaulting to localhost."""
+    from omniocr.infrastructure.config import Settings
+
+    default = Settings.from_env({})
+    assert default.redis_url == "redis://localhost:6379/0"
+
+    custom = Settings.from_env({"OMNIOCR_REDIS_URL": "redis://my-broker:7000/2"})
+    assert custom.redis_url == "redis://my-broker:7000/2"
 
 
 def test_pipeline_resume_skips_completed_pages() -> None:
@@ -391,3 +556,151 @@ def test_pipeline_extracts_each_engine_once_and_assigns_blocks_to_segments() -> 
     assert result.is_ok()
     assert engine.calls == 1
     assert [line.text for line in result.value.pages[0].lines] == ["top", "bottom"]
+
+
+def test_parallel_pipeline_processes_pages_concurrently() -> None:
+    """PipelineOrchestrator with max_workers processes pages in parallel.
+
+    Verifies that all pages complete, page order is preserved, and
+    per-page failure isolation works under parallelism.
+    """
+    import threading
+    import time
+
+    seen_threads: set[int] = set()
+
+    class ThreadTrackingEngine:
+        name = "thread-tracker"
+        calls = 0
+
+        def extract(self, page, context):
+            self.calls += 1
+            seen_threads.add(threading.get_ident())
+            # Small sleep so the thread pool distributes work across workers.
+            time.sleep(0.01)
+            return Ok(
+                (
+                    OCRBlock(
+                        f"b-{page.number}",
+                        f"page-{page.number}",
+                        Confidence(90),
+                        BBox(0, 0, 10, 10),
+                    ),
+                )
+            )
+
+    engine = ThreadTrackingEngine()
+    # Create 5 pages to process in parallel.
+    raw_pages = [
+        InMemoryPage(number=i, content=f"page-{i}".encode(), width=10, height=10)
+        for i in range(1, 6)
+    ]
+
+    class FixedPageSource:
+        def stream(self, document):
+            return iter(raw_pages)
+
+    pipeline = PipelineOrchestrator(
+        page_source=FixedPageSource(),
+        router=NullRouter(engine),
+        max_workers=3,
+    )
+    result = pipeline.run(b"dummy")
+
+    assert result.is_ok()
+    doc = result.value
+    assert len(doc.pages) == 5
+    # Page order must be preserved.
+    assert [p.number for p in doc.pages] == [1, 2, 3, 4, 5]
+    assert [p.lines[0].text for p in doc.pages] == [
+        "page-1",
+        "page-2",
+        "page-3",
+        "page-4",
+        "page-5",
+    ]
+    assert engine.calls == 5
+    # With max_workers=3 and 5 pages, at least 2 threads should be used.
+    assert len(seen_threads) >= 2, f"Expected ≥2 threads, got {len(seen_threads)}"
+
+
+def test_parallel_pipeline_preserves_failure_isolation() -> None:
+    """Failed pages under parallelism produce PageFailure, not pipeline abort."""
+
+    class FailOnPage3Engine:
+        name = "selective-fail"
+
+        def extract(self, page, context):
+            if page.number == 3:
+                raise RuntimeError("simulated engine crash")
+            return Ok(
+                (
+                    OCRBlock(
+                        f"ok-{page.number}",
+                        f"text-{page.number}",
+                        Confidence(90),
+                        BBox(0, 0, 10, 10),
+                    ),
+                )
+            )
+
+    engine = FailOnPage3Engine()
+    raw_pages = [InMemoryPage(number=i, content=b"x", width=10, height=10) for i in range(1, 6)]
+
+    class FixedPageSource:
+        def stream(self, document):
+            return iter(raw_pages)
+
+    pipeline = PipelineOrchestrator(
+        page_source=FixedPageSource(),
+        router=NullRouter(engine),
+        max_workers=2,
+    )
+    result = pipeline.run(b"dummy")
+
+    assert result.is_ok()
+    doc = result.value
+    assert len(doc.pages) == 5
+    # Page 3 should have a failure.
+    page3 = doc.pages[2]  # 0-indexed
+    assert page3.number == 3
+    assert len(page3.failures) == 1
+    assert "simulated engine crash" in page3.failures[0].message
+    # Other pages should have text.
+    assert doc.pages[0].lines[0].text == "text-1"
+
+
+def test_count_pages_uses_fitz_length_for_pdf() -> None:
+    """count_pages() uses PyMuPDF's fast page count for valid PDF bytes.
+
+    The fallback streaming path should only be exercised when PyMuPDF
+    cannot determine a count (e.g. non-PDF bytes or ImportError).
+    """
+    try:
+        import fitz
+    except ImportError:
+        raise pytest.skip("PyMuPDF not installed")
+
+    # Build a minimal 3-page PDF in memory.
+    document = fitz.open()
+    for _ in range(3):
+        document.new_page(width=200, height=200)
+    pdf_bytes = document.tobytes()
+    document.close()
+
+    pipeline = PipelineOrchestrator()
+    assert pipeline.count_pages(pdf_bytes) == 3
+
+
+def test_count_pages_falls_back_to_streaming_for_non_pdf() -> None:
+    """count_pages() falls back to the page source stream for non-PDF bytes."""
+
+    class ThreePageSource:
+        def stream(self, document):
+            yield InMemoryPage(number=1, content=b"")
+            yield InMemoryPage(number=2, content=b"")
+            yield InMemoryPage(number=3, content=b"")
+
+    pipeline = PipelineOrchestrator(page_source=ThreePageSource())
+    # Non-PDF bytes: fitz.open raises TypeError, triggering the fallback.
+    assert pipeline.count_pages(b"not a pdf at all") == 3

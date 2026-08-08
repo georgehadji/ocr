@@ -13,7 +13,6 @@ To use a different OpenAI-compatible provider, pass its base URL as
 
 from __future__ import annotations
 
-import io
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
@@ -65,7 +64,15 @@ class VLMEngine(IOCREngine):
             "Return each line of text with its approximate bounding box "
             "in the format: x1,y1,x2,y2|text (one per line)."
         ),
+        max_edge_px: int = 1400,
     ) -> None:
+        # api_url is operator/env-configured, not per-request input — but a
+        # misconfigured value (file://, custom scheme) must fail at
+        # construction, not silently open something other than an HTTP API.
+        if not api_url.startswith(("http://", "https://")):
+            raise ValueError(f"VLMEngine api_url must be http(s), got: {api_url!r}")
+        if max_edge_px < 1:
+            raise ValueError("max_edge_px must be positive")
         self._api_key = api_key
         self._api_url = api_url.rstrip("/")
         self._model = model
@@ -73,24 +80,21 @@ class VLMEngine(IOCREngine):
         self._site_url = site_url
         self._site_name = site_name
         self._prompt = prompt
+        self._max_edge_px = max_edge_px
 
     def __repr__(self) -> str:
         masked = (
-            self._api_key[:8] + "..." + self._api_key[-4:]
-            if len(self._api_key) > 12 else "***"
+            self._api_key[:8] + "..." + self._api_key[-4:] if len(self._api_key) > 12 else "***"
         )
-        return (
-            f"VLMEngine(model={self._model!r}, "
-            f"api_url={self._api_url!r}, "
-            f"api_key={masked!r})"
-        )
+        return f"VLMEngine(model={self._model!r}, api_url={self._api_url!r}, api_key={masked!r})"
 
     def extract(
         self, page: RawPage, context: TenantContext
     ) -> Result[Sequence[OCRBlock], EngineError]:
         try:
-            response = self._call_api(page.content)
-            blocks = self._parse_response(response, page.width, page.height)
+            payload_bytes, scale = self._downscale(page.content)
+            response = self._call_api(payload_bytes)
+            blocks = self._parse_response(response, page.width, page.height, scale=scale)
             return Ok(tuple(blocks))
         except Exception as exc:
             return Err(EngineError(f"VLM extraction failed: {exc}"))
@@ -107,14 +111,66 @@ class VLMEngine(IOCREngine):
         only use grounded blocks as candidate text.
         """
         result = self.extract(page, context)
-        if isinstance(result, Err):
+        if not isinstance(result, Ok):
             return (), ()
         vlm_blocks = list(result.value)
         grounded, _ = self._grounding_guard.filter(vlm_blocks, engine_blocks)
         return grounded, tuple(b for b in vlm_blocks if b not in grounded)
 
+    def _downscale(self, image_bytes: bytes) -> tuple[bytes, float]:
+        """Shrink the page so the longest edge is at most ``max_edge_px``.
+
+        Returns ``(image_bytes, scale)``. **The scale must be applied back to
+        the model's returned coordinates**: the VLM reports boxes in the pixel
+        space of the image it was handed, so a shrunken image yields shrunken
+        boxes. Left uncorrected they would never overlap the full-resolution
+        engine boxes, the grounding guard would discard every block, and the
+        VLM would go silently dead while still being billed.
+
+        Ingest renders at 300 DPI because Tesseract and Kraken need it for
+        box-grounded recognition. The VLM inherited that resolution by accident
+        — it consumes the same RawPage — and pays for it: vision models bill
+        per tile, so at 300 DPI an A5 page is ~12 tiles (~3,100 tokens) and A4
+        ~20 (~5,160). Tile count is a ceiling on *both* axes, so halving the
+        dimensions roughly quarters the cost.
+
+        Downscaling is safe here in a way it would not be in a system that
+        trusted the VLM: its output is only used when the grounding guard
+        matches it against box-grounded engine output, so an illegible image
+        yields ungrounded blocks that get discarded. The failure mode is wasted
+        spend, not corrupted text — which also means the grounded/ungrounded
+        ratio is the signal to tune this against.
+
+        Returns the original bytes unchanged if the image is already small
+        enough, or if Pillow is unavailable (the VLM extra does not depend on
+        it, and paying full price beats failing the page).
+        """
+        try:
+            import io
+
+            from PIL import Image
+
+            image = Image.open(io.BytesIO(image_bytes))
+            longest = max(image.width, image.height)
+            if longest <= self._max_edge_px:
+                return image_bytes, 1.0
+            scale = self._max_edge_px / longest
+            resized = image.resize(
+                (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+            buffer = io.BytesIO()
+            resized.save(buffer, format="PNG")
+            return buffer.getvalue(), scale
+        except Exception:
+            return image_bytes, 1.0
+
     def _call_api(self, image_bytes: bytes) -> Any:
-        """POST the image to the VLM API (OpenRouter-compatible) and return the parsed response."""
+        """POST the image to the VLM API (OpenRouter-compatible) and return the parsed response.
+
+        Expects bytes already sized by ``_downscale`` — the caller owns that so
+        it can keep the scale factor needed to map coordinates back.
+        """
         import base64
         import json
         import urllib.request
@@ -127,12 +183,16 @@ class VLMEngine(IOCREngine):
                     "role": "user",
                     "content": [
                         {"type": "text", "text": self._prompt},
+                        # No `detail` hint: it is an OpenAI convention that
+                        # OpenRouter does not document for other providers, so
+                        # on the default Gemini model it is either ignored (and
+                        # misleading) or honoured as ~85 tokens (a thumbnail
+                        # that cannot resolve polytonic diacritics). Resolution
+                        # is controlled by actually resizing instead — see
+                        # _downscale.
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{encoded}",
-                                "detail": "low",
-                            },
+                            "image_url": {"url": f"data:image/png;base64,{encoded}"},
                         },
                     ],
                 }
@@ -161,13 +221,21 @@ class VLMEngine(IOCREngine):
             headers=headers,
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with urllib.request.urlopen(  # nosec B310 - scheme validated in __init__
+            request, timeout=120
+        ) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _parse_response(
-        self, data: Any, page_width: int, page_height: int
+        self, data: Any, page_width: int, page_height: int, scale: float = 1.0
     ) -> list[OCRBlock]:
-        """Parse the API response into OCRBlocks."""
+        """Parse the API response into OCRBlocks.
+
+        ``scale`` is the factor ``_downscale`` applied to the image before it
+        was sent. Coordinates come back in the sent image's pixel space, so
+        they are divided by it to land back in full-page space where the
+        grounding guard can compare them against engine boxes.
+        """
         timestamp = datetime.now(timezone.utc).isoformat()
         run = EngineRun(
             engine=self.name,
@@ -199,9 +267,21 @@ class VLMEngine(IOCREngine):
             if len(coord_parts) != 4:
                 continue
             try:
-                x, y, x2, y2 = int(coord_parts[0]), int(coord_parts[1]), int(coord_parts[2]), int(coord_parts[3])
+                x, y, x2, y2 = (
+                    int(coord_parts[0]),
+                    int(coord_parts[1]),
+                    int(coord_parts[2]),
+                    int(coord_parts[3]),
+                )
             except (ValueError, TypeError):
                 continue
+            if scale != 1.0:
+                x, y, x2, y2 = (
+                    round(x / scale),
+                    round(y / scale),
+                    round(x2 / scale),
+                    round(y2 / scale),
+                )
             bbox = BBox(x=x, y=y, w=max(1, x2 - x), h=max(1, y2 - y))
             blocks.append(
                 OCRBlock(

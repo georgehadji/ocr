@@ -1,0 +1,32 @@
+{
+  "models": [
+    {
+      "engine": "kraken",
+      "name": "greek-english_porson_sophoclesplaysa05campgoog.mlmodel",
+      "source": "https://github.com/AjaxMultiCommentary/OCR-kraken-models",
+      "licence": "CC-BY-4.0",
+      "sha256": "bb14ebeac21e35f60c2d107d160ed32f0c271e19b1ed026d049f631232af2437",
+      "description": "Kraken model trained on Pogretra Porson data + Jebb's Sophocles commentary. Best for 18th-19th c. printed editions of classical texts. From the Ciaconna family (arXiv 2110.06817).",
+      "params": []
+    },
+    {
+      "engine": "kraken",
+      "name": "greek-german_serifs_sophokle1v3soph.mlmodel",
+      "source": "https://github.com/AjaxMultiCommentary/OCR-kraken-models",
+      "licence": "CC-BY-4.0",
+      "sha256": "2c40cdfbdfca0311e57c47632256ae54258427a59f51a99aaff905eb3341fccf",
+      "description": "Kraken model trained on Pogretra German-serifs data + Schneidewin's commentary. Good for 19th c. German-edition Greek texts. From the Ciaconna family (arXiv 2110.06817).",
+      "params": []
+    },
+    {
+      "engine": "kraken",
+      "name": "greek-german_serifs_bsb10234118.mlmodel",
+      "source": "https://github.com/AjaxMultiCommentary/OCR-kraken-models",
+      "licence": "CC-BY-4.0",
+      "sha256": "286bb6e7a510bb8f74dc4f89d81a76bd692409f8212c144fd8c0473db5cde484",
+      "description": "Kraken model trained on Pogretra German-serifs data + Lobeck's commentary. Good for 19th c. German-edition Greek texts. From the Ciaconna family (arXiv 2110.06817). DEFAULT: measured 0.038 CER on page 31 of 'Πολυχρονιάδης Δεδούσης 2.0.pdf' (mid-20th c. Greek book, Didot-style face), against 0.147 for sophokle1v3soph, 0.264 for porson, and 0.056 for Tesseract grc. Ground truth hand-transcribed from a 400 DPI render; see docs/ENGINE_ACCURACY.md.",
+      "params": [],
+      "default": true
+    }
+  ]
+}

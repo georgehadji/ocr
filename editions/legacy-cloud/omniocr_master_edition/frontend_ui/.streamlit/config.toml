@@ -1,8 +1,0 @@
-[theme]
-# Base theme follows system preference for Dark/Light Mode
-base="light"
-primaryColor="#007AFF" # Apple Blue
-backgroundColor="#FFFFFF"
-secondaryBackgroundColor="#F0F2F6"
-textColor="#1D1D1F"
-font="sans serif"

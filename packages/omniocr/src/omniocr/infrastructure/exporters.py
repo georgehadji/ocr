@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 from pathlib import Path
-from xml.etree import ElementTree as ET
+from xml.etree import ElementTree as ET  # nosec B405 - builds/writes XML here, never parses input
 
 from omniocr.domain.errors import ExportError
 from omniocr.domain.models import DocumentStructure, TenantContext
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.ports.interfaces import IExporter
+
+
+class PlainTextExporter(IExporter):
+    """Export OCR text as plain text with one line per recognized segment."""
+
+    def export(
+        self, document: DocumentStructure, context: TenantContext
+    ) -> Result[bytes, ExportError]:
+        lines = [line.text for page in document.pages for line in page.lines]
+        return Ok("\n".join(lines).encode("utf-8"))
 
 
 class MarkdownExporter(IExporter):
@@ -131,7 +141,9 @@ class PageXmlExporter(IExporter):
                         f"{line.bbox.x},{line.bbox.bottom}"
                     )
                     text_line = ET.SubElement(
-                        text_region, "TextLine", {"id": line.id, "regionType": line.region_type.value}
+                        text_region,
+                        "TextLine",
+                        {"id": line.id, "regionType": line.region_type.value},
                     )
                     ET.SubElement(text_line, "Coords", {"points": points})
                     if line.provenance is not None:
@@ -255,10 +267,14 @@ class SearchablePdfExporter(IExporter):
                         )
                         if inserted <= 0:
                             return Err(ExportError(f"could not place OCR line {line.id}"))
-                return Ok(pdf.tobytes(garbage=3, deflate=True))
+                result_bytes = pdf.tobytes(garbage=3, deflate=True)
+                return Ok(result_bytes)
             finally:
                 pdf.close()
+                # Release the source PDF bytes to free memory after export.
+                self._source_pdf = b""
         except Exception as exc:
+            self._source_pdf = b""
             return Err(ExportError(f"searchable PDF export failed: {exc}"))
 
 
@@ -281,7 +297,12 @@ class DocxExporter(IExporter):
             doc = Document()
             style = doc.styles["Normal"]
             style.font.name = self._font_name
-            style._element.rPr.rFonts.set(qn("w:eastAsia"), self._font_name)
+            # `.rPr`/`.rFonts` are both None until a run/style has any
+            # formatting applied — a freshly styled document can hit that, so
+            # this would have been a real AttributeError at runtime, not just
+            # an unannotated type.
+            rpr = style._element.get_or_add_rPr()
+            rpr.get_or_add_rFonts().set(qn("w:eastAsia"), self._font_name)
             for page_index, page in enumerate(document.pages):
                 if page_index:
                     doc.add_page_break()
@@ -289,7 +310,8 @@ class DocxExporter(IExporter):
                     paragraph = doc.add_paragraph()
                     run = paragraph.add_run(line.text)
                     run.font.name = self._font_name
-                    run._element.rPr.rFonts.set(qn("w:eastAsia"), self._font_name)
+                    run_rpr = run._element.get_or_add_rPr()
+                    run_rpr.get_or_add_rFonts().set(qn("w:eastAsia"), self._font_name)
             doc.save(output)
             return Ok(output.getvalue())
         except ImportError:
@@ -303,5 +325,6 @@ __all__ = [
     "DocxExporter",
     "MarkdownExporter",
     "PageXmlExporter",
+    "PlainTextExporter",
     "SearchablePdfExporter",
 ]

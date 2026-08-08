@@ -12,21 +12,14 @@ Pontian: words and forms specific to the Pontian Greek dialect.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from omniocr.infrastructure.lexicon import SetLexicon
 from omniocr.domain.models import Script
+from omniocr.ports.lexicon import SetLexicon
 
-
-def _load_words(name: str) -> tuple[str, ...]:
-    """Load a word list from a bundled text file (one word per line)."""
-    path = Path(__file__).resolve().parent / f"{name}.txt"
-    return tuple(
-        line.strip()
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.startswith("#")
-    )
-
+# `_load_words()` used to live here, reading `<name>.txt` beside this module.
+# No such file was ever committed and nothing called it — the loader existed,
+# the data did not. Deleted rather than left as a working-looking hook; see
+# `implementation_plan.md` F-8 for the real-lexicon work it stood in for,
+# which is blocked on sourcing and licensing, not on code.
 
 _BYZANTINE_WORDS: tuple[str, ...] = (
     "θεοτόκος",
@@ -87,7 +80,6 @@ _BYZANTINE_WORDS: tuple[str, ...] = (
     "δεσποτικόν",
     "δεήσις",
     "λιτανεία",
-    "εὐχή",
     "ἀγρυπνία",
 )
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from omniocr.application.post_correction import SuggestOnlyCorrector
-from omniocr.application.pipeline import PipelineOrchestrator, SuggestOnlyCorrector
+from omniocr.application.pipeline import PipelineOrchestrator
 from omniocr.infrastructure.tesseract import TesseractEngine
 from omniocr.infrastructure.ingest import DocumentPageSource
 from omniocr.infrastructure.preprocess import GrayscaleProcessor
@@ -13,7 +15,7 @@ from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
 from omniocr.infrastructure.exporters import MarkdownExporter
 from omniocr.infrastructure.jobs import InMemoryJobStore
 from omniocr.infrastructure.lexicons import lexicons_by_script
-from omniocr.ports.interfaces import IExporter, IJobStore
+from omniocr.ports.interfaces import IExporter, IJobStore, IOCREngine
 
 # VLM and Calamari are optional extras; import failures gracefully disable them.
 try:
@@ -29,18 +31,6 @@ try:
     _VLM_AVAILABLE = True
 except ImportError:
     _VLM_AVAILABLE = False
-
-
-def create_desktop_pipeline(
-    script: Script = Script.UNKNOWN,
-    exporter: IExporter | None = None,
-    job_store: IJobStore | None = None,
-) -> PipelineOrchestrator:
-    return PipelineOrchestrator(
-        layout_analyzer=KrakenLayoutAnalyzer(script),
-        exporter=exporter or MarkdownExporter(),
-        job_store=job_store or InMemoryJobStore(),
-    )
 
 
 def create_tesseract_pipeline(
@@ -71,6 +61,7 @@ def create_ensemble_pipeline(
     vlm_api_key: str | None = None,
     vlm_api_url: str | None = None,
     vlm_model: str = "google/gemini-3.5-flash-lite",
+    vlm_max_edge_px: int = 1400,
     calamari_model_glob: str | None = None,
 ) -> PipelineOrchestrator:
     """Build a CPU ensemble with script rules injected at the composition root.
@@ -85,15 +76,23 @@ def create_ensemble_pipeline(
     """
     tesseract = RetryingEngine(TesseractEngine(tesseract_language))
     kraken = RetryingEngine(KrakenEngine(kraken_model_path))
-    by_script: dict[Script, tuple] = {
+    by_script: dict[Script, tuple[IOCREngine, ...]] = {
         Script.ANCIENT: (kraken, tesseract),
         Script.BYZANTINE: (kraken, tesseract),
         Script.POLYTONIC: (kraken, tesseract),
     }
-    default: tuple = (tesseract,)
+    default: tuple[IOCREngine, ...] = (tesseract,)
 
     if vlm_api_key is not None:
-        vlm = VLMEngine(api_key=vlm_api_key, api_url=vlm_api_url or "https://api.openai.com/v1", model=vlm_model)
+        vlm = VLMEngine(
+            api_key=vlm_api_key,
+            api_url=vlm_api_url or "https://api.openai.com/v1",
+            model=vlm_model,
+            # Ingest renders at 300 DPI for box-grounded Tesseract/Kraken; the
+            # VLM bills per tile and does not need it. Tune against the
+            # grounded/ungrounded ratio — see docs/VLM_COST_OPTIMIZATION.md.
+            max_edge_px=vlm_max_edge_px,
+        )
         retrying_vlm = RetryingEngine(vlm)
         for script_key in (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC):
             by_script[script_key] = (*by_script[script_key], retrying_vlm)
@@ -104,7 +103,22 @@ def create_ensemble_pipeline(
         for script_key in (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC):
             by_script[script_key] = (*by_script[script_key], retrying_calamari)
 
-    router = ScriptRouter(by_script=by_script, default=default)
+    # Build engine_map so the router can resolve promoted models by engine name
+    engine_map: dict[str, IOCREngine] = {
+        "kraken": kraken,
+        "tesseract": tesseract,
+    }
+    if vlm_api_key is not None:
+        engine_map["vlm"] = retrying_vlm
+    if calamari_model_glob is not None:
+        engine_map["calamari"] = retrying_calamari
+
+    router = ScriptRouter(
+        by_script=by_script,
+        default=default,
+        engine_map=engine_map,
+        engine_factory=_build_engine_on_checkpoint,
+    )
     return PipelineOrchestrator(
         page_source=DocumentPageSource(),
         image_processor=GrayscaleProcessor(),
@@ -115,6 +129,17 @@ def create_ensemble_pipeline(
         exporter=exporter or MarkdownExporter(),
         job_store=job_store or InMemoryJobStore(),
     )
+
+
+def _build_engine_on_checkpoint(engine_family: str, checkpoint: Path) -> IOCREngine:
+    """Build an engine running a promoted fine-tuned checkpoint.
+
+    Only Kraken is fine-tunable here (``ketos``), so other families fall back
+    to a Kraken engine on the checkpoint rather than silently returning the
+    parent-weights engine — a promoted model must never route to the weights
+    it was promoted over.
+    """
+    return RetryingEngine(KrakenEngine(checkpoint))
 
 
 class _TesseractRouter:

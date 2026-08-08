@@ -63,9 +63,13 @@ Kraken — the default recognizer — comes from PyPI, not a repo here.
    Post-correction, lexicons, and diacritic checks **suggest/highlight**; the human decides.
    The VLM is opt-in and always reconciled against box-grounded (Tesseract/Kraken) output —
    never the unaudited source. Rationale in ARCHITECTURE.md §1.
-2. **Kraken is the accuracy driver** for polytonic/ancient/Byzantine print; Tesseract is the
-   fast baseline and the source of word boxes for searchable PDFs. Don't rely on Tesseract
-   alone for the harder varieties.
+2. **Kraken with the right model is the accuracy driver** for polytonic/ancient/Byzantine
+   print; Tesseract is the fast baseline and the source of word boxes for searchable PDFs.
+   Don't rely on Tesseract alone for the harder varieties. **The model matters more than the
+   engine**: measured on real target material, the three bundled Kraken models span
+   0.038–0.264 CER while Tesseract sits at 0.056 — so the wrong Kraken model is far worse
+   than Tesseract, and the right one is better. Never select a model by filename order; the
+   default is declared in `models/manifest.json`. See `docs/ENGINE_ACCURACY.md`.
 3. **Pontian is handled in post-correction, not recognition** — recognition is Greek-script;
    dialect coverage comes from a custom Pontian lexicon (suggest-only).
 4. **No engine/OpenCV/DB calls in UI or API controllers.** Map to `domain` dataclasses; inject

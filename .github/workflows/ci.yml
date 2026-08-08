@@ -18,18 +18,37 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      # cloud and server are here for the typing gate, not for convenience:
+      # `mypy --strict` over editions/ needs FastAPI, Celery and RQ importable.
+      # Without them --ignore-missing-imports silently degrades every route
+      # decorator to untyped, and the gate reports 8 errors on correct code.
       - name: Install package and development dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev,docx]"
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev,docx,cloud,server]"
       - name: Run tests with coverage
         run: python -m pytest --cov=packages/omniocr/src/omniocr --cov-report=term-missing --cov-fail-under=80
+      # editions/ and scripts/ are gated too. They were excluded until now,
+      # and that gap hid 19 lint findings and 71 typing errors — among them a
+      # Celery task enqueued with raw bytes under a JSON serializer (every
+      # Cloud submit failed), an export whose failure was swallowed into an
+      # empty file reported as "completed", and a status endpoint that
+      # returned an unrelated job's state.
       - name: Check lint
-        run: ruff check packages tests
+        run: ruff check packages tests editions scripts
       - name: Check formatting
-        run: ruff format --check packages tests
-      - name: Check strict typing
-        run: mypy --strict --ignore-missing-imports --follow-imports=skip --python-version 3.11 packages/omniocr/src
+        run: ruff format --check packages tests editions scripts
+      - name: Check strict typing (core)
+        run: mypy --strict --ignore-missing-imports --python-version 3.11 packages/omniocr/src
+      # Separate invocation: the editions are sibling top-level packages, so
+      # they need --explicit-package-bases to resolve `editions.*` and
+      # `omniocr.*` in the same run. The search path itself now lives in
+      # pyproject's mypy_path — as an env var it had to be spelled with a
+      # platform-specific separator, and the POSIX one broke Windows.
+      - name: Check strict typing (editions, scripts)
+        run: mypy --strict --ignore-missing-imports --python-version 3.11 --explicit-package-bases editions scripts
       - name: Check license isolation
         run: python scripts/check_license_isolation.py
+      - name: Check architectural layering
+        run: python scripts/check_layering.py
       - name: Test CER regression gate
         run: python -m pytest tests/test_regression.py -v
       - name: Check security (bandit)
