@@ -16,6 +16,7 @@ Regenerate baselines with ``scripts/compute_engine_baselines.py``.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import unicodedata
@@ -80,11 +81,20 @@ def _tesseract_languages() -> set[str]:
     return {line.strip() for line in completed.stdout.splitlines() if line.strip()}
 
 
+def _has_pytesseract() -> bool:
+    """Report whether the Python binding TesseractEngine imports is installed."""
+    return importlib.util.find_spec("pytesseract") is not None
+
+
 _AVAILABLE_LANGUAGES = _tesseract_languages()
 
+# Both halves matter. The binary alone is not enough: TesseractEngine calls it
+# through pytesseract, which ships in the `tesseract` extra, not `dev`. Gating
+# on the binary alone turned an absent binding into nine failures on any box
+# that has tesseract installed but the extra uninstalled.
 requires_tesseract = pytest.mark.skipif(
-    not {"ell", "grc"} <= _AVAILABLE_LANGUAGES,
-    reason="tesseract with 'ell' and 'grc' language packs not installed",
+    not ({"ell", "grc"} <= _AVAILABLE_LANGUAGES and _has_pytesseract()),
+    reason="tesseract with 'ell'/'grc' language packs and the pytesseract binding not installed",
 )
 
 

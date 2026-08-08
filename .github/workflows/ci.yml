@@ -18,8 +18,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      # cloud and server are here for the typing gate, not for convenience:
+      # `mypy --strict` over editions/ needs FastAPI, Celery and RQ importable.
+      # Without them --ignore-missing-imports silently degrades every route
+      # decorator to untyped, and the gate reports 8 errors on correct code.
       - name: Install package and development dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev,docx]"
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev,docx,cloud,server]"
       - name: Run tests with coverage
         run: python -m pytest --cov=packages/omniocr/src/omniocr --cov-report=term-missing --cov-fail-under=80
       # editions/ and scripts/ are gated too. They were excluded until now,
