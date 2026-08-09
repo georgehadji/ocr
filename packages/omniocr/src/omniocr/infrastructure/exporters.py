@@ -281,7 +281,7 @@ class SearchablePdfExporter(IExporter):
 class DocxExporter(IExporter):
     """Export OCR text to DOCX without changing the recognized source text."""
 
-    def __init__(self, font_name: str = "Gentium Plus") -> None:
+    def __init__(self, font_name: str = "Cambria") -> None:
         self._font_name = font_name
 
     def export(

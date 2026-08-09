@@ -67,7 +67,7 @@ pip install -e .
 | `kraken` | Neural layout segmentation and recognition |
 | `tesseract` | Baseline OCR via Tesseract |
 | `opencv` | Image preprocessing (Sauvola binarization) |
-| `docx` | DOCX export with Gentium Plus font |
+| `docx` | DOCX export with Cambria font |
 | `vlm` | Vision-language model (stdlib, no extra deps) |
 | `calamari` | GPLv3 Calamari OCR (subprocess-isolated) |
 | `server` | FastAPI + RQ server edition |
@@ -433,7 +433,7 @@ Tracks CER improvement in MLflow.
 | ALTO XML | Geometry, confidence, provenance, region type, reading order |
 | PAGE-XML | Coordinates, confidence, engine provenance, region type |
 | Searchable PDF | Overlays original image; auto-detects system font for Greek |
-| DOCX | Gentium Plus font with Byzantine glyph coverage |
+| DOCX | Cambria font — full polytonic (Greek Extended) coverage; for Byzantine ligatures set `DocxExporter(font_name=...)` to Athena Ruby |
 
 ### Fixture Corpus
 
