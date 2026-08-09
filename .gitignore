@@ -11,3 +11,6 @@ __pycache__/
 *.db
 implementation_audit_report.md
 /Outputs/
+
+# Claude Code machine-local settings (launch.json is shared, this is not)
+.claude/settings.local.json

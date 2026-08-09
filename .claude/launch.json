@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ocr-streamlit",
+      "runtimeExecutable": "streamlit",
+      "runtimeArgs": [
+        "run",
+        "prototype/ocr.py",
+        "--server.maxUploadSize=2048"
+      ],
+      "port": 8501
+    }
+  ]
+}
