@@ -8,7 +8,7 @@ from omniocr.infrastructure.tesseract import TesseractEngine
 from omniocr.infrastructure.ingest import DocumentPageSource
 from omniocr.infrastructure.preprocess import GrayscaleProcessor
 from omniocr.infrastructure.resilience import RetryingEngine
-from omniocr.application.reconcile import ConfidenceWeightedReconciler
+from omniocr.application.reconcile import ConfidenceWeightedReconciler, ScriptAwareReconciler
 from omniocr.domain.models import OCRLine, Script, TenantContext
 from omniocr.application.router import ScriptRouter
 from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
@@ -124,7 +124,11 @@ def create_ensemble_pipeline(
         image_processor=GrayscaleProcessor(),
         layout_analyzer=KrakenLayoutAnalyzer(script),
         router=router,
-        reconciler=ConfidenceWeightedReconciler(),
+        # Kraken leads on Greek but its charset holds no Latin, so a plain
+        # confidence vote hands Latin lines (footnote URLs, western-language
+        # citations) to a model that cannot spell them. Pass Latin packs in
+        # ``tesseract_language`` for this to have anything to choose.
+        reconciler=ScriptAwareReconciler(),
         post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
         exporter=exporter or MarkdownExporter(),
         job_store=job_store or InMemoryJobStore(),
