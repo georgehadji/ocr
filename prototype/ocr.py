@@ -5,6 +5,7 @@ import logging
 import unicodedata
 import os
 import io
+import fitz  # PyMuPDF
 import torch
 import streamlit as st
 from typing import List, Dict, Any, Optional
@@ -46,6 +47,33 @@ class ImageProcessor:
         umat = cv2.adaptiveThreshold(umat, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
         
         return umat.get() # Return to CPU for Tesseract
+
+# ==========================================
+# 2b. PDF RASTERIZATION
+# ==========================================
+class PdfRasterizer:
+    """Render one PDF page to PNG bytes.
+
+    The uploader has always advertised 'pdf', but nothing here decoded one:
+    raw PDF bytes went straight to PIL/cv2, which cannot read them. One page
+    at a time keeps memory flat on the 300MB+ scans this is pointed at.
+    """
+
+    DPI: int = 300
+
+    @staticmethod
+    def page_count(pdf_bytes: bytes) -> int:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            return doc.page_count
+
+    @staticmethod
+    def render(pdf_bytes: bytes, page_number: int) -> bytes:
+        """Render 1-indexed ``page_number`` at DPI as PNG bytes."""
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            page = doc.load_page(page_number - 1)
+            matrix = fitz.Matrix(PdfRasterizer.DPI / 72, PdfRasterizer.DPI / 72)
+            return page.get_pixmap(matrix=matrix).tobytes("png")
+
 
 # ==========================================
 # 3. ENSEMBLE OCR ENGINE (VOTING LOGIC)
@@ -117,14 +145,31 @@ def main():
     uploaded = st.file_uploader("Upload Document", type=['png', 'jpg', 'pdf'])
     
     if uploaded:
+        raw = uploaded.getvalue()
+        is_pdf = uploaded.name.lower().endswith(".pdf")
+
+        if is_pdf:
+            total = PdfRasterizer.page_count(raw)
+            page_number = st.sidebar.number_input(
+                "Page", min_value=1, max_value=total, value=1, step=1
+            )
+            st.sidebar.caption(f"{total} pages in this PDF")
+            # One page per run: this prototype is a single-page viewer. Use
+            # `omniocr run` for whole books.
+            image_bytes = PdfRasterizer.render(raw, int(page_number))
+            caption = f"Original — page {page_number} of {total}"
+        else:
+            image_bytes = raw
+            caption = "Original"
+
         col1, col2 = st.columns(2)
         with col1:
-            st.image(uploaded, caption="Original")
-            
+            st.image(image_bytes, caption=caption)
+
         if st.button("🚀 Process with GPU Acceleration"):
             with st.spinner("Analyzing Layout & Extracting Text..."):
                 # 1. Process Image
-                proc_img = ImageProcessor.process(uploaded.read())
+                proc_img = ImageProcessor.process(image_bytes)
                 # 2. OCR
                 engine = EnsembleEngine()
                 blocks = engine.get_best_ocr(proc_img)
