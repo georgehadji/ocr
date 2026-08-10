@@ -9,7 +9,12 @@ from omniocr.domain.errors import EngineError
 from omniocr.domain.models import BBox, Confidence, EngineRun, ModelRef, OCRBlock, TenantContext
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.infrastructure.models import sha256_file
-from omniocr.ports.interfaces import IOCREngine, RawPage
+from omniocr.domain.errors import LayoutError
+from omniocr.domain.models import OCRLine, Script
+from omniocr.ports.interfaces import ILayoutAnalyzer, IOCREngine, RawPage
+
+# Tesseract's page-hierarchy level for a text line in image_to_data output.
+_LINE_LEVEL = 4
 
 
 class TesseractEngine(IOCREngine):
@@ -101,4 +106,58 @@ class TesseractEngine(IOCREngine):
         return tuple(blocks)
 
 
-__all__ = ["TesseractEngine"]
+class TesseractLayoutAnalyzer(ILayoutAnalyzer):
+    """Line segmentation from Tesseract's own page analysis.
+
+    Exists as a fallback for pages Kraken's segmenter refuses. On grainy
+    scans ``kraken.pageseg.segment`` hits its connected-component ceiling
+    ("Too many connected components for a page image: 16761"), returns an
+    empty line list, and reports no error — so the page silently produces no
+    text. Tesseract reads those same pages without complaint.
+
+    Only boxes are taken here. Recognition still runs through the normal
+    engine bank, so a fallback page is not quietly downgraded to
+    Tesseract-only output.
+    """
+
+    def __init__(self, language: str = "eng", script: Script = Script.UNKNOWN) -> None:
+        self._language = language
+        self._script = script
+
+    def segment(
+        self, page: RawPage, context: TenantContext
+    ) -> Result[Sequence[OCRLine], LayoutError]:
+        try:
+            from PIL import Image
+            import pytesseract
+
+            image = Image.open(io.BytesIO(page.content))
+            data = pytesseract.image_to_data(
+                image,
+                lang=self._language,
+                output_type=pytesseract.Output.DICT,
+            )
+        except Exception as exc:
+            return Err(LayoutError(f"Tesseract layout segmentation failed: {exc}"))
+
+        lines: list[OCRLine] = []
+        for index in range(len(data.get("level", ()))):
+            if int(data["level"][index]) != _LINE_LEVEL:
+                continue
+            width, height = int(data["width"][index]), int(data["height"][index])
+            if width <= 0 or height <= 0:
+                continue
+            lines.append(
+                OCRLine(
+                    id=f"line-{len(lines) + 1}",
+                    text="",
+                    confidence=Confidence(0.0),
+                    bbox=BBox(int(data["left"][index]), int(data["top"][index]), width, height),
+                    script=self._script,
+                    reading_order=len(lines) + 1,
+                )
+            )
+        return Ok(tuple(lines))
+
+
+__all__ = ["TesseractEngine", "TesseractLayoutAnalyzer"]

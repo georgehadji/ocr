@@ -4,7 +4,8 @@ from pathlib import Path
 
 from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.application.pipeline import PipelineOrchestrator
-from omniocr.infrastructure.tesseract import TesseractEngine
+from omniocr.application.layout import FallbackLayoutAnalyzer
+from omniocr.infrastructure.tesseract import TesseractEngine, TesseractLayoutAnalyzer
 from omniocr.infrastructure.ingest import DocumentPageSource
 from omniocr.infrastructure.preprocess import GrayscaleProcessor
 from omniocr.infrastructure.resilience import RetryingEngine
@@ -43,7 +44,9 @@ def create_tesseract_pipeline(
     return PipelineOrchestrator(
         page_source=DocumentPageSource(),
         image_processor=GrayscaleProcessor(),
-        layout_analyzer=KrakenLayoutAnalyzer(script),
+        layout_analyzer=FallbackLayoutAnalyzer(
+            KrakenLayoutAnalyzer(script), TesseractLayoutAnalyzer(language, script)
+        ),
         router=_TesseractRouter(TesseractEngine(language)),
         reconciler=ConfidenceWeightedReconciler(),
         post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
@@ -122,7 +125,11 @@ def create_ensemble_pipeline(
     return PipelineOrchestrator(
         page_source=DocumentPageSource(),
         image_processor=GrayscaleProcessor(),
-        layout_analyzer=KrakenLayoutAnalyzer(script),
+        # Kraken segmentation returns zero lines with no error on grainy
+        # scans; without a fallback those pages vanish from the output.
+        layout_analyzer=FallbackLayoutAnalyzer(
+            KrakenLayoutAnalyzer(script), TesseractLayoutAnalyzer(tesseract_language, script)
+        ),
         router=router,
         # Kraken leads on Greek but its charset holds no Latin, so a plain
         # confidence vote hands Latin lines (footnote URLs, western-language
