@@ -4,6 +4,7 @@ from pathlib import Path
 
 from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.application.pipeline import PipelineOrchestrator
+from omniocr.application.structure import IdentityAssembler
 from omniocr.application.layout import FallbackLayoutAnalyzer
 from omniocr.infrastructure.tesseract import TesseractEngine, TesseractLayoutAnalyzer
 from omniocr.infrastructure.ingest import DocumentPageSource
@@ -39,6 +40,7 @@ def create_tesseract_pipeline(
     script: Script = Script.MODERN,
     exporter: IExporter | None = None,
     job_store: IJobStore | None = None,
+    assemble_structure: bool = False,
 ) -> PipelineOrchestrator:
     """Build the desktop pipeline with the optional Tesseract engine enabled."""
     return PipelineOrchestrator(
@@ -51,6 +53,7 @@ def create_tesseract_pipeline(
         reconciler=ConfidenceWeightedReconciler(),
         post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
         exporter=exporter or MarkdownExporter(),
+        assembler=IdentityAssembler(),
         job_store=job_store or InMemoryJobStore(),
     )
 
@@ -66,6 +69,7 @@ def create_ensemble_pipeline(
     vlm_model: str = "google/gemini-3.5-flash-lite",
     vlm_max_edge_px: int = 1400,
     calamari_model_glob: str | None = None,
+    assemble_structure: bool = False,
 ) -> PipelineOrchestrator:
     """Build a CPU ensemble with script rules injected at the composition root.
 
@@ -138,6 +142,7 @@ def create_ensemble_pipeline(
         reconciler=ScriptAwareReconciler(),
         post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
         exporter=exporter or MarkdownExporter(),
+        assembler=IdentityAssembler(),
         job_store=job_store or InMemoryJobStore(),
     )
 

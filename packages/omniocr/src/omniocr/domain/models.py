@@ -127,10 +127,33 @@ class OCRLine:
     provenance: EngineRun | None = None
 
 
+class ParagraphRole(str, Enum):
+    BODY = "body"
+    HEADING = "heading"
+    SUBHEADING = "subheading"
+    RUNNING_HEAD = "running_head"
+    PAGE_NUMBER = "page_number"
+    FOOTNOTE = "footnote"
+
+
+@dataclass(frozen=True, slots=True)
+class LineJoin:
+    """How two consecutive lines were joined, recorded so it can be undone."""
+
+    first_line_id: str
+    second_line_id: str
+    separator: str        # "" hyphen dropped | "-" hyphen kept | " " plain wrap
+    removed: str          # the exact character removed from line one, "" if none
+    verdict: str          # joined_in_lexicon | hyphen_in_lexicon | unverified
+
+
 @dataclass(frozen=True, slots=True)
 class OCRParagraph:
     id: str
     lines: Tuple[OCRLine, ...] = field(default_factory=tuple)
+    text: str = ""
+    role: ParagraphRole = ParagraphRole.BODY
+    joins: Tuple[LineJoin, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +164,7 @@ class DocumentPage:
     lines: Tuple[OCRLine, ...] = field(default_factory=tuple)
     suggestions: Tuple[Suggestion, ...] = field(default_factory=tuple)
     failures: Tuple[PageFailure, ...] = field(default_factory=tuple)
+    paragraphs: Tuple[OCRParagraph, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)

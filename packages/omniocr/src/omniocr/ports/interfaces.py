@@ -156,12 +156,19 @@ class ICorpusRepository(Protocol):
     def pages(self, split: SplitName, script: Script | None = None) -> Sequence[CorpusPage]: ...
 
 
+class IDocumentAssembler(Protocol):
+    def assemble(
+        self, document: DocumentStructure, context: TenantContext
+    ) -> Result[DocumentStructure, LayoutError]: ...
+
+
 __all__ = [
     "ICorrectionStore",
     "ICorpusRepository",
     "IEvaluator",
     "IEventBus",
     "IExporter",
+    "IDocumentAssembler",
     "IImageProcessor",
     "IJobStore",
     "ILexicon",

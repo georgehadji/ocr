@@ -262,7 +262,12 @@ def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> Any:
 
     script = Script(args.script)
     if args.engine == "tesseract":
-        return create_tesseract_pipeline(language=args.lang, script=script, exporter=exporter)
+        return create_tesseract_pipeline(
+            language=args.lang,
+            script=script,
+            exporter=exporter,
+            assemble_structure=args.structure,
+        )
     # kraken and ensemble share the ensemble root; it routes per script and
     # falls back to Tesseract for varieties Kraken is not the best tool for.
     return create_ensemble_pipeline(
@@ -270,6 +275,7 @@ def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> Any:
         kraken_model_path=_resolve_model(args.model),
         script=script,
         exporter=exporter,
+        assemble_structure=args.structure,
     )
 
 
@@ -454,6 +460,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="N",
         help="stop after N pages — use this before running a full book",
+    )
+    run.add_argument(
+        "--structure",
+        action="store_true",
+        help="reconstruct paragraphs, join hyphens, and mark running heads",
     )
     run.add_argument("--org", default="cli", help="tenant organization id for provenance")
     run.add_argument("--user", default="cli", help="user id for provenance")

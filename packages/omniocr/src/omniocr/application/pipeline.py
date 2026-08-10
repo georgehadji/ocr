@@ -22,6 +22,7 @@ from omniocr.domain.models import (
 )
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.ports.interfaces import (
+    IDocumentAssembler,
     IEventBus,
     IExporter,
     IImageProcessor,
@@ -34,6 +35,7 @@ from omniocr.ports.interfaces import (
     IRouter,
     RawPage,
 )
+from omniocr.application.structure import IdentityAssembler
 
 __all__ = [
     "FirstCandidateReconciler",
@@ -171,6 +173,7 @@ class PipelineOrchestrator:
         reconciler: IReconciler | None = None,
         post_corrector: IPostCorrector | None = None,
         exporter: IExporter | None = None,
+        assembler: IDocumentAssembler | None = None,
         job_store: IJobStore | None = None,
         event_bus: IEventBus | None = None,
         max_workers: int | None = None,
@@ -183,6 +186,7 @@ class PipelineOrchestrator:
         self._reconciler = reconciler or FirstCandidateReconciler()
         self._post_corrector = post_corrector or SuggestOnlyCorrector()
         self._exporter = exporter or _DefaultTextExporter()
+        self._assembler = assembler or IdentityAssembler()
         self._job_store = job_store
         self._event_bus = event_bus
         self._max_workers = max_workers
@@ -225,7 +229,8 @@ class PipelineOrchestrator:
         else:
             pages = self._run_sequential(pending, ctx, pages, checkpoint_id)
 
-        return Ok(DocumentStructure(pages=tuple(pages)))
+        doc = DocumentStructure(pages=tuple(pages))
+        return self._assembler.assemble(doc, ctx)
 
     def _run_parallel(
         self,
