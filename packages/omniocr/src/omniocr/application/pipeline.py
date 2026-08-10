@@ -538,12 +538,27 @@ class PipelineOrchestrator:
             page_lines.append(chosen_line)
             suggestions.extend(corrections.value)
 
+        # A page that produced no lines is reported as a failure, not as a
+        # successful empty page. Segmenters can return zero lines without
+        # raising, and that used to surface as `page N: ok (0 lines)` with
+        # exit code 0 — a job could drop a third of a book and still look
+        # clean to a scripted caller.
+        failures: tuple[PageFailure, ...] = ()
+        if not page_lines:
+            failures = (
+                PageFailure(
+                    error_type="EmptyPage",
+                    message="no text lines were produced for this page",
+                ),
+            )
+
         return DocumentPage(
             number=raw_page.number,
             width=getattr(raw_page, "width", 1),
             height=getattr(raw_page, "height", 1),
             lines=tuple(page_lines),
             suggestions=tuple(suggestions),
+            failures=failures,
         )
 
     @staticmethod
