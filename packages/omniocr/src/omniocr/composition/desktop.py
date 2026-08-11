@@ -4,7 +4,7 @@ from pathlib import Path
 
 from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.application.pipeline import PipelineOrchestrator
-from omniocr.application.structure import IdentityAssembler
+from omniocr.application.structure import DocumentAssembler, IdentityAssembler
 from omniocr.application.layout import FallbackLayoutAnalyzer
 from omniocr.infrastructure.tesseract import TesseractEngine, TesseractLayoutAnalyzer
 from omniocr.infrastructure.ingest import DocumentPageSource
@@ -43,6 +43,7 @@ def create_tesseract_pipeline(
     assemble_structure: bool = False,
 ) -> PipelineOrchestrator:
     """Build the desktop pipeline with the optional Tesseract engine enabled."""
+    assembler = DocumentAssembler() if assemble_structure else IdentityAssembler()
     return PipelineOrchestrator(
         page_source=DocumentPageSource(),
         image_processor=GrayscaleProcessor(),
@@ -53,7 +54,7 @@ def create_tesseract_pipeline(
         reconciler=ConfidenceWeightedReconciler(),
         post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
         exporter=exporter or MarkdownExporter(),
-        assembler=IdentityAssembler(),
+        assembler=assembler,
         job_store=job_store or InMemoryJobStore(),
     )
 
@@ -126,6 +127,7 @@ def create_ensemble_pipeline(
         engine_map=engine_map,
         engine_factory=_build_engine_on_checkpoint,
     )
+    assembler = DocumentAssembler() if assemble_structure else IdentityAssembler()
     return PipelineOrchestrator(
         page_source=DocumentPageSource(),
         image_processor=GrayscaleProcessor(),
@@ -142,7 +144,7 @@ def create_ensemble_pipeline(
         reconciler=ScriptAwareReconciler(),
         post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
         exporter=exporter or MarkdownExporter(),
-        assembler=IdentityAssembler(),
+        assembler=assembler,
         job_store=job_store or InMemoryJobStore(),
     )
 

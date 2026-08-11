@@ -1,3 +1,3 @@
-from omniocr.application.structure.assembler import IdentityAssembler
+from omniocr.application.structure.assembler import DocumentAssembler, IdentityAssembler, unjoin
 
-__all__ = ["IdentityAssembler"]
+__all__ = ["DocumentAssembler", "IdentityAssembler", "unjoin"]

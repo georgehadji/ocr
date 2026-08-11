@@ -15,7 +15,14 @@ class PlainTextExporter(IExporter):
     def export(
         self, document: DocumentStructure, context: TenantContext
     ) -> Result[bytes, ExportError]:
-        lines = [line.text for page in document.pages for line in page.lines]
+        lines = []
+        for page in document.pages:
+            if page.paragraphs:
+                for para in page.paragraphs:
+                    lines.append(para.text)
+            else:
+                for line in page.lines:
+                    lines.append(line.text)
         return Ok("\n".join(lines).encode("utf-8"))
 
 
@@ -27,7 +34,24 @@ class MarkdownExporter(IExporter):
     ) -> Result[bytes, ExportError]:
         sections: list[str] = []
         for page in document.pages:
-            lines = "\n".join(line.text for line in page.lines)
+            if page.paragraphs:
+                para_texts = []
+                for para in page.paragraphs:
+                    if para.role == "heading":
+                        para_texts.append(f"# {para.text}")
+                    elif para.role == "subheading":
+                        para_texts.append(f"## {para.text}")
+                    elif para.role == "page_number":
+                        para_texts.append(f"<!-- Page Number: {para.text} -->")
+                    elif para.role == "running_head":
+                        para_texts.append(f"<!-- Running Head: {para.text} -->")
+                    elif para.role == "footnote":
+                        para_texts.append(f"*[Footnote]* {para.text}")
+                    else:
+                        para_texts.append(para.text)
+                lines = "\n\n".join(para_texts)
+            else:
+                lines = "\n".join(line.text for line in page.lines)
             sections.append(f"## Page {page.number}\n\n{lines}")
         return Ok(("\n\n".join(sections) + ("\n" if sections else "")).encode("utf-8"))
 
