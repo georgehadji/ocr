@@ -63,6 +63,26 @@ class TestSetLexiconNormalizes:
         """Normalizing must not turn the lexicon into something that says yes."""
         assert byzantine_lexicon().contains("σιδηρόδρομος") is False
 
+    def test_missing_breathing_mark_still_matches(self) -> None:
+        """An OCR mark slip is a diacritic error, not an unknown word.
+
+        ``εὐαγγέλιον`` with its smooth breathing dropped is still the same
+        word for lexicon purposes — ``SuggestOnlyCorrector``'s diacritic
+        checks are what should flag the missing mark, not a lexicon miss.
+        """
+        word = "εὐαγγέλιον"
+        no_breathing = word.replace("ὐ", "υ")  # ὐ (upsilon+smooth) -> υ
+        assert word != no_breathing
+        assert byzantine_lexicon().contains(no_breathing) is True
+
+    def test_missing_accent_still_matches(self) -> None:
+        unaccented = unicodedata.normalize("NFC", "θεοτοκος")
+        assert byzantine_lexicon().contains(unaccented) is True
+
+    def test_monotonized_match_does_not_widen_to_unrelated_words(self) -> None:
+        """The fallback tolerates accent noise, not different letters."""
+        assert byzantine_lexicon().contains("σιδηροδρομος") is False
+
 
 class TestCorrectorLookup:
     def test_known_word_is_not_flagged(self) -> None:
@@ -72,6 +92,10 @@ class TestCorrectorLookup:
         """The live defect: the lookup used raw ``line.text``, so an NFD page
         flagged every single token."""
         assert _lexicon_reasons(_line(unicodedata.normalize("NFD", "θεοτόκος"))) == []
+
+    def test_word_with_dropped_accent_is_not_flagged_as_unknown(self) -> None:
+        """A diacritic OCR slip must not also read as 'not a word'."""
+        assert _lexicon_reasons(_line("θεοτοκος")) == []
 
     @pytest.mark.parametrize("punctuated", ["θεοτόκος,", "θεοτόκος.", "θεοτόκος·", "«θεοτόκος»"])
     def test_trailing_punctuation_does_not_make_a_word_unknown(self, punctuated: str) -> None:

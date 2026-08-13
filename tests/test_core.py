@@ -244,7 +244,10 @@ def test_bundled_pontian_lexicon_recognises_known_words() -> None:
     assert lexicon.contains("εμάν")
     assert lexicon.contains("τραγωδώ")
     assert lexicon.contains("ψωμίν")
-    assert not lexicon.contains("ἄνθρωπος")
+    # "άνθρωπος" is itself in the Pontian list (dialects share core
+    # vocabulary), so it is not a usable "not a dialect word" example —
+    # pick something absent from the list entirely.
+    assert not lexicon.contains("σιδηρόδρομος")
 
 
 def test_lexicons_by_script_returns_mapping() -> None:
