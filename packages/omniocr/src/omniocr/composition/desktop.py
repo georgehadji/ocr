@@ -41,6 +41,7 @@ def create_tesseract_pipeline(
     exporter: IExporter | None = None,
     job_store: IJobStore | None = None,
     assemble_structure: bool = False,
+    workers: int = 1,
 ) -> PipelineOrchestrator:
     """Build the desktop pipeline with the optional Tesseract engine enabled."""
     assembler = DocumentAssembler() if assemble_structure else IdentityAssembler()
@@ -56,6 +57,7 @@ def create_tesseract_pipeline(
         exporter=exporter or MarkdownExporter(),
         assembler=assembler,
         job_store=job_store or InMemoryJobStore(),
+        max_workers=workers if workers > 1 else None,
     )
 
 
@@ -71,6 +73,7 @@ def create_ensemble_pipeline(
     vlm_max_edge_px: int = 1400,
     calamari_model_glob: str | None = None,
     assemble_structure: bool = False,
+    workers: int = 1,
 ) -> PipelineOrchestrator:
     """Build a CPU ensemble with script rules injected at the composition root.
 
@@ -146,6 +149,7 @@ def create_ensemble_pipeline(
         exporter=exporter or MarkdownExporter(),
         assembler=assembler,
         job_store=job_store or InMemoryJobStore(),
+        max_workers=workers if workers > 1 else None,
     )
 
 

@@ -349,23 +349,29 @@ Each phase is one PR, green before the next starts.
 
 ## 8. Optimization — parallel page processing
 
-Separate from structure, and the largest real win available: the 74-page book
-took ~23 hours. `PipelineOrchestrator._process_page` is already independent per
-page — its engine cache is a page-local dict and it touches no shared state.
+**Superseded by ADR-003, then implemented.** This section originally called for
+`ProcessPoolExecutor`. By the time this was picked up, `docs/adr/003-threadpoolexecutor-parallelism.md`
+had already decided `ThreadPoolExecutor` instead — same rationale this section
+gives for skipping threads (Tesseract shells out, Kraken's torch path releases
+the GIL for meaningful stretches) plus two this section didn't weigh: process
+serialization overhead for page image bytes, and `ProcessPoolExecutor`
+spawn/shutdown being flaky on Windows, the primary dev platform. `Pipeline
+Orchestrator._run_parallel`/`max_workers` already existed and was already
+tested (`test_core.py`); it just wasn't reachable from the CLI or either
+composition root.
 
-Use `concurrent.futures.ProcessPoolExecutor` over pages, not threads: Tesseract
-via `pytesseract` shells out and Kraken's torch path holds the GIL for
-meaningful stretches, so threads would under-deliver. Pages are independent, and
-results are reordered by `page.number` on collection.
+Closed the gap instead of re-deciding it: added `--workers` (default `1`,
+matching this section's "default 1 until measured"), wired it through
+`create_tesseract_pipeline`/`create_ensemble_pipeline` to `max_workers`.
 
-Gates this must not break: `PipelineEvent` ordering (emit on collection, not
-completion), and the `--json` page-failure report. Default worker count
-`os.cpu_count() - 1`, overridable by `--workers`, default `1` until measured —
-an unmeasured parallel default is how a working CPU-only tool starts thrashing
-on a laptop.
-
-Do this **after** P1–P5. Parallelizing a pipeline whose output is still changing
-means debugging two things at once.
+One consequence worth being explicit about: `docs/ARCHITECTURE_AUDIT.md` had
+flagged Kraken's `rpred` thread-safety under concurrent calls on one shared
+model as unverified and the highest-value risk in the system — exactly the
+path `--workers` now makes reachable. `KrakenEngine._recognize` now holds its
+existing lock for the whole `rpred.rpred()` call, not just model load, so
+Kraken recognition is serialized per engine instance regardless of
+`--workers`. Only Tesseract (subprocess-isolated) gets real concurrency from
+the flag today. Loosen the lock only after confirming upstream thread-safety.
 
 ---
 
@@ -378,10 +384,12 @@ means debugging two things at once.
 - **Heuristics misfire** on figures, tables, and title pages. Tolerable only
   because they mark and view rather than edit, and the review UI shows them.
 - **`bbox.h` as type size** — §3.5.
-- **Single-column assumption.** The column geometry in §3.1 assumes one text
-  column. Multi-column pages will produce wrong paragraph breaks. Detecting
-  columns is a genuinely larger problem; the honest move is to detect *that*
-  there are probably two columns (bimodal `bbox.x` distribution) and skip
+- **Single-column assumption — guarded.** The column geometry in §3.1 still
+  assumes one text column, but `geometry.is_probably_multi_column` now detects
+  a bimodal `bbox.x` distribution (two substantial, well-separated left-edge
+  clusters) and `DocumentAssembler` skips paragraph assembly for that page —
+  it's left as unassembled lines rather than interleaved into wrong
+  paragraphs. Real column detection remains a genuinely larger problem; skip
   assembly for that page rather than assemble it wrongly.
 
 ---

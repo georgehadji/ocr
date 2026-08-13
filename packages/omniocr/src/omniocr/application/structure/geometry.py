@@ -49,6 +49,35 @@ def median_line_height(lines: Sequence[OCRLine]) -> float:
     return float(statistics.median(line.bbox.h for line in lines))
 
 
+def is_probably_multi_column(
+    lines: Sequence[OCRLine], page_width: int, bucket_size: int = 5
+) -> bool:
+    """True when line left-edges cluster into two well-separated groups.
+
+    Every break rule and role heuristic in this package assumes one column:
+    left edge is *the* left margin, and reading order follows line order top
+    to bottom. A two-column page violates both, so it must be detected and
+    skipped rather than assembled — a wrong guess here interleaves columns
+    into nonsense paragraphs, whereas skipping just leaves the page as
+    unassembled lines (see docs/STRUCTURE_IMPLEMENTATION_PLAN.md §9).
+
+    Deliberately conservative: both clusters must be substantial (not a
+    stray marginal note) and far apart (not indentation noise), so a false
+    positive costs a missed paragraph reconstruction, never a false join.
+    """
+    if len(lines) < 4 or page_width <= 0:
+        return False
+    bucketed = [line.bbox.x // bucket_size * bucket_size for line in lines]
+    counts = collections.Counter(bucketed)
+    top_two = counts.most_common(2)
+    if len(top_two) < 2:
+        return False
+    (first_x, first_n), (second_x, second_n) = top_two
+    both_substantial = min(first_n, second_n) >= 0.2 * len(lines)
+    far_apart = abs(first_x - second_x) > 0.25 * page_width
+    return both_substantial and far_apart
+
+
 def is_centred(line: OCRLine, left: int, right: int, tolerance: float = 15.0) -> bool:
     left_indent = line.bbox.x - left
     right_indent = right - line.bbox.right

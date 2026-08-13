@@ -8,6 +8,7 @@ from omniocr.application.structure.geometry import (
     PageGeometry,
     column_left_edge,
     column_right_edge,
+    is_probably_multi_column,
     median_leading,
     median_line_height,
 )
@@ -75,6 +76,13 @@ class DocumentAssembler:
 
         new_pages = []
         for page in document.pages:
+            # Every rule below assumes one column; a two-column page would be
+            # assembled into cross-column nonsense instead of just failing to
+            # assemble, so it is left as unassembled lines (plan §9).
+            if is_probably_multi_column(page.lines, page.width):
+                new_pages.append(page)
+                continue
+
             # Re-map lines with region types updated
             marked_lines = []
             for line in page.lines:

@@ -8,6 +8,7 @@ from omniocr.application.structure.geometry import (
     column_left_edge,
     column_right_edge,
     is_centred,
+    is_probably_multi_column,
     median_leading,
     median_line_height,
 )
@@ -115,3 +116,64 @@ def test_document_assembler_groups_paragraphs() -> None:
 
     assert p2.text == "This starts the second paragraph and this is the continuation."
     assert p2.lines == (lines[1], lines[2])
+
+
+def test_is_probably_multi_column_detects_two_clusters() -> None:
+    conf = Confidence(1.0)
+    left_col = [
+        OCRLine(id=f"l{i}", text=f"left {i}", confidence=conf, bbox=BBox(10, i * 25, 100, 15))
+        for i in range(4)
+    ]
+    right_col = [
+        OCRLine(
+            id=f"r{i}", text=f"right {i}", confidence=conf, bbox=BBox(310, i * 25, 100, 15)
+        )
+        for i in range(4)
+    ]
+    assert is_probably_multi_column(left_col + right_col, page_width=600) is True
+
+
+def test_is_probably_multi_column_ignores_single_column_indentation() -> None:
+    conf = Confidence(1.0)
+    lines = [
+        OCRLine(id="l1", text="normal", confidence=conf, bbox=BBox(10, 0, 100, 15)),
+        OCRLine(id="l2", text="normal", confidence=conf, bbox=BBox(10, 25, 100, 15)),
+        OCRLine(id="l3", text="indented start", confidence=conf, bbox=BBox(15, 50, 95, 15)),
+        OCRLine(id="l4", text="normal", confidence=conf, bbox=BBox(10, 75, 100, 15)),
+    ]
+    assert is_probably_multi_column(lines, page_width=600) is False
+
+
+def test_is_probably_multi_column_ignores_a_lone_marginal_note() -> None:
+    conf = Confidence(1.0)
+    body = [
+        OCRLine(id=f"l{i}", text="body", confidence=conf, bbox=BBox(10, i * 25, 100, 15))
+        for i in range(5)
+    ]
+    margin_note = OCRLine(id="m1", text="note", confidence=conf, bbox=BBox(500, 30, 40, 15))
+    assert is_probably_multi_column(body + [margin_note], page_width=600) is False
+
+
+def test_document_assembler_skips_multi_column_pages() -> None:
+    """A detected two-column page is left as unassembled lines, not force-joined."""
+    conf = Confidence(1.0)
+    left_col = [
+        OCRLine(id=f"l{i}", text=f"left {i}", confidence=conf, bbox=BBox(10, i * 25, 100, 15))
+        for i in range(4)
+    ]
+    right_col = [
+        OCRLine(
+            id=f"r{i}", text=f"right {i}", confidence=conf, bbox=BBox(310, i * 25, 100, 15)
+        )
+        for i in range(4)
+    ]
+    page = DocumentPage(number=1, width=600, height=200, lines=tuple(left_col + right_col))
+    doc = DocumentStructure(pages=(page,))
+    context = TenantContext(organization_id="org", user_id="user", subscription_tier="desktop")
+
+    res = DocumentAssembler().assemble(doc, context)
+
+    assert isinstance(res, Ok)
+    assembled_page = res.value.pages[0]
+    assert assembled_page.paragraphs == ()
+    assert assembled_page.lines == page.lines

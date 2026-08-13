@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET  # nosec B405 - builds/writes XML here, never parses input
 
 from omniocr.domain.errors import ExportError
-from omniocr.domain.models import DocumentStructure, TenantContext
+from omniocr.domain.models import DocumentStructure, ParagraphRole, TenantContext
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.ports.interfaces import IExporter
+
+if TYPE_CHECKING:
+    from docx.document import Document as DocxDocument
+    from docx.text.paragraph import Paragraph
 
 
 class PlainTextExporter(IExporter):
@@ -302,6 +307,49 @@ class SearchablePdfExporter(IExporter):
             return Err(ExportError(f"searchable PDF export failed: {exc}"))
 
 
+_STYLE_BY_ROLE: dict[ParagraphRole, str] = {
+    ParagraphRole.HEADING: "Heading 1",
+    ParagraphRole.SUBHEADING: "Heading 2",
+    ParagraphRole.FOOTNOTE: "Footnote Text",
+    ParagraphRole.RUNNING_HEAD: "Header",
+    ParagraphRole.BODY: "Normal",
+}
+
+
+def _resolve_paragraph_style(doc: "DocxDocument", name: str) -> str:
+    """Return ``name`` if the template has it; else synthesize it from Normal.
+
+    python-docx's default template ships only a handful of built-in styles
+    (Heading 1/2, Header, Normal) — "Footnote Text" is a real Word style but
+    isn't pre-registered. Silently falling back to Normal here would defeat
+    the point of role-aware styling, so an unknown-but-requested style is
+    created instead of discarded.
+    """
+    try:
+        doc.styles[name]
+        return name
+    except KeyError:
+        pass
+    if name == "Normal":
+        return "Normal"
+    from docx.enum.style import WD_STYLE_TYPE
+
+    style = doc.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH)
+    style.base_style = doc.styles["Normal"]
+    if name == "Footnote Text":
+        style.font.italic = True
+    return name
+
+
+def _add_styled_run(paragraph: "Paragraph", text: str, font_name: str) -> None:
+    from docx.oxml.ns import qn
+
+    run = paragraph.add_run(text)
+    run.font.name = font_name
+    run_rpr = run._element.get_or_add_rPr()
+    run_rpr.get_or_add_rFonts().set(qn("w:eastAsia"), font_name)
+
+
 class DocxExporter(IExporter):
     """Export OCR text to DOCX without changing the recognized source text."""
 
@@ -330,12 +378,18 @@ class DocxExporter(IExporter):
             for page_index, page in enumerate(document.pages):
                 if page_index:
                     doc.add_page_break()
-                for line in page.lines:
-                    paragraph = doc.add_paragraph()
-                    run = paragraph.add_run(line.text)
-                    run.font.name = self._font_name
-                    run_rpr = run._element.get_or_add_rPr()
-                    run_rpr.get_or_add_rFonts().set(qn("w:eastAsia"), self._font_name)
+
+                if page.paragraphs:
+                    for para in page.paragraphs:
+                        style_name = _resolve_paragraph_style(
+                            doc, _STYLE_BY_ROLE.get(para.role, "Normal")
+                        )
+                        paragraph = doc.add_paragraph(style=style_name)
+                        _add_styled_run(paragraph, para.text, self._font_name)
+                else:
+                    for line in page.lines:
+                        paragraph = doc.add_paragraph()
+                        _add_styled_run(paragraph, line.text, self._font_name)
             doc.save(output)
             return Ok(output.getvalue())
         except ImportError:

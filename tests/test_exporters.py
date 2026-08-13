@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from xml.etree import ElementTree as ET
 
+import pytest
+
 from omniocr.domain.models import (
     BBox,
     Confidence,
@@ -10,6 +12,8 @@ from omniocr.domain.models import (
     EngineRun,
     ModelRef,
     OCRLine,
+    OCRParagraph,
+    ParagraphRole,
     RegionType,
     Script,
     TenantContext,
@@ -19,12 +23,12 @@ from omniocr.infrastructure.exporters import (
     DocxExporter,
     MarkdownExporter,
     PageXmlExporter,
+    PlainTextExporter,
 )
 from omniocr.infrastructure.exporters import SearchablePdfExporter
 
 
 def test_docx_exporter_writes_a_package_with_requested_font() -> None:
-    pytest = __import__("pytest")
     pytest.importorskip("docx")
 
     result = DocxExporter("New Athena Unicode").export(
@@ -270,3 +274,98 @@ def test_page_xml_export_region_type_preserved() -> None:
     assert regions["line-3"] == "apparatus"
     assert regions["line-4"] == "scholia"
     assert len(text_lines) == 4
+
+
+def test_paragraph_aware_exports() -> None:
+    """Verify that PlainText, Markdown, and Docx exporters handle paragraphs and roles correctly."""
+    run = EngineRun(
+        engine="tesseract",
+        model_ref=ModelRef("tesseract", "ell", "hash-1"),
+        model_hash="hash-1",
+        params=(),
+        timestamp="2026-01-01T00:00:00Z",
+    )
+    line1 = OCRLine(
+        id="line-1",
+        text="This is a heading",
+        confidence=Confidence(90.0),
+        bbox=BBox(10, 10, 200, 30),
+        script=Script.MODERN,
+        provenance=run,
+    )
+    line2 = OCRLine(
+        id="line-2",
+        text="This is body text.",
+        confidence=Confidence(95.0),
+        bbox=BBox(10, 50, 400, 25),
+        script=Script.MODERN,
+        provenance=run,
+    )
+    line3 = OCRLine(
+        id="line-3",
+        text="A footnote text.",
+        confidence=Confidence(80.0),
+        bbox=BBox(10, 500, 300, 20),
+        script=Script.MODERN,
+        provenance=run,
+    )
+    
+    para_heading = OCRParagraph(
+        id="p-1",
+        lines=(line1,),
+        text="This is a heading",
+        role=ParagraphRole.HEADING,
+    )
+    para_body = OCRParagraph(
+        id="p-2",
+        lines=(line2,),
+        text="This is body text.",
+        role=ParagraphRole.BODY,
+    )
+    para_footnote = OCRParagraph(
+        id="p-3",
+        lines=(line3,),
+        text="A footnote text.",
+        role=ParagraphRole.FOOTNOTE,
+    )
+
+    doc_struct = DocumentStructure(
+        pages=(
+            DocumentPage(
+                number=1,
+                width=600,
+                height=800,
+                lines=(line1, line2, line3),
+                paragraphs=(para_heading, para_body, para_footnote),
+            ),
+        )
+    )
+
+    ctx = TenantContext("o", "u", "desktop")
+
+    # 1. PlainTextExporter
+    pt_result = PlainTextExporter().export(doc_struct, ctx)
+    assert pt_result.is_ok()
+    pt_text = pt_result.value.decode("utf-8")
+    assert pt_text == "This is a heading\nThis is body text.\nA footnote text."
+
+    # 2. MarkdownExporter
+    md_result = MarkdownExporter().export(doc_struct, ctx)
+    assert md_result.is_ok()
+    md_text = md_result.value.decode("utf-8")
+    expected_md = "## Page 1\n\n# This is a heading\n\nThis is body text.\n\n*[Footnote]* A footnote text.\n"
+    assert md_text == expected_md
+
+    # 3. DocxExporter
+    pytest.importorskip("docx")
+    from io import BytesIO
+
+    from docx import Document
+
+    docx_result = DocxExporter().export(doc_struct, ctx)
+    assert docx_result.is_ok()
+    written = Document(BytesIO(docx_result.value))
+    styles = [p.style.name for p in written.paragraphs]
+    texts = [p.text for p in written.paragraphs]
+    assert styles == ["Heading 1", "Normal", "Footnote Text"]
+    assert texts == ["This is a heading", "This is body text.", "A footnote text."]

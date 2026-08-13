@@ -76,6 +76,16 @@ def test_out_is_optional() -> None:
     assert args.out is None
 
 
+def test_workers_defaults_to_sequential() -> None:
+    args = cli.build_parser().parse_args(["run", "book.pdf"])
+    assert args.workers == 1
+
+
+def test_workers_flag_parses() -> None:
+    args = cli.build_parser().parse_args(["run", "book.pdf", "--workers", "4"])
+    assert args.workers == 4
+
+
 def test_no_subcommand_is_rejected() -> None:
     with pytest.raises(SystemExit) as excinfo:
         cli.build_parser().parse_args([])

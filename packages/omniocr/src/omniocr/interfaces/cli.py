@@ -267,6 +267,7 @@ def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> Any:
             script=script,
             exporter=exporter,
             assemble_structure=args.structure,
+            workers=args.workers,
         )
     # kraken and ensemble share the ensemble root; it routes per script and
     # falls back to Tesseract for varieties Kraken is not the best tool for.
@@ -276,6 +277,7 @@ def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> Any:
         script=script,
         exporter=exporter,
         assemble_structure=args.structure,
+        workers=args.workers,
     )
 
 
@@ -465,6 +467,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--structure",
         action="store_true",
         help="reconstruct paragraphs, join hyphens, and mark running heads",
+    )
+    run.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="process N pages concurrently (default: 1, sequential)",
     )
     run.add_argument("--org", default="cli", help="tenant organization id for provenance")
     run.add_argument("--user", default="cli", help="user id for provenance")

@@ -219,6 +219,16 @@ class KrakenEngine(IOCREngine):
         not at the call. The fallback is permanent for this engine instance:
         a GPU that just OOM'd on one page will OOM on the next, and retrying
         every page would cost a wasted GPU attempt each time.
+
+        The whole call — not just model load — runs under ``self._lock``.
+        Kraken's ``TorchSeqRecognizer.rpred`` has no documented guarantee of
+        being safe for concurrent calls sharing one model instance, and
+        ADR-003 page parallelism shares exactly one ``KrakenEngine`` (and
+        therefore one model) across worker threads. Serializing here trades
+        away Kraken's share of the ``--workers`` speedup — recognition was
+        already the ~500s/page bottleneck the lock comment above notes — but
+        an unverified data race in the accuracy-critical engine is a worse
+        trade than that. Loosen only after confirming upstream thread-safety.
         """
         from kraken import rpred
 
@@ -227,9 +237,10 @@ class KrakenEngine(IOCREngine):
                 if self._model is None:
                     self._model = self._load_model()
         try:
-            return self.parse_records(
-                rpred.rpred(self._model, image, segmentation), page.width, page.height
-            )
+            with self._lock:
+                return self.parse_records(
+                    rpred.rpred(self._model, image, segmentation), page.width, page.height
+                )
         except Exception as exc:
             if not is_accelerator(self.device):
                 raise
@@ -241,9 +252,9 @@ class KrakenEngine(IOCREngine):
             with self._lock:
                 self._device = CPU
                 self._model = self._load_model()
-            return self.parse_records(
-                rpred.rpred(self._model, image, segmentation), page.width, page.height
-            )
+                return self.parse_records(
+                    rpred.rpred(self._model, image, segmentation), page.width, page.height
+                )
 
     def _load_model(self) -> Any:
         """Load the recognition model, degrading to CPU if the GPU cannot take it."""

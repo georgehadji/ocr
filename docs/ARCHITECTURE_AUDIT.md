@@ -194,7 +194,7 @@ This is not a style point. The composition root is the only enforcement site for
 ### Shared mutable state
 `[VERIFIED]` `KrakenEngine._model` and `._device` mutate lazily on first use; `._device` is *reassigned* on GPU→CPU fallback. Under ADR-003 page parallelism two threads can enter `_recognize` on one shared instance.
 `[HYPOTHESIS]` the `_model` race is likely benign — worst realistic outcome is a duplicated load, since both writes store equivalent objects.
-`[UNKNOWN]` **whether Kraken's `TorchSeqRecognizer` is thread-safe for concurrent `rpred` calls.** Not tested; ADR-003 does not address it. **Highest-value unverified risk in the system**, because parallelism is the intended remedy for the performance problem.
+`[RESOLVED]` **whether Kraken's `TorchSeqRecognizer` is thread-safe for concurrent `rpred` calls was unverified** — now moot: `--workers` was wired to the CLI, and `_recognize` was changed to hold `self._lock` for the whole `rpred.rpred(...)` call, not just model load. Kraken recognition is serialized per engine instance regardless of `--workers`; only Tesseract (subprocess-isolated, no shared model state) gets real concurrency from the flag today. Loosen the lock only after upstream thread-safety is confirmed.
 
 ### Tight coupling hotspots
 `[VERIFIED]` `pipeline.py` — highest afferent coupling (all editions + CLI), moderate efferent (12 port imports, all abstract). Expected for an orchestrator.
