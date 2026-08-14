@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import string
+
 import hypothesis.strategies as st
 import pytest
-from hypothesis import given
+from hypothesis import HealthCheck, given, settings
 
 from omniocr.application.structure.assembler import DocumentAssembler, unjoin
 from omniocr.application.structure.hyphenation import Dehyphenator
@@ -51,18 +53,23 @@ def test_dehyphenator_decision_table() -> None:
     assert join3.verdict == "unverified"
 
 
+# Bounded for relevance, not speed. This drew from whitelist_categories=("Lu",
+# "Ll", "Lt", "Lm", "Lo", "Nd") — essentially every letter in Unicode. join and
+# unjoin do codepoint index arithmetic, so what the property needs is multi-byte
+# characters and real precomposed diacritics, which Greek supplies; drawing
+# Hangul and CJK adds cost without adding a failure mode.
+_WORD_ALPHABET = (
+    string.ascii_letters
+    + string.digits
+    + "αβγδεζηθικλμνξοπρστυφχψω"
+    + "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ"
+    + "ἀἁἄἅἆἐἑἔὀὁόὸῶῷᾳῃῳϊΐῒ"
+)
+
+
 @st.composite
 def line_strategy(draw):
-    text = draw(
-        st.text(
-            min_size=1,
-            max_size=30,
-            alphabet=st.characters(
-                whitelist_categories=("Lu", "Ll", "Lt", "Lm", "Lo", "Nd"),
-                # only standard word letters and spaces
-            ),
-        )
-    )
+    text = draw(st.text(min_size=1, max_size=30, alphabet=_WORD_ALPHABET))
     text = text.strip()
     if not text:
         text = "dummy"
@@ -80,6 +87,18 @@ def line_strategy(draw):
     )
 
 
+# too_slow measures wall-clock during input generation, which here reflects the
+# state of the whole process rather than anything this strategy does. Run alone
+# — even under coverage — generation is fast; run after the Kraken suite has
+# loaded torch models into the same interpreter, it crawls, and the check fires
+# at a different example count each time (4 inputs/37s, then 8 inputs/25s).
+# That is an intermittent red build with no commit behind it, on a property
+# that holds over 20k examples. Suppressed rather than tuned, because there is
+# no strategy change that makes it deterministic.
+#
+# The deadline stays on: a slow *example* would be a real signal about
+# assemble/unjoin, unlike slow generation.
+@settings(suppress_health_check=[HealthCheck.too_slow])
 @given(lines=st.lists(line_strategy(), min_size=2, max_size=5))
 def test_joins_are_exactly_reversible(lines: list[OCRLine]) -> None:
     # To test pure join reversibility without break rules splitting paragraphs,
