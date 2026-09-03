@@ -17,7 +17,17 @@ from typing import Callable, Generic, TypeAlias, TypeVar
 
 T = TypeVar("T")
 U = TypeVar("U")
-E = TypeVar("E")
+# Covariant: a Result carrying a LayoutError *is* a Result carrying a
+# PipelineError, since LayoutError subclasses it. Invariance made that false,
+# so a stage returning the narrower error type could not be returned from a
+# function declaring the wider one — `PipelineOrchestrator.run` returning
+# `IDocumentAssembler.assemble`'s Result was rejected on exactly that.
+#
+# Sound here because Err is a frozen dataclass and `error` is only ever read;
+# no method accepts a bare E, so E never appears in a contravariant position.
+# T cannot be covariant for the same reason in reverse — `unwrap_or` takes a
+# `default: T` parameter.
+E = TypeVar("E", covariant=True)
 F = TypeVar("F")
 
 
