@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 
 from omniocr.application.structure.breaks import GapRule, IndentRule, ShortLineRule
 from omniocr.application.structure.geometry import (
@@ -13,7 +12,14 @@ from omniocr.application.structure.geometry import (
     median_line_height,
 )
 from omniocr.application.structure.assembler import DocumentAssembler
-from omniocr.domain.models import BBox, Confidence, DocumentPage, DocumentStructure, OCRLine, TenantContext
+from omniocr.domain.models import (
+    BBox,
+    Confidence,
+    DocumentPage,
+    DocumentStructure,
+    OCRLine,
+    TenantContext,
+)
 from omniocr.domain.result import Ok
 
 
@@ -26,15 +32,21 @@ def test_geometry_helpers() -> None:
     )
 
     assert column_left_edge(lines) == 10
-    assert column_right_edge(lines) == 110  # 10 + 100 = 110, 10 + 105 = 115, 12 + 98 = 110 -> Mode of right edges is 110
+    assert (
+        column_right_edge(lines) == 110
+    )  # 10 + 100 = 110, 10 + 105 = 115, 12 + 98 = 110 -> Mode of right edges is 110
     assert median_line_height(lines) == 15.0
     # Gaps are: l2.y - l1.bottom = 45 - 35 = 10; l3.y - l2.bottom = 70 - 60 = 10
     assert median_leading(lines) == 10.0
 
 
 def test_is_centred() -> None:
-    line_centred = OCRLine(id="l1", text="centred", confidence=Confidence(1.0), bbox=BBox(40, 20, 40, 15))
-    line_not_centred = OCRLine(id="l2", text="left aligned", confidence=Confidence(1.0), bbox=BBox(10, 45, 40, 15))
+    line_centred = OCRLine(
+        id="l1", text="centred", confidence=Confidence(1.0), bbox=BBox(40, 20, 40, 15)
+    )
+    line_not_centred = OCRLine(
+        id="l2", text="left aligned", confidence=Confidence(1.0), bbox=BBox(10, 45, 40, 15)
+    )
 
     # Column bounds: left=10, right=110 (width=100)
     # Centred line left indent: 40 - 10 = 30; right indent: 110 - 80 = 30 -> Exactly centered!
@@ -76,7 +88,9 @@ def test_paragraph_break_rules() -> None:
 
     # 3. GapRule
     # Normal gap (10.0)
-    l_normal = OCRLine(id="l_normal", text="normal gap", confidence=conf, bbox=BBox(10, 45, 100, 15))
+    l_normal = OCRLine(
+        id="l_normal", text="normal gap", confidence=conf, bbox=BBox(10, 45, 100, 15)
+    )
     # Large gap (gap = 75 - 35 = 40, which is > 1.5 * 10 = 15)
     l_large = OCRLine(id="l_large", text="large gap", confidence=conf, bbox=BBox(10, 75, 100, 15))
 
@@ -90,8 +104,18 @@ def test_document_assembler_groups_paragraphs() -> None:
     conf = Confidence(1.0)
     lines = (
         OCRLine(id="l1", text="This is a short line.", confidence=conf, bbox=BBox(10, 20, 50, 15)),
-        OCRLine(id="l2", text="This starts the second paragraph", confidence=conf, bbox=BBox(10, 45, 100, 15)),
-        OCRLine(id="l3", text="and this is the continuation.", confidence=conf, bbox=BBox(10, 70, 100, 15)),
+        OCRLine(
+            id="l2",
+            text="This starts the second paragraph",
+            confidence=conf,
+            bbox=BBox(10, 45, 100, 15),
+        ),
+        OCRLine(
+            id="l3",
+            text="and this is the continuation.",
+            confidence=conf,
+            bbox=BBox(10, 70, 100, 15),
+        ),
     )
     doc = DocumentStructure(pages=(DocumentPage(number=1, width=150, height=200, lines=lines),))
     context = TenantContext(organization_id="org", user_id="user", subscription_tier="desktop")
@@ -125,9 +149,7 @@ def test_is_probably_multi_column_detects_two_clusters() -> None:
         for i in range(4)
     ]
     right_col = [
-        OCRLine(
-            id=f"r{i}", text=f"right {i}", confidence=conf, bbox=BBox(310, i * 25, 100, 15)
-        )
+        OCRLine(id=f"r{i}", text=f"right {i}", confidence=conf, bbox=BBox(310, i * 25, 100, 15))
         for i in range(4)
     ]
     assert is_probably_multi_column(left_col + right_col, page_width=600) is True
@@ -162,9 +184,7 @@ def test_document_assembler_skips_multi_column_pages() -> None:
         for i in range(4)
     ]
     right_col = [
-        OCRLine(
-            id=f"r{i}", text=f"right {i}", confidence=conf, bbox=BBox(310, i * 25, 100, 15)
-        )
+        OCRLine(id=f"r{i}", text=f"right {i}", confidence=conf, bbox=BBox(310, i * 25, 100, 15))
         for i in range(4)
     ]
     page = DocumentPage(number=1, width=600, height=200, lines=tuple(left_col + right_col))

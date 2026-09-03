@@ -19,7 +19,9 @@ class Stub:
         self.result = result
         self.calls = 0
 
-    def segment(self, page: object, context: TenantContext) -> Result[Sequence[OCRLine], LayoutError]:
+    def segment(
+        self, page: object, context: TenantContext
+    ) -> Result[Sequence[OCRLine], LayoutError]:
         self.calls += 1
         return self.result
 

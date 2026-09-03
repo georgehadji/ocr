@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 
 from omniocr.application.pipeline import PipelineOrchestrator
 from omniocr.application.structure import IdentityAssembler

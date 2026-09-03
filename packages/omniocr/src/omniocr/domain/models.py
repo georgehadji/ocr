@@ -142,9 +142,9 @@ class LineJoin:
 
     first_line_id: str
     second_line_id: str
-    separator: str        # "" hyphen dropped | "-" hyphen kept | " " plain wrap
-    removed: str          # the exact character removed from line one, "" if none
-    verdict: str          # joined_in_lexicon | hyphen_in_lexicon | unverified
+    separator: str  # "" hyphen dropped | "-" hyphen kept | " " plain wrap
+    removed: str  # the exact character removed from line one, "" if none
+    verdict: str  # joined_in_lexicon | hyphen_in_lexicon | unverified
 
 
 @dataclass(frozen=True, slots=True)
