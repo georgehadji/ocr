@@ -29,14 +29,25 @@ from omniocr.domain.result import Err, Ok, Result
 from omniocr.infrastructure.grounding import GroundingGuard
 from omniocr.ports.interfaces import IOCREngine, RawPage
 
+# Single source of truth for the defaults. Composition roots must reference
+# these rather than restate them: desktop.py previously hardcoded its own
+# ``https://api.openai.com/v1`` fallback while still passing an OpenRouter
+# model id, so an unconfigured caller sent ``google/...`` to OpenAI.
+DEFAULT_API_URL = "https://openrouter.ai/api/v1"
+DEFAULT_MODEL = "google/gemini-3.5-flash-lite"
+# Longest-edge cap for the image sent to the VLM. Ingest renders at
+# ``ingest.RENDER_DPI`` for box-grounded engines; the VLM bills per tile and
+# does not need that resolution. See docs/VLM_COST_OPTIMIZATION.md.
+DEFAULT_MAX_EDGE_PX = 1400
+
 
 class VLMEngine(IOCREngine):
     """Optional cloud-API vision-language model adapter.
 
-    Defaults to `OpenRouter <https://openrouter.ai>`_ at
-    ``https://openrouter.ai/api/v1`` with ``google/gemini-3.5-flash-lite``
-    as the default model — 5× cheaper than Gemini Flash, vision-capable,
-    with minimal reasoning effort for deterministic extraction.
+    Endpoint and model default to ``DEFAULT_API_URL`` / ``DEFAULT_MODEL``
+    (OpenRouter, Gemini Flash-Lite) — cheaper than full Flash, vision-capable,
+    adequate for deterministic extraction. The values live in those module
+    constants and are deliberately not restated here.
 
     Requires an explicit ``api_key`` at construction time.
     The caller must check ``Settings.enable_vlm`` before wiring this adapter.
@@ -54,8 +65,8 @@ class VLMEngine(IOCREngine):
     def __init__(
         self,
         api_key: str,
-        api_url: str = "https://openrouter.ai/api/v1",
-        model: str = "google/gemini-3.5-flash-lite",
+        api_url: str = DEFAULT_API_URL,
+        model: str = DEFAULT_MODEL,
         grounding_guard: GroundingGuard | None = None,
         site_url: str = "",
         site_name: str = "OmniOCR",
@@ -64,7 +75,7 @@ class VLMEngine(IOCREngine):
             "Return each line of text with its approximate bounding box "
             "in the format: x1,y1,x2,y2|text (one per line)."
         ),
-        max_edge_px: int = 1400,
+        max_edge_px: int = DEFAULT_MAX_EDGE_PX,
     ) -> None:
         # api_url is operator/env-configured, not per-request input — but a
         # misconfigured value (file://, custom scheme) must fail at

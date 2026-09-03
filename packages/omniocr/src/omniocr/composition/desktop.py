@@ -6,6 +6,7 @@ from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.application.pipeline import PipelineOrchestrator
 from omniocr.application.structure import DocumentAssembler, IdentityAssembler
 from omniocr.application.layout import FallbackLayoutAnalyzer
+from omniocr.infrastructure.config import DEFAULT_TESSERACT_LANGUAGE
 from omniocr.infrastructure.tesseract import TesseractEngine, TesseractLayoutAnalyzer
 from omniocr.infrastructure.ingest import DocumentPageSource
 from omniocr.infrastructure.preprocess import GrayscaleProcessor
@@ -18,6 +19,14 @@ from omniocr.infrastructure.exporters import MarkdownExporter
 from omniocr.infrastructure.jobs import InMemoryJobStore
 from omniocr.infrastructure.lexicons import lexicons_by_script
 from omniocr.ports.interfaces import IExporter, IJobStore, IOCREngine
+
+# Defaults only — no optional third-party imports in vlm's module scope, so
+# these resolve even when the VLM extra is absent. They are function-signature
+# defaults, which are evaluated at import time and so cannot live in the
+# guarded block below.
+from omniocr.infrastructure.vlm import DEFAULT_API_URL as DEFAULT_VLM_API_URL
+from omniocr.infrastructure.vlm import DEFAULT_MAX_EDGE_PX as DEFAULT_VLM_MAX_EDGE_PX
+from omniocr.infrastructure.vlm import DEFAULT_MODEL as DEFAULT_VLM_MODEL
 
 # VLM and Calamari are optional extras; import failures gracefully disable them.
 try:
@@ -36,7 +45,7 @@ except ImportError:
 
 
 def create_tesseract_pipeline(
-    language: str = "eng",
+    language: str = DEFAULT_TESSERACT_LANGUAGE,
     script: Script = Script.MODERN,
     exporter: IExporter | None = None,
     job_store: IJobStore | None = None,
@@ -69,8 +78,8 @@ def create_ensemble_pipeline(
     job_store: IJobStore | None = None,
     vlm_api_key: str | None = None,
     vlm_api_url: str | None = None,
-    vlm_model: str = "google/gemini-3.5-flash-lite",
-    vlm_max_edge_px: int = 1400,
+    vlm_model: str = DEFAULT_VLM_MODEL,
+    vlm_max_edge_px: int = DEFAULT_VLM_MAX_EDGE_PX,
     calamari_model_glob: str | None = None,
     assemble_structure: bool = False,
     workers: int = 1,
@@ -78,10 +87,13 @@ def create_ensemble_pipeline(
     """Build a CPU ensemble with script rules injected at the composition root.
 
     When ``vlm_api_key`` is provided, a VLM engine is added as an opt-in
-    second opinion for polytonic/ancient scripts. The VLM defaults to an
-    OpenRouter-compatible endpoint (``https://openrouter.ai/api/v1``) with
-    ``google/gemini-2.5-flash-001`` — set ``vlm_api_url`` to use a different
-    OpenAI-compatible provider. When ``calamari_model_glob``
+    second opinion for polytonic/ancient scripts. The VLM endpoint and model
+    default to ``vlm.DEFAULT_API_URL`` / ``vlm.DEFAULT_VLM_MODEL`` (OpenRouter)
+    — set ``vlm_api_url`` to use a different OpenAI-compatible provider. The
+    defaults are not restated here: this root previously hardcoded an OpenAI
+    fallback URL while passing an OpenRouter model id, which sent
+    ``google/...`` to a provider that does not serve it. When
+    ``calamari_model_glob``
     is provided, a Calamari subprocess engine is added as a voting booster.
     Both are wrapped in ``RetryingEngine`` for transient-failure resilience.
     """
@@ -97,11 +109,8 @@ def create_ensemble_pipeline(
     if vlm_api_key is not None:
         vlm = VLMEngine(
             api_key=vlm_api_key,
-            api_url=vlm_api_url or "https://api.openai.com/v1",
+            api_url=vlm_api_url or DEFAULT_VLM_API_URL,
             model=vlm_model,
-            # Ingest renders at 300 DPI for box-grounded Tesseract/Kraken; the
-            # VLM bills per tile and does not need it. Tune against the
-            # grounded/ungrounded ratio — see docs/VLM_COST_OPTIMIZATION.md.
             max_edge_px=vlm_max_edge_px,
         )
         retrying_vlm = RetryingEngine(vlm)
@@ -115,14 +124,16 @@ def create_ensemble_pipeline(
             by_script[script_key] = (*by_script[script_key], retrying_calamari)
 
     # Build engine_map so the router can resolve promoted models by engine name
+    # Keys come from each engine's own ``name`` so the map cannot drift from
+    # the identity the router and manifest match on.
     engine_map: dict[str, IOCREngine] = {
-        "kraken": kraken,
-        "tesseract": tesseract,
+        KrakenEngine.name: kraken,
+        TesseractEngine.name: tesseract,
     }
     if vlm_api_key is not None:
-        engine_map["vlm"] = retrying_vlm
+        engine_map[VLMEngine.name] = retrying_vlm
     if calamari_model_glob is not None:
-        engine_map["calamari"] = retrying_calamari
+        engine_map[CalamariEngine.name] = retrying_calamari
 
     router = ScriptRouter(
         by_script=by_script,
