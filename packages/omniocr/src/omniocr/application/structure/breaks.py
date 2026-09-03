@@ -10,9 +10,7 @@ class BreakRule(Protocol):
     @property
     def name(self) -> str: ...
 
-    def breaks_before(
-        self, previous: OCRLine, current: OCRLine, page: PageGeometry
-    ) -> bool: ...
+    def breaks_before(self, previous: OCRLine, current: OCRLine, page: PageGeometry) -> bool: ...
 
 
 class IndentRule:

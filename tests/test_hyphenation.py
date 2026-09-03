@@ -3,12 +3,18 @@ from __future__ import annotations
 import string
 
 import hypothesis.strategies as st
-import pytest
 from hypothesis import HealthCheck, given, settings
 
 from omniocr.application.structure.assembler import DocumentAssembler, unjoin
 from omniocr.application.structure.hyphenation import Dehyphenator
-from omniocr.domain.models import BBox, Confidence, DocumentPage, DocumentStructure, OCRLine, TenantContext
+from omniocr.domain.models import (
+    BBox,
+    Confidence,
+    DocumentPage,
+    DocumentStructure,
+    OCRLine,
+    TenantContext,
+)
 from omniocr.domain.result import Ok
 from omniocr.ports.lexicon import SetLexicon
 
@@ -107,15 +113,15 @@ def test_joins_are_exactly_reversible(lines: list[OCRLine]) -> None:
     # And we set x=10 for all to avoid IndentRule splitting them.
     # And we set w=90 to avoid ShortLineRule splitting them.
     sequential_lines = []
-    for idx, l in enumerate(lines):
+    for idx, line in enumerate(lines):
         sequential_lines.append(
             OCRLine(
-                id=l.id,
-                text=l.text,
-                confidence=l.confidence,
+                id=line.id,
+                text=line.text,
+                confidence=line.confidence,
                 bbox=BBox(10, 10 + idx * 25, 90, 15),
-                script=l.script,
-                region_type=l.region_type,
+                script=line.script,
+                region_type=line.region_type,
             )
         )
 
