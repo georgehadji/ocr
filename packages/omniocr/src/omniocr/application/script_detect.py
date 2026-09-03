@@ -45,11 +45,7 @@ def latin_evidence(text: str) -> int:
 
 def greek_letter_count(text: str) -> int:
     """Count characters in the Greek and Greek Extended blocks."""
-    return sum(
-        1
-        for character in text
-        if "Ͱ" <= character <= "Ͽ" or "ἀ" <= character <= "῿"
-    )
+    return sum(1 for character in text if "Ͱ" <= character <= "Ͽ" or "ἀ" <= character <= "῿")
 
 
 def is_latin_dominant(text: str, threshold: int = MIN_LATIN_EVIDENCE) -> bool:

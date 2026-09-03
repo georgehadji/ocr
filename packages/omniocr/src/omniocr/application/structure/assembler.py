@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Mapping, Sequence
+from typing import Mapping
 
 from omniocr.application.structure.breaks import GapRule, IndentRule, ShortLineRule
 from omniocr.application.structure.geometry import (
@@ -17,12 +17,10 @@ from omniocr.application.structure.roles import classify as classify_role
 from omniocr.application.structure.running_heads import detect as detect_running_heads
 from omniocr.domain.errors import LayoutError
 from omniocr.domain.models import (
-    DocumentPage,
     DocumentStructure,
     LineJoin,
     OCRLine,
     OCRParagraph,
-    ParagraphRole,
     RegionType,
     Script,
     Suggestion,
@@ -229,13 +227,14 @@ def unjoin(paragraph: OCRParagraph) -> tuple[str, ...]:
             # We need to find where the next line starts in para_text.
             # Next line's text starts after first line's text.
             # If j.separator == "" (hyphen dropped):
-            # first ends with j.removed, and next starts with second.text.lstrip()
-            second = paragraph.lines[idx + 1]
-            second_clean = second.text.lstrip()
-
-            # The joined text has: A + second_clean
-            # Where line.text originally was: A + j.removed
-            # So the length of A is: len(line.text) - 1
+            # first ends with j.removed, and next starts with the next line's
+            # text, left-stripped.
+            #
+            # The joined text is therefore: A + that stripped next-line text,
+            # where line.text originally was: A + j.removed.
+            # So the length of A is: len(line.text) - 1.
+            # Only that length is needed here, so the next line itself is not
+            # read — it is recovered on the following iteration.
             A_len = len(line.text) - 1
             line_reconstructed = para_text[text_ptr : text_ptr + A_len] + j.removed
             reconstructed.append(line_reconstructed)

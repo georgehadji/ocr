@@ -309,7 +309,7 @@ def test_paragraph_aware_exports() -> None:
         script=Script.MODERN,
         provenance=run,
     )
-    
+
     para_heading = OCRParagraph(
         id="p-1",
         lines=(line1,),
@@ -353,7 +353,9 @@ def test_paragraph_aware_exports() -> None:
     md_result = MarkdownExporter().export(doc_struct, ctx)
     assert md_result.is_ok()
     md_text = md_result.value.decode("utf-8")
-    expected_md = "## Page 1\n\n# This is a heading\n\nThis is body text.\n\n*[Footnote]* A footnote text.\n"
+    expected_md = (
+        "## Page 1\n\n# This is a heading\n\nThis is body text.\n\n*[Footnote]* A footnote text.\n"
+    )
     assert md_text == expected_md
 
     # 3. DocxExporter

@@ -1,461 +1,285 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/tests-326-success" alt="326 tests">
-  <img src="https://img.shields.io/badge/coverage-85%25-green" alt="85% coverage">
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
-</p>
-
 <h1 align="center">OmniOCR</h1>
 
 <p align="center">
-  <strong>Printable Greek Optical Character Recognition — from Modern to Byzantine</strong>
-  <br>
-  Faithful (diplomatic) transcription for scholarly, liturgical, and historical printed Greek.
+  <strong>Printed Greek OCR — Modern, polytonic, Ancient, Byzantine, Pontian</strong><br>
+  Faithful (diplomatic) transcription for scholarly, liturgical, and historical texts.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12-blue" alt="Python 3.11 / 3.12">
+  <img src="https://img.shields.io/badge/typing-mypy%20--strict-blue" alt="mypy --strict">
+  <img src="https://img.shields.io/badge/coverage-%E2%89%A580%25%20CI--enforced-brightgreen" alt="Coverage gate 80%">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
 </p>
 
 ---
 
-## Overview
+OmniOCR converts scanned Greek print into editable, searchable text. It targets the
+varieties general-purpose OCR handles worst — polytonic orthography, critical editions
+with apparatus, Byzantine typefaces and ligatures — and exports to DOCX, Markdown,
+searchable PDF, TXT, ALTO-XML, and PAGE-XML.
 
-OmniOCR is a CPU-first OCR suite purpose-built for **printed Greek across every variety**: modern monotonic, polytonic, Ancient Greek (critical editions), Byzantine printed typefaces, and Pontian. It ingests large PDFs and images and exports to DOCX, Markdown, searchable PDF, TXT, ALTO, and PAGE-XML.
+It runs **CPU-only** by default, uses a GPU automatically when one is present, and is
+built around one non-negotiable rule.
 
-**Architecture:** Clean hexagonal design with a shared core library that serves three editions:
+### Faithfulness over fluency
 
-| Edition | Stack | When to use |
-|---|---|---|
-| [Desktop](#desktop-edition) | Streamlit review UI | Single-scholar correction workflow |
-| [Server](#server-edition) | FastAPI + RQ + Redis | Headless batch processing |
-| [Cloud](#cloud-edition) | FastAPI + Celery + Redis + Docker | Multi-tenant production deployment |
+For scholarly Greek a plausible reading is worse than a flagged uncertain one. No stage
+of the pipeline silently alters recognized text.
 
-### Guiding principle: faithfulness over fluency
-
-For scholarly Greek, a "plausible" reading is worse than a flagged uncertain one. Post-correction is **suggest-only** — lexicons highlight, they never rewrite. VLM output is opt-in, always grounding-checked, and never the unaudited sole source.
-
-- **Verifiable engines** (Tesseract, Kraken) are the source of truth — every character is auditable and round-trippable to the page image.
-- **VLM output** (OpenRouter) is an opt-in second opinion, reconciled against box-grounded output. Divergence raises a flag, it does not overwrite.
-- **Post-correction** suggests; the human decides.
+- **Box-grounded engines** (Tesseract, Kraken) are the source of truth. Every character
+  is auditable back to a region of the page image.
+- **Post-correction suggests, never rewrites.** Lexicons, diacritic validation, and
+  hyphen joins emit `Suggestion` objects with a reason. A human accepts or rejects.
+- **VLM output is opt-in** and always reconciled against box-grounded output. Divergence
+  raises a flag; it never overwrites.
+- **Archival exports are verbatim.** ALTO and PAGE-XML always carry the raw recognized
+  lines, whatever the rendering exports do.
 
 ---
 
-## Quick Start
+## Install
+
+Requires Python 3.11+ and [Tesseract](https://github.com/tesseract-ocr/tesseract) on
+`PATH` with the `grc` and `ell` language packs.
 
 ```bash
-# 1. Install the package with all optional dependencies
 pip install -e ".[pdf,kraken,opencv,docx,dev]"
-
-# 2. Run the review UI
-streamlit run editions/desktop/review_ui.py
 ```
 
-Upload a PDF — the pipeline runs automatically. That's it.
+The core package has **zero required dependencies** — every engine and format is an
+extra, so a minimal install stays small.
 
----
-
-## Installation
-
-### Core (lightweight — no engines)
-
-```bash
-pip install -e .
-```
-
-### Optional extras
-
-| Extra | Purpose |
+| Extra | Enables |
 |---|---|
-| `pdf` | PDF page rendering via PyMuPDF |
-| `kraken` | Neural layout segmentation and recognition |
-| `tesseract` | Baseline OCR via Tesseract |
-| `opencv` | Image preprocessing (Sauvola binarization) |
-| `docx` | DOCX export with Cambria font |
-| `vlm` | Vision-language model (stdlib, no extra deps) |
-| `calamari` | GPLv3 Calamari OCR (subprocess-isolated) |
-| `server` | FastAPI + RQ server edition |
-| `cloud` | FastAPI + Celery + Redis cloud edition |
-| `dev` | Testing, linting, type-checking |
+| `pdf` | PDF page rendering and streaming ingest (PyMuPDF) |
+| `tesseract` | Tesseract recognition and word boxes |
+| `kraken` | Kraken segmentation and recognition — the accuracy driver |
+| `opencv` | Sauvola binarization and preprocessing |
+| `docx` | DOCX export |
+| `vlm` | Vision-language second opinion (stdlib only, no new deps) |
+| `calamari` | Calamari voting booster — **GPLv3**, subprocess-isolated |
+| `training` | Kraken fine-tuning with MLflow tracking |
+| `server` / `cloud` | Server and Cloud edition runtimes |
+| `dev` | pytest, ruff, mypy, bandit, pip-audit |
 
-**Recommended for all features:**
-
-```bash
-pip install -e ".[pdf,kraken,opencv,docx,dev]"
-```
-
----
-
-## Usage
-
-### CLI (headless — agents, CI, batch)
-
-Installing the package registers an `omniocr` command. It never prompts, never
-opens a UI, and never reads stdin.
-
-```bash
-omniocr doctor --json
-```
-
-```bash
-omniocr run book.pdf --engine ensemble --script polytonic
-```
-
-`--out` is optional. Without it, output lands in `Outputs/<input-name>.txt`
-(created automatically) — pass `--out` or `--format` to choose the file or
-format explicitly:
-
-```bash
-omniocr run book.pdf --out book.docx --engine ensemble --script polytonic
-```
-
-Check the environment before a long run — `doctor` exits `3` and names the
-problem when an engine, language pack, or model is missing:
+Verify the environment before committing to a long run:
 
 ```bash
 omniocr doctor
 ```
 
-Cap the work while testing a setup, instead of committing to a whole book —
-also the fastest way to check that the engine/language/script combination
-actually works before committing to a long run:
+`doctor` exits `3` and names the missing engine, language pack, or model.
+
+---
+
+## Quick start
+
+```bash
+omniocr run book.pdf --out book.docx --engine ensemble --script polytonic --structure
+```
+
+Without `--out`, output lands in `Outputs/<input-name>.txt`. Format is inferred from the
+extension and can be forced with `--format`.
+
+Always smoke-test the engine/script/language combination before a full book:
 
 ```bash
 omniocr run book.pdf --max-pages 5 --json
 ```
 
-**Speed.** `--engine tesseract` is seconds per page. `--engine kraken` and the
-default `--engine ensemble` run Kraken, which measured **minutes per page on
-CPU**. Size any process timeout accordingly — a short timeout on the default
-engine reads as a hang, not slowness. `--engine tesseract` is the fast path
-for a first pass or a CI smoke check.
+### CLI reference
 
-Kraken uses a **CUDA GPU automatically when one is available**, and falls back
-to CPU otherwise — no flag required. If the GPU is present but cannot take the
-model or a page (driver mismatch, out of memory), it degrades to CPU and logs
-a warning rather than failing the run. `omniocr doctor` reports which device
-will be used:
+| Flag | Default | Purpose |
+|---|---|---|
+| `--engine` | `ensemble` | `tesseract` (fast) · `kraken` · `ensemble` |
+| `--script` | `polytonic` | `modern` `polytonic` `ancient` `byzantine` `pontian` `mixed` `unknown` |
+| `--format` | from `--out` | `txt` `md` `docx` `pdf` `alto` `page` |
+| `--lang` | `grc` | Tesseract language pack |
+| `--model` | manifest default | Kraken `.mlmodel` path |
+| `--structure` | off | Reconstruct paragraphs, join hyphens, mark running heads |
+| `--workers N` | `1` | Process N pages concurrently |
+| `--max-pages N` | all | Stop after N pages |
+| `--json` | off | One JSON document on stdout |
 
-```bash
-omniocr doctor --json | jq .kraken.device
-```
-
-The device that actually produced each line is recorded in its provenance, so
-a GPU and a CPU run are distinguishable after the fact.
-
-**Contract for unattended callers**
+### Contract for unattended callers
 
 | Aspect | Behaviour |
 |---|---|
-| stdout | With `--json`, exactly one JSON document. Nothing else — safe to pipe to `jq`. |
-| stderr | Per-page progress and all diagnostics, in every mode. |
-| exit 0 | Completed with no page failures. **Not** a claim of accuracy — OCR always has some error rate; `"ok": true` means the pipeline ran, not that the text is error-free. |
-| exit 1 | Pipeline or export failed. Partial output may still have been written — check `failures` in the JSON. |
-| exit 2 | Bad arguments or missing input file. |
-| exit 3 | Environment problem: missing engine, language pack, or model. |
+| stdout | With `--json`, exactly one JSON document — safe to pipe to `jq`. |
+| stderr | All progress and diagnostics, in every mode. |
+| exit `0` | Ran with no page failures. **Not a claim of accuracy** — OCR always has an error rate. |
+| exit `1` | Pipeline or export failed. Partial output may exist; check `failures`. |
+| exit `2` | Bad arguments or missing input. |
+| exit `3` | Environment problem — missing engine, language pack, or model. |
 
-Output format comes from the `--out` extension (`.txt`, `.md`, `.docx`, `.pdf`,
-`.xml`) and can be overridden with `--format` (adds `page` for PAGE-XML).
+---
 
-Run it without installing:
+## Accuracy: the model matters more than the engine
 
-```bash
-python -m omniocr.interfaces.cli doctor
+Measured on real target material, the three bundled Kraken models span **0.038–0.264
+CER** while Tesseract sits at **0.056**. The wrong Kraken model is far worse than
+Tesseract; the right one is substantially better.
+
+**Never select a model by filename order.** The default is declared in
+`models/manifest.json`. See [docs/ENGINE_ACCURACY.md](docs/ENGINE_ACCURACY.md) for the
+per-variety numbers.
+
+Tesseract remains the fast baseline and the source of word boxes for searchable PDF.
+
+---
+
+## Performance
+
+`--engine tesseract` runs in **seconds per page**. `kraken` and the default `ensemble`
+run Kraken, which measures in **minutes per page on CPU** — size process timeouts
+accordingly, or a slow run reads as a hang.
+
+`--workers N` processes pages concurrently. Note that Kraken recognition is serialized
+per engine instance (its `rpred` path has no upstream thread-safety guarantee), so today
+the flag mainly benefits Tesseract; see
+[ADR-003](docs/adr/003-threadpoolexecutor-parallelism.md).
+
+Ingest streams pages lazily, so a 2000-page book never lands in memory at once. Page
+failures are isolated — one bad page never kills a job — and SQLite-backed checkpointing
+lets an interrupted run resume.
+
+---
+
+## Pipeline
+
+```
+INGEST         PyMuPDF page streaming
+     ↓
+PREPROCESS     Grayscale → optional Sauvola binarization
+     ↓
+LAYOUT         Kraken pageseg, falling back to Tesseract when it returns zero lines
+     ↓
+ROUTE          Script → engine selection
+     ↓
+RECOGNIZE      Tesseract · Kraken · Calamari (opt-in) · VLM (opt-in)
+     ↓
+RECONCILE      Script-aware / confidence-weighted vote
+     ↓
+POST-CORRECT   NFC · diacritic validation · ligature and abbreviation expansion ·
+               lexicon highlighting            ← all suggest-only
+     ↓
+ASSEMBLE       Paragraphs, hyphen joins, running heads, roles   (--structure)
+     ↓
+EXPORT         TXT · Markdown · DOCX · searchable PDF · ALTO · PAGE-XML
 ```
 
-### Desktop Edition (Streamlit review UI)
+Document structure recovery is opt-in and additive: paragraphs are a **view** over
+untouched lines, every hyphen join records the exact character removed so it can be
+reversed, and pages detected as multi-column are skipped rather than assembled wrongly.
+See [docs/DOCUMENT_STRUCTURE.md](docs/DOCUMENT_STRUCTURE.md).
+
+---
+
+## Editions
+
+One shared core (`packages/omniocr`); editions differ only in their composition root.
+
+| Edition | Stack | Use for |
+|---|---|---|
+| **Desktop** | Streamlit | Single-scholar review and correction |
+| **Server** | FastAPI + RQ + Redis | Headless batch processing |
+| **Cloud** | FastAPI + Celery + Redis + Docker | Multi-tenant deployment |
 
 ```bash
+# Desktop — review UI with polytonic keyboard and suggestion accept/reject
 streamlit run editions/desktop/review_ui.py
-```
 
-1. **Upload** a PDF or image
-2. **Pipeline runs automatically** — layout segmentation → recognition → reconciliation → post-correction
-3. **Review** — side-by-side image and text pane
-4. **Suggestions** — each suggestion shown with reason; click Accept to capture ground truth
-5. **Polytonic keyboard** — type `a>` for ἀ, `h<` for ἡ, etc.
-6. **Export** — Markdown (built-in), DOCX (with `docx` extra)
-7. **Ground truth** — accepted corrections saved by line_id with CER comparison
-
-### Server Edition (FastAPI + RQ)
-
-```bash
-# Terminal 1 — API
-uvicorn editions.server.main:app --host 0.0.0.0 --port 8000
-
-# Terminal 2 — Worker (requires Redis)
+# Server — API plus worker
+uvicorn editions.server.main:app --port 8000
 rq worker --url redis://localhost:6379 omniocr
+
+# Cloud
+docker compose -f editions/cloud/docker-compose.yml up
 ```
 
+---
+
+## Architecture
+
+Clean hexagonal design; dependencies point inward.
+
 ```
-POST /ocr/submit          → 202 { "job_id": "..." }
-GET  /ocr/status/{id}     → { "status": "completed" }
-GET  /ocr/result/{id}     → (Markdown response)
+interfaces → infrastructure → application → domain
 ```
 
-### Cloud Edition (FastAPI + Celery + Redis)
+- **`domain/`** — frozen dataclasses, `Result[T, E]`, zero I/O.
+- **`ports/`** — `Protocol` interfaces (`IOCREngine`, `ILayoutAnalyzer`, `IExporter`, …).
+- **`application/`** — orchestration, reconciliation, routing, structure assembly.
+- **`infrastructure/`** — engine, export, and persistence adapters.
+- **`composition/`** — dependency wiring per edition.
+
+Two rules are CI-enforced rather than documented and hoped for:
+`scripts/check_layering.py` fails the build on an inward dependency violation, and
+`scripts/check_license_isolation.py` fails it on a GPL import reaching the core.
+
+Full design of record: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+---
+
+## Development
+
+401 tests across 56 files. Every gate below runs in CI on Ubuntu and Windows,
+Python 3.11 and 3.12.
 
 ```bash
-# All at once
-docker compose up
-
-# Or manually:
-# Terminal 1 — Redis
-docker run -p 6379:6379 redis:7-alpine
-
-# Terminal 2 — FastAPI
-uvicorn editions.cloud.main:app --host 0.0.0.0 --port 8000
-
-# Terminal 3 — Worker
-celery -A editions.cloud.celery_app worker --loglevel=info
+python -m pytest                                   # full suite
+python -m pytest --cov=packages/omniocr/src/omniocr --cov-fail-under=80
+ruff check packages tests editions scripts
+ruff format --check packages tests editions scripts
+mypy --strict --ignore-missing-imports packages/omniocr/src
+python scripts/check_license_isolation.py          # GPL containment
+python scripts/check_layering.py                   # hexagonal boundaries
+python -m pytest tests/test_regression.py          # CER/WER regression gate
+python -m bandit -r packages/omniocr/src/omniocr -s B101
+python -m pip_audit
 ```
 
-### VLM / OpenRouter (opt-in)
+Slow tests (Kraken inference, training) are marked and excluded by default:
+`pytest -m slow` to include them.
 
-Add an LLM-based reviewer for difficult pages:
-
-```bash
-export OMNIOCR_ENABLE_VLM=true
-export OMNIOCR_VLM_API_KEY=sk-or-v1-...
-streamlit run editions/desktop/review_ui.py
-```
-
-The VLM engine defaults to `google/gemini-3.5-flash-lite` via OpenRouter with `temperature=0.0` for deterministic output. Configure via:
-
-```python
-pipeline = create_ensemble_pipeline(
-    tesseract_language="grc+ell+eng",
-    kraken_model_path="./models/kraken.mlmodel",
-    vlm_api_key="sk-or-v1-...",
-    vlm_api_url="https://openrouter.ai/api/v1",   # default
-    vlm_model="google/gemini-3.5-flash-lite",       # default
-)
-```
+The suite covers unit, property-based (Hypothesis), port-contract, end-to-end, and CER
+regression layers. Faithfulness is machine-checked: a change that mutates recognized
+text fails the build.
 
 ---
 
-## Pipeline Architecture
+## Licensing
 
-```
-Upload (PDF/image)
-   │
-   ▼
-INGEST — PyMuPDF page-streaming (lazy generator, large PDFs ✓)
-   │
-   ▼
-PREPROCESS — Grayscale → (optional Sauvola binarization)
-   │
-   ▼
-LAYOUT — Kraken pageseg line segmentation + region classification
-   │         (main / apparatus / scholia / running head)
-   ▼
-SCRIPT ROUTER — Route by script (ancient, polytonic, byzantine, …)
-   │
-   ▼
-RECOGNITION BANK
-   ├─ Tesseract (ell, grc — fast baseline + word boxes)
-   ├─ Kraken (.mlmodel — accuracy driver for historical print)
-   └─ VLM (OpenRouter — opt-in, grounding-guarded)
-   │
-   ▼
-RECONCILE — Confidence-weighted vote across engines
-   │
-   ▼
-POST-CORRECT — Suggest-only (never rewrites source):
-   ├─ NFC normalization (Unicode hygiene only)
-   ├─ Dangling combining mark detection
-   ├─ Ligature expansion (reversible, e.g. ϗ → και)
-   ├─ Abbreviation expansion (κ.τ.λ. → καὶ τὰ λοιπά)
-   ├─ Diacritic validator (impossible breathing/accent combos)
-   └─ Lexicon highlighter (Byzantine + Pontian, suggest-only)
-   │
-   ▼
-EXPORT — TXT / Markdown / ALTO / PAGE-XML / Searchable PDF / DOCX
-```
+**OmniOCR core is MIT** (see [LICENSE](LICENSE)) and contains no copyleft code.
 
----
+Two optional components are **GPLv3** and are deliberately kept at arm's length —
+invoked as separate processes over stdin/stdout, never imported, never linked:
 
-## Project Structure
-
-```
-OCR/
-├── packages/omniocr/              # THE shared core — only place logic lives
-│   └── src/omniocr/
-│       ├── domain/                 # Pure, no I/O, frozen dataclasses
-│       │   ├── models.py           # OCRBlock, OCRLine, DocumentPage, RegionType, …
-│       │   ├── result.py           # Ok/Err railway-oriented monad
-│       │   └── errors.py           # PipelineError hierarchy
-│       ├── ports/                  # Abstract interfaces (hexagon boundary)
-│       │   └── interfaces.py       # IOCREngine, ILayoutAnalyzer, IExporter, …
-│       ├── application/            # Pipeline orchestration (functional core)
-│       │   ├── pipeline.py         # PipelineOrchestrator, SuggestOnlyCorrector
-│       │   ├── metrics.py          # CER/WER/regression_gate
-│       │   ├── reconcile.py        # Confidence-weighted voting
-│       │   └── router.py           # Script→engine routing
-│       ├── infrastructure/         # Adapters (engines, exporters, persistence)
-│       │   ├── kraken.py           # KrakenEngine + KrakenLayoutAnalyzer
-│       │   ├── tesseract.py        # TesseractEngine (hash-verified models)
-│       │   ├── vlm.py              # VLMEngine (OpenRouter, grounding-guarded)
-│       │   ├── calamari.py         # CalamariEngine (subprocess, GPL-isolated)
-│       │   ├── grounding.py        # IoU grounding guard for VLM
-│       │   ├── exporters.py        # ALTO, PAGE-XML, Markdown, PDF, DOCX
-│       │   ├── ingest.py           # DocumentPageSource (PyMuPDF streaming)
-│       │   ├── preprocess.py       # Grayscale + Sauvola binarization
-│       │   ├── resilience.py       # Retry, CircuitBreaker, Caching (LRU)
-│       │   ├── review.py           # ReviewPage/ReviewDocument models
-│       │   ├── training.py         # Kraken fine-training pipeline
-│       │   ├── config.py           # Settings with env-backed, validated config
-│       │   ├── logging.py          # structlog structured logging
-│       │   ├── security.py         # Upload validation (magic bytes, paths)
-│       │   ├── events.py           # InMemoryEventBus
-│       │   ├── jobs.py             # InMemoryJobStore + SQLiteJobStore
-│       │   ├── lexicons.py         # Byzantine + Pontian word lists
-│       │   ├── lexicon.py          # SetLexicon adapter
-│       │   └── models.py           # SHA-256 model hash verification
-│       ├── composition/            # Factory functions (DI wiring)
-│       │   └── desktop.py          # create_ensemble_pipeline, etc.
-│       └── testing/                # Test-only helpers
-│           └── fixtures.py         # Corpus loader
-├── editions/
-│   ├── desktop/                    # Streamlit review UI
-│   ├── server/                     # FastAPI + RQ
-│   └── cloud/                      # FastAPI + Celery + Docker Compose
-├── tests/
-│   ├── corpus/                     # Fixture images + ground truth
-│   ├── test_config.py …            # 136 tests across 20 files
-│   ├── test_properties.py          # Hypothesis property tests
-│   ├── test_contracts.py           # IOCREngine port contract tests
-│   ├── test_e2e.py                 # Pipeline E2E smoke tests
-│   └── test_regression.py          # CER/WER regression gate
-├── scripts/
-│   ├── generate_fixtures.py        # Synthetic fixture page generator
-│   ├── compute_baselines.py        # CER/WER baseline computation
-│   ├── train_kraken.py             # Kraken fine-tune with MLflow
-│   └── check_license_isolation.py  # GPLv3 contamination check
-├── prototype/                      # Legacy prototype (ocr.py)
-└── models/                         # Pinned model artifacts (git-lfs)
-```
-
----
-
-## Configuration
-
-Environment variables:
-
-| Variable | Default | Description |
+| Component | License | Status |
 |---|---|---|
-| `OMNIOCR_APP_NAME` | `"omniocr"` | App name |
-| `OMNIOCR_DESKTOP_MODE` | `true` | Enable desktop-specific features |
-| `OMNIOCR_ENABLE_VLM` | `false` | Enable vision-language model reviewer |
-| `OMNIOCR_ENABLE_CALAMARI` | `false` | Enable Calamari OCR (GPLv3) |
-| `OMNIOCR_MAX_UPLOAD_BYTES` | `2GB` | Maximum upload size |
-| `OMNIOCR_VLM_API_KEY` | — | OpenRouter API key (required for VLM) |
+| Calamari OCR | GPLv3 | Optional `calamari` extra, subprocess-isolated |
+| Polytone (polytonic reconstruction) | GPL-3.0 | Evaluated, not integrated — see [docs/POLYTONIC_RECONSTRUCTION.md](docs/POLYTONIC_RECONSTRUCTION.md) |
+
+`scripts/check_license_isolation.py` fails CI if a GPL module is imported into the core,
+so the boundary cannot erode silently.
+
+> **If you redistribute OmniOCR commercially**, note that *shipping* a GPL component
+> alongside it is a different question from *calling* one that the user installed
+> themselves. Not bundling them is the unambiguous path. Get the distribution model
+> reviewed by counsel before shipping — this file is not legal advice.
 
 ---
 
-## Testing
+## Documentation
 
-136 tests across 20 files, 87% coverage.
-
-```bash
-# Full suite
-python -m pytest
-
-# Specific test suites
-python -m pytest tests/test_regression.py -v   # CER/WER regression gate
-python -m pytest tests/test_contracts.py -v    # Engine port contracts
-python -m pytest tests/test_properties.py -v   # Hypothesis property tests
-python -m pytest tests/test_e2e.py -v          # E2E smoke tests
-
-# Linting + type checking
-ruff check packages tests
-mypy --strict packages/omniocr/src
-
-# CER baselines
-python scripts/generate_fixtures.py
-python scripts/compute_baselines.py
-```
-
-### Test pyramid
-
-| Layer | Count | Coverage |
-|---|---|---|
-| Unit tests | 74 | Domain, pipeline, post-correction, metrics |
-| Property tests | 10 | NFC idempotence, invariants, box arithmetic |
-| Contract tests | 24 | IOCREngine: 8 configs × 3 assertions |
-| E2E smoke tests | 4 | Ingest → pipeline → export (Markdown, ALTO, PAGE-XML) |
-| Regression gate | 8 | CER/WER per fixture across 4 script varieties |
-
----
-
-## Quality & Security
-
-- **Faithfulness CI-gated** — a PR that mutates source text fails the build
-- **License isolation CI** — GPLv3 Calamari imports forbidden in core
-- **Upload validation** — magic bytes, size caps, path-traversal guards
-- **`mypy --strict`** — enforced in CI on all 36 source files
-- **Secrets never logged** — `vlm_api_key` masked via `repr=False`
-- **`bandit` + `pip-audit`** — security + dependency audits in CI
-- **Structured logging** — `structlog` with per-page timing and event bus
-
----
-
-## Performance & Concurrency
-
-- **CPU-only** — Tesseract + Kraken both run on CPU. VLM calls the cloud.
-- **Streaming ingest** — PyMuPDF yields pages lazily; 2000-page books never land in memory at once.
-- **Per-page isolation** — one bad page never kills a job. Failed pages are retained for review.
-- **Checkpoint/resume** — SQLite-backed job store persists progress; jobs resume after interruption.
-- **Railway-oriented errors** — `Result[T, E]` threads through the pipeline; exceptions reserved for programmer errors.
-- **Engine deduplication** — each engine called once per page; blocks assigned to segments by bounding-box overlap.
-
----
-
-## Extras
-
-### Kraken Training Pipeline
-
-Fine-tune on specific Byzantine printed typefaces:
-
-```bash
-pip install kraken mlflow
-python scripts/train_kraken.py \
-    --train-dir ./training_data \
-    --base-model ./models/kraken_base.mlmodel \
-    --output-model ./models/finetuned.mlmodel \
-    --epochs 10
-```
-
-Tracks CER improvement in MLflow.
-
-### Export Formats
-
-| Format | Coverage |
+| Document | Contents |
 |---|---|
-| TXT | Plain text, one line per page |
-| Markdown | Page headings, Unicode |
-| ALTO XML | Geometry, confidence, provenance, region type, reading order |
-| PAGE-XML | Coordinates, confidence, engine provenance, region type |
-| Searchable PDF | Overlays original image; auto-detects system font for Greek |
-| DOCX | Cambria font — full polytonic (Greek Extended) coverage; for Byzantine ligatures set `DocxExporter(font_name=...)` to Athena Ruby |
-
-### Fixture Corpus
-
-4 synthetic fixture pages covering modern, polytonic, ancient, and Byzantine Greek. Committed baselines with CI regression gate ensure no CER regression on any variety.
-
----
-
-## License
-
-Core library: MIT. Calamari OCR: GPLv3 (subprocess-isolated, never imported into core).
-
----
-
-## Citation
-
-If you use OmniOCR in academic work:
-
-```bibtex
-@software{omniocr2026,
-  author = {OmniOCR Contributors},
-  title = {OmniOCR: Printable Greek OCR Suite},
-  year = {2026},
-  url = {https://github.com/your-org/omniocr}
-}
-```
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Design of record — read before non-trivial work |
+| [ENGINE_ACCURACY.md](docs/ENGINE_ACCURACY.md) | Measured CER per engine and model |
+| [DOCUMENT_STRUCTURE.md](docs/DOCUMENT_STRUCTURE.md) | Paragraphs, hyphens, running heads |
+| [POLYTONIC_RECONSTRUCTION.md](docs/POLYTONIC_RECONSTRUCTION.md) | Diacritic-check feasibility study |
+| [VLM_COST_OPTIMIZATION.md](docs/VLM_COST_OPTIMIZATION.md) | Tuning VLM spend |
+| [RUNBOOK.md](docs/RUNBOOK.md) | Operational procedures |
+| [adr/](docs/adr/) | Architecture decision records |
+| [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) | Process and disclosure |
