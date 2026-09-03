@@ -10,7 +10,15 @@ _DEFAULT_ENABLE_VLM = False
 _DEFAULT_ENABLE_CALAMARI = False
 _DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
 _DEFAULT_REDIS_URL = "redis://localhost:6379/0"
-_DEFAULT_TESSERACT_LANGUAGE = "grc+ell+eng"
+# Public: the single source of truth for the Tesseract language stack.
+# Four different defaults for this one value used to be spread across the
+# codebase — "eng" in TesseractEngine and the desktop root, "grc" on the CLI,
+# "grc+ell+eng" here. "eng" runs English on Greek text; "grc" alone loads no
+# Latin pack, which silently disables ScriptAwareReconciler's Latin-preference
+# branch (it checks provenance for a LATIN_LANGUAGE_PACKS member). The
+# combined stack is the only one that makes both work.
+DEFAULT_TESSERACT_LANGUAGE = "grc+ell+eng"
+_DEFAULT_TESSERACT_LANGUAGE = DEFAULT_TESSERACT_LANGUAGE
 _DEFAULT_KRAKEN_MODEL_PATH = ""
 
 

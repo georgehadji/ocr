@@ -8,6 +8,7 @@ from typing import Any, Mapping, Sequence
 from omniocr.domain.errors import EngineError
 from omniocr.domain.models import BBox, Confidence, EngineRun, ModelRef, OCRBlock, TenantContext
 from omniocr.domain.result import Err, Ok, Result
+from omniocr.infrastructure.config import DEFAULT_TESSERACT_LANGUAGE
 from omniocr.infrastructure.models import sha256_file
 from omniocr.domain.errors import LayoutError
 from omniocr.domain.models import OCRLine, Script
@@ -33,7 +34,7 @@ class TesseractEngine(IOCREngine):
 
     def __init__(
         self,
-        language: str = "eng",
+        language: str = DEFAULT_TESSERACT_LANGUAGE,
         config: str = "",
         model_path: str | Path | None = None,
     ) -> None:
@@ -120,7 +121,9 @@ class TesseractLayoutAnalyzer(ILayoutAnalyzer):
     Tesseract-only output.
     """
 
-    def __init__(self, language: str = "eng", script: Script = Script.UNKNOWN) -> None:
+    def __init__(
+        self, language: str = DEFAULT_TESSERACT_LANGUAGE, script: Script = Script.UNKNOWN
+    ) -> None:
         self._language = language
         self._script = script
 

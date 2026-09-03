@@ -6,6 +6,14 @@ from typing import Iterator
 
 from omniocr.domain.errors import IngestError
 
+# Render resolution for every PDF page entering the pipeline. Tesseract and
+# Kraken need this for box-grounded recognition; downstream consumers that do
+# not (the VLM) downscale from it rather than re-deriving a number. Prose that
+# quotes a DPI figure should cite this constant, not restate the digits.
+RENDER_DPI = 300
+# PDF user-space unit: 1/72 inch. Fixed by the PDF spec, not a tuning knob.
+_PDF_POINTS_PER_INCH = 72
+
 
 @dataclass(frozen=True, slots=True)
 class ImagePage:
@@ -30,7 +38,8 @@ class DocumentPageSource:
 
             pdf = fitz.open(stream=document, filetype="pdf")
             try:
-                matrix = fitz.Matrix(300 / 72, 300 / 72)
+                zoom = RENDER_DPI / _PDF_POINTS_PER_INCH
+                matrix = fitz.Matrix(zoom, zoom)
                 for number, page in enumerate(pdf, start=1):
                     pixmap = page.get_pixmap(matrix=matrix, alpha=False)
                     yield ImagePage(number, pixmap.tobytes("png"), pixmap.width, pixmap.height)

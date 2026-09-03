@@ -14,6 +14,13 @@ from typing import Sequence
 
 from omniocr.infrastructure.models import sha256_file
 
+# Where model artifacts and their manifest live, relative to the working
+# directory. The CLI used to keep its own ``Path("models")`` alongside this
+# module's own default path string; both are now derived from these.
+MODELS_DIR = Path("models")
+MANIFEST_FILENAME = "manifest.json"
+MANIFEST_PATH = MODELS_DIR / MANIFEST_FILENAME
+
 
 @dataclass(frozen=True, slots=True)
 class ManifestEntry:
@@ -41,7 +48,7 @@ class ModelManifest:
     the actual artifact on disk via SHA-256.
     """
 
-    def __init__(self, manifest_path: str | Path = "models/manifest.json") -> None:
+    def __init__(self, manifest_path: str | Path = MANIFEST_PATH) -> None:
         self._path = Path(manifest_path)
         self._entries: dict[str, ManifestEntry] = {}
         self._load()

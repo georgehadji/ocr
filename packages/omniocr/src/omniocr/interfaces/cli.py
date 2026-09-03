@@ -24,11 +24,17 @@ import shutil
 import subprocess  # nosec B404 - fixed argv, no shell, used only to query tesseract
 import sys
 from pathlib import Path
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
+from omniocr.domain.corpus import SplitName
+from omniocr.infrastructure.config import DEFAULT_TESSERACT_LANGUAGE
+from omniocr.infrastructure.model_manifest import MANIFEST_PATH, MODELS_DIR
 from omniocr.domain.models import DocumentPage, DocumentStructure, Script, TenantContext
 from omniocr.domain.result import Err
 from omniocr.ports.interfaces import IExporter
+
+if TYPE_CHECKING:
+    from omniocr.application.metrics import RegressionBaseline
 
 # Exit codes. Stable contract for scripted callers — do not renumber.
 EXIT_OK = 0
@@ -36,7 +42,8 @@ EXIT_FAILURE = 1  # pipeline or export failed
 EXIT_USAGE = 2  # argparse default for bad arguments
 EXIT_ENVIRONMENT = 3  # a required engine/model/dependency is missing
 
-_MODELS_DIR = Path("models")
+# Re-exported from the module that owns the layout, not redefined here.
+_MODELS_DIR = MODELS_DIR
 _OUTPUT_DIR = Path("Outputs")  # default destination when --out is omitted
 
 
@@ -241,7 +248,7 @@ def _resolve_model(explicit: str | None) -> str:
 
     from omniocr.infrastructure.model_manifest import ModelManifest
 
-    preferred = ModelManifest(_MODELS_DIR / "manifest.json").default_for("kraken")
+    preferred = ModelManifest(MANIFEST_PATH).default_for("kraken")
     if preferred is not None:
         chosen = _MODELS_DIR / preferred.name
         if chosen.is_file():
@@ -311,6 +318,104 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         else:
             print("\nno problems found")
     return EXIT_OK if not problems else EXIT_ENVIRONMENT
+
+
+def _build_eval_engine(args: argparse.Namespace) -> Any:
+    """Build a bare ``IOCREngine`` for evaluation — not a full pipeline.
+
+    ``evaluate()`` scores one engine's raw recognition against ground truth;
+    routing, reconciliation, and post-correction are pipeline concerns this
+    command deliberately does not exercise, so a document's per-engine
+    accuracy is not muddied by what the ensemble later does with it.
+    """
+    if args.engine == "tesseract":
+        from omniocr.infrastructure.tesseract import TesseractEngine
+
+        return TesseractEngine(language=args.lang)
+
+    from omniocr.infrastructure.kraken import KrakenEngine
+
+    return KrakenEngine(model_path=Path(_resolve_model(args.model)))
+
+
+def _load_baseline(path: Path) -> dict[str, RegressionBaseline]:
+    from omniocr.application.metrics import RegressionBaseline
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        script: RegressionBaseline(cer=values["cer"], wer=values["wer"])
+        for script, values in data.items()
+    }
+
+
+def _cmd_eval(args: argparse.Namespace) -> int:
+    from omniocr.application.evaluation import evaluate
+    from omniocr.domain.corpus import SplitName
+    from omniocr.infrastructure.corpus_repository import FileCorpusRepository
+
+    corpus_root = Path(args.corpus)
+    if not corpus_root.is_dir():
+        print(f"corpus not found: {corpus_root}", file=sys.stderr)
+        return EXIT_USAGE
+
+    script_filter = Script(args.script) if args.script is not None else None
+    repo = FileCorpusRepository(corpus_root)
+    split = SplitName(args.split)
+    pages = repo.pages(split, script_filter)
+    if not pages:
+        print(f"no pages found for split={args.split} under {corpus_root}", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        engine = _build_eval_engine(args)
+    except (FileNotFoundError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_ENVIRONMENT
+
+    result = evaluate(engine, pages, split)
+    if isinstance(result, Err):
+        print(f"evaluation failed: {result.error}", file=sys.stderr)
+        return EXIT_FAILURE
+    report = result.value
+
+    baseline_by_script: dict[str, Any] | None = None
+    regressed: list[str] = []
+    if args.baseline is not None:
+        baseline_path = Path(args.baseline)
+        if not baseline_path.is_file():
+            print(f"baseline not found: {baseline_path}", file=sys.stderr)
+            return EXIT_USAGE
+        baseline_by_script = _load_baseline(baseline_path)
+        for script, cer in report.per_script_cer.items():
+            baseline = baseline_by_script.get(script.value)
+            if baseline is None:
+                continue
+            wer = report.per_script_wer.get(script, 0.0)
+            if cer > baseline.cer + args.tolerance or wer > baseline.wer + args.tolerance:
+                regressed.append(script.value)
+
+    if args.json:
+        _emit_json(
+            {
+                "ok": not regressed,
+                "engine": engine.name,
+                "split": args.split,
+                "sample_count": report.sample_count,
+                "per_script_cer": {s.value: v for s, v in report.per_script_cer.items()},
+                "per_script_wer": {s.value: v for s, v in report.per_script_wer.items()},
+                "regressed": regressed,
+            }
+        )
+    else:
+        print(f"engine={engine.name} split={args.split} samples={report.sample_count}")
+        for script, cer in sorted(report.per_script_cer.items(), key=lambda kv: kv[0].value):
+            wer = report.per_script_wer.get(script, 0.0)
+            flag = " REGRESSED" if script.value in regressed else ""
+            print(f"  {script.value:10} cer={cer:.4f} wer={wer:.4f}{flag}")
+        if regressed:
+            print(f"\nregression exceeded baseline for: {', '.join(regressed)}")
+
+    return EXIT_OK if not regressed else EXIT_FAILURE
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -450,7 +555,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=Script.POLYTONIC.value,
         help="script variety hint for routing and lexicons (default: polytonic)",
     )
-    run.add_argument("--lang", default="grc", help="Tesseract language pack (default: grc)")
+    run.add_argument(
+        "--lang",
+        default=DEFAULT_TESSERACT_LANGUAGE,
+        help=f"Tesseract language pack (default: {DEFAULT_TESSERACT_LANGUAGE})",
+    )
     run.add_argument(
         "--model",
         default=None,
@@ -479,6 +588,56 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--user", default="cli", help="user id for provenance")
     run.add_argument("--json", action="store_true", help="emit JSON on stdout")
     run.set_defaults(func=_cmd_run)
+
+    ev = subparsers.add_parser(
+        "eval", help="measure CER/WER for one engine against a ground-truth corpus split"
+    )
+    ev.add_argument(
+        "--corpus",
+        default="corpus",
+        help="corpus root containing train/dev/test subdirectories (default: corpus)",
+    )
+    ev.add_argument(
+        "--split",
+        choices=[split.value for split in SplitName],
+        default="test",
+        help="corpus split to evaluate against (default: test)",
+    )
+    ev.add_argument(
+        "--engine",
+        choices=("tesseract", "kraken"),
+        default="tesseract",
+        help="recognition engine to evaluate (default: tesseract)",
+    )
+    ev.add_argument(
+        "--script",
+        choices=[script.value for script in Script],
+        default=None,
+        help="restrict to one script variety (default: all scripts in the split)",
+    )
+    ev.add_argument(
+        "--lang",
+        default=DEFAULT_TESSERACT_LANGUAGE,
+        help=f"Tesseract language pack (default: {DEFAULT_TESSERACT_LANGUAGE})",
+    )
+    ev.add_argument(
+        "--model",
+        default=None,
+        help="Kraken .mlmodel path (default: the model flagged in models/manifest.json)",
+    )
+    ev.add_argument(
+        "--baseline",
+        default=None,
+        help="JSON file of {script: {cer, wer}} reviewed baselines; exit 1 if exceeded",
+    )
+    ev.add_argument(
+        "--tolerance",
+        type=float,
+        default=0.0,
+        help="allowed CER/WER drift above the baseline before it counts as a regression",
+    )
+    ev.add_argument("--json", action="store_true", help="emit JSON on stdout")
+    ev.set_defaults(func=_cmd_eval)
 
     return parser
 
