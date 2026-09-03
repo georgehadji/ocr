@@ -62,9 +62,7 @@ class Dehyphenator:
         ab_hyphenated = A + "-" + B
 
         ab_in_lexicon = lexicon.contains(ab_word) if lexicon is not None else False
-        ab_hyphenated_in_lexicon = (
-            lexicon.contains(ab_hyphenated) if lexicon is not None else False
-        )
+        ab_hyphenated_in_lexicon = lexicon.contains(ab_hyphenated) if lexicon is not None else False
 
         if ab_in_lexicon and not ab_hyphenated_in_lexicon:
             # joined_in_lexicon -> drop hyphen

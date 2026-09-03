@@ -121,7 +121,9 @@ class TesseractLayoutAnalyzer(ILayoutAnalyzer):
     Tesseract-only output.
     """
 
-    def __init__(self, language: str = DEFAULT_TESSERACT_LANGUAGE, script: Script = Script.UNKNOWN) -> None:
+    def __init__(
+        self, language: str = DEFAULT_TESSERACT_LANGUAGE, script: Script = Script.UNKNOWN
+    ) -> None:
         self._language = language
         self._script = script
 

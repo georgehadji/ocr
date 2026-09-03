@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 
 from omniocr.application.structure.running_heads import detect, normalize_candidate
 from omniocr.domain.models import (
@@ -36,17 +35,23 @@ def test_detect_running_heads_and_page_numbers() -> None:
     p2_lines = (
         OCRLine(id="p2-l1", text="ΙΛΙΑΔΟΣ Α", confidence=conf, bbox=bbox),  # Running head
         OCRLine(id="p2-l2", text="2", confidence=conf, bbox=bbox),  # Page number
-        OCRLine(id="p2-l3", text="οὐλομένην, ἣ μυρί’ Ἀχαιοῖς ἄλγε’ ἔθηκεν", confidence=conf, bbox=bbox),
+        OCRLine(
+            id="p2-l3", text="οὐλομένην, ἣ μυρί’ Ἀχαιοῖς ἄλγε’ ἔθηκεν", confidence=conf, bbox=bbox
+        ),
     )
     p3_lines = (
         OCRLine(id="p3-l1", text="ΙΛΙΑΔΟΣ Α", confidence=conf, bbox=bbox),  # Running head
         OCRLine(id="p3-l2", text="3", confidence=conf, bbox=bbox),  # Page number
-        OCRLine(id="p3-l3", text="πολλὰς δ’ ἰφθίμους ψυχὰς Ἄϊδι προΐαψεν", confidence=conf, bbox=bbox),
+        OCRLine(
+            id="p3-l3", text="πολλὰς δ’ ἰφθίμους ψυχὰς Ἄϊδι προΐαψεν", confidence=conf, bbox=bbox
+        ),
     )
     p4_lines = (
         OCRLine(id="p4-l1", text="ΙΛΙΑΔΟΣ Α", confidence=conf, bbox=bbox),  # Running head
         OCRLine(id="p4-l2", text="4", confidence=conf, bbox=bbox),  # Page number
-        OCRLine(id="p4-l3", text="ἡρώων, αὐτοὺς δὲ ἑλώρια τεῦχε κύνεσσιν", confidence=conf, bbox=bbox),
+        OCRLine(
+            id="p4-l3", text="ἡρώων, αὐτοὺς δὲ ἑλώρια τεῦχε κύνεσσιν", confidence=conf, bbox=bbox
+        ),
     )
 
     doc = DocumentStructure(
