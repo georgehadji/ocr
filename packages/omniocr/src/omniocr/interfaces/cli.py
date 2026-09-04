@@ -126,6 +126,50 @@ def _kraken_report(models_dir: Path = _MODELS_DIR) -> dict[str, Any]:
     return report
 
 
+def _torch_stack_report() -> dict[str, Any]:
+    """Report whether torch and torchvision are ABI-compatible with each other.
+
+    ``import kraken`` succeeds even when the torch stack is incoherent, because
+    kraken defers its torch imports. So ``doctor`` reported a healthy Kraken
+    while every page failed with ``operator torchvision::nms does not exist`` —
+    a message that names neither the cause nor the fix.
+
+    The usual cause is installing one of the pair from a ``--index-url`` while
+    leaving the other alone. Each CUDA index carries its own ceiling: cu124
+    tops out at torch 2.6 / torchvision 0.21, so ``pip install --force-reinstall
+    torch --index-url .../cu124`` silently *downgrades* torch and strands a
+    torchvision built for a newer one. They must be installed together, from
+    one index.
+
+    Probing ``torchvision.ops`` rather than the bare import is deliberate: the
+    module imports fine and only fails when its compiled extension is first
+    touched, which is what makes the real failure land mid-run.
+    """
+    try:
+        import torch
+    except ImportError:
+        return {"installed": False}
+    except Exception as exc:  # pragma: no cover - depends on a broken install
+        # A partially installed or ABI-broken torch raises OSError from the
+        # import itself (WinError 126: a missing DLL in torch/lib), not
+        # ImportError. Catching only ImportError made `doctor` crash on the
+        # exact condition it exists to report, which is worse than the bug.
+        return {"installed": True, "torch": None, "coherent": False, "error": str(exc)}
+
+    report: dict[str, Any] = {"installed": True, "torch": str(torch.__version__)}
+    try:
+        import torchvision
+
+        getattr(torchvision.ops, "nms")  # noqa: B009 - forces the C++ extension to load
+        report["torchvision"] = str(torchvision.__version__)
+        report["coherent"] = True
+    except Exception as exc:  # pragma: no cover - depends on a broken install
+        report["torchvision"] = None
+        report["coherent"] = False
+        report["error"] = str(exc)
+    return report
+
+
 def _device_report() -> dict[str, Any]:
     """Report the compute device up front.
 
@@ -159,6 +203,7 @@ def _environment() -> dict[str, Any]:
     return {
         "tesseract": _tesseract_report(),
         "kraken": _kraken_report(),
+        "torch_stack": _torch_stack_report(),
         "device": _device_report(),
         "extras": _optional_module_report(),
     }
@@ -178,6 +223,14 @@ def _environment_problems(env: dict[str, Any]) -> list[str]:
         problems.append("kraken not installed (pip install 'omniocr[kraken]')")
     elif not env["kraken"]["models"]:
         problems.append(f"no Kraken .mlmodel found in {_MODELS_DIR}/ — see models/README.md")
+    stack = env["torch_stack"]
+    if stack["installed"] and not stack.get("coherent", True):
+        problems.append(
+            f"torch {stack['torch']} and torchvision are ABI-incompatible "
+            f"({stack.get('error', 'unknown error')}) — Kraken cannot run. "
+            "Reinstall both from one index, e.g. pip install --force-reinstall "
+            "torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu"
+        )
     if not env["extras"]["pdf"]:
         problems.append(
             "PyMuPDF not installed (pip install 'omniocr[pdf]') — PDF input unavailable"
@@ -306,6 +359,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(f"  langs   : {', '.join(tess['languages']) or '-'}")
         print(f"kraken    : {'yes' if env['kraken']['installed'] else 'NO'}")
         print(f"  models  : {len(env['kraken']['models'])} in {_MODELS_DIR}/")
+        stack = env["torch_stack"]
+        if stack["installed"]:
+            state = "ok" if stack.get("coherent") else "BROKEN"
+            print(f"torch     : {stack['torch']} / torchvision {stack['torchvision']} [{state}]")
         print(f"device    : {env['device']['selected']}")
         if "note" in env["device"]:
             print(f"  note    : {env['device']['note']}")

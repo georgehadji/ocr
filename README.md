@@ -63,11 +63,45 @@ extra, so a minimal install stays small.
 | `server` / `cloud` | Server and Cloud edition runtimes |
 | `dev` | pytest, ruff, mypy, bandit, pip-audit |
 
+### GPU, and the torch/torchvision trap
+
+The `kraken` extra pulls in **torch** and **torchvision**, and the two must
+come from the *same* wheel index. Installing one alone is the most common way
+to break this project:
+
+```bash
+# WRONG — reinstalls torch only, strands torchvision on a different ABI
+pip install --force-reinstall torch --index-url https://download.pytorch.org/whl/cu124
+```
+
+Each CUDA index carries its own version ceiling — cu124 tops out at torch 2.6 /
+torchvision 0.21 — so that command can silently *downgrade* torch and leave a
+torchvision built for a newer one. Kraken then fails on every page with
+`operator torchvision::nms does not exist`, which names neither the cause nor
+the fix. Install all of them together instead:
+
+```bash
+# CPU (default, always works)
+pip install --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# CUDA — pick ONE index and pin all three to it
+pip install --force-reinstall torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+```
+
+A GPU is never required. It is used automatically when present and is worth
+having: Kraken recognition is the pipeline's bottleneck at roughly 60–90 s per
+page on CPU. Check your card's compute capability is in `torch.cuda.get_arch_list()`
+before assuming a CUDA build supports it — recent builds have dropped older
+architectures.
+
 Verify the environment before committing to a long run:
 
 ```bash
 omniocr doctor
 ```
+
+`doctor` reports the torch/torchvision pairing and exits non-zero if it is
+broken, so this class of failure surfaces in a second rather than an hour in.
 
 `doctor` exits `3` and names the missing engine, language pack, or model.
 
