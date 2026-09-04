@@ -21,7 +21,7 @@ import importlib.util
 
 import pytest
 
-from omniocr.interfaces.cli import _environment_problems, _torch_stack_report
+from omniocr.interfaces.cli import _environment, _environment_problems, _torch_stack_report
 
 _HAS_TORCH = importlib.util.find_spec("torch") is not None
 
@@ -35,6 +35,16 @@ def _env(stack: dict[str, object]) -> dict[str, object]:
         "device": {"selected": "cpu"},
         "extras": {"pdf": True, "docx": True, "opencv": True, "pillow": True},
     }
+
+
+def test_environment_actually_reports_the_torch_stack() -> None:
+    """Pin the contract that lets `_environment_problems` tolerate the key's absence.
+
+    That tolerance exists for callers built before this check (the CLI tests
+    construct partial environment dicts). It would quietly disable the check
+    if `_environment` ever stopped populating the key, so assert it does.
+    """
+    assert "torch_stack" in _environment()
 
 
 def test_absent_torch_is_not_a_problem() -> None:

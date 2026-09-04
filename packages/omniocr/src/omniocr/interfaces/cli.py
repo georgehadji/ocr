@@ -223,7 +223,9 @@ def _environment_problems(env: dict[str, Any]) -> list[str]:
         problems.append("kraken not installed (pip install 'omniocr[kraken]')")
     elif not env["kraken"]["models"]:
         problems.append(f"no Kraken .mlmodel found in {_MODELS_DIR}/ — see models/README.md")
-    stack = env["torch_stack"]
+    # Absent key means a caller that predates this check, not a healthy stack;
+    # `_environment` always populates it (asserted in tests/test_torch_stack.py).
+    stack = env.get("torch_stack", {"installed": False})
     if stack["installed"] and not stack.get("coherent", True):
         problems.append(
             f"torch {stack['torch']} and torchvision are ABI-incompatible "
@@ -359,7 +361,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(f"  langs   : {', '.join(tess['languages']) or '-'}")
         print(f"kraken    : {'yes' if env['kraken']['installed'] else 'NO'}")
         print(f"  models  : {len(env['kraken']['models'])} in {_MODELS_DIR}/")
-        stack = env["torch_stack"]
+        stack = env.get("torch_stack", {"installed": False})
         if stack["installed"]:
             state = "ok" if stack.get("coherent") else "BROKEN"
             print(f"torch     : {stack['torch']} / torchvision {stack['torchvision']} [{state}]")
