@@ -32,11 +32,25 @@ jobs:
       # Cloud submit failed), an export whose failure was swallowed into an
       # empty file reported as "completed", and a status endpoint that
       # returned an unrelated job's state.
+      # Every static gate below runs even when an earlier one fails.
+      #
+      # Without this the steps short-circuit, and one failure hides the rest:
+      # `ruff check` had nine errors, so `ruff format --check` (ten files) and
+      # `mypy --strict` (a variance defect in `Result`) never executed at all.
+      # Three independent failures surfaced one per fix-and-push cycle instead
+      # of together, and the later two had been accumulating unseen.
+      #
+      # `always()` rather than `success() || failure()` so the gates still
+      # report on a cancelled run. The job's own result is unaffected: a failed
+      # step still fails the job, this only stops it short-circuiting.
       - name: Check lint
+        if: always()
         run: ruff check packages tests editions scripts
       - name: Check formatting
+        if: always()
         run: ruff format --check packages tests editions scripts
       - name: Check strict typing (core)
+        if: always()
         run: mypy --strict --ignore-missing-imports --python-version 3.11 packages/omniocr/src
       # Separate invocation: the editions are sibling top-level packages, so
       # they need --explicit-package-bases to resolve `editions.*` and
@@ -44,19 +58,23 @@ jobs:
       # pyproject's mypy_path — as an env var it had to be spelled with a
       # platform-specific separator, and the POSIX one broke Windows.
       - name: Check strict typing (editions, scripts)
+        if: always()
         run: mypy --strict --ignore-missing-imports --python-version 3.11 --explicit-package-bases editions scripts
       - name: Check license isolation
+        if: always()
         run: python scripts/check_license_isolation.py
       - name: Check architectural layering
+        if: always()
         run: python scripts/check_layering.py
       - name: Test CER regression gate
+        if: always()
         run: python -m pytest tests/test_regression.py -v
       - name: Check security (bandit)
         run: python -m bandit -r packages/omniocr/src/omniocr -s B101
-        if: runner.os == 'ubuntu'
+        if: always() && runner.os == 'ubuntu'
       - name: Check dependency vulnerabilities (pip-audit)
         run: python -m pip_audit
-        if: runner.os == 'ubuntu'
+        if: always() && runner.os == 'ubuntu'
 
   package:
     name: Build package

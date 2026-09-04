@@ -14,7 +14,7 @@ This document is the design of record. It supersedes the aspirational descriptio
 
 | Axis | Decision | Consequence |
 |------|----------|-------------|
-| **Hardware** | CPU-only | Recognition backbone is Tesseract + Kraken (both CPU-capable). A GPU-class VLM is **not** a core engine. |
+| **Hardware** | CPU-capable, GPU-opportunistic | Recognition backbone is Tesseract + Kraken, both of which run on CPU, so a GPU is never *required*. When one is present it is used automatically: `infrastructure/device.py` probes CUDA, then MPS, then falls back to CPU, and Kraken recognition and `ketos` fine-tuning both route through it. Without an accelerator, throughput comes from page-level parallelism (`PipelineOrchestrator(max_workers=…)`, `--workers`) instead. A GPU-class VLM remains **not** a core engine — that is a faithfulness decision (§1), not a hardware one. |
 | **Material** | Printed books & editions | Optimize print OCR + critical-edition layout. No handwriting/HTR burden in v1. "Byzantine" = printed ligatures/typefaces, not manuscript minuscule. |
 | **Output** | Faithful (diplomatic) transcription | Post-correction is **suggest-only, never auto-rewrite**. Preserve polytonic, Pontian, and Byzantine forms exactly. VLM is opt-in, always grounding-checked. |
 | **Primary edition** | Desktop (offline, single scholar) | Cloud/Server are later composition-root variants over the same core. |

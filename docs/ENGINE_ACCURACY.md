@@ -90,6 +90,88 @@ changed the numbers by ≤0.003.
   The engine did not change, the line assembly did. Any future comparison must
   put both engines through the real pipeline path.
 
+## Update, 2026-09-03: three scan-tier fixtures
+
+The corpus now holds three real pages from the same book with human-reviewed
+diplomatic transcriptions (`polytonic-scan-1/2/3`, pages 21, 35 and 49,
+rendered at 300 DPI). They are the first fixtures the accuracy gates may
+legitimately compute baselines from — the four Arial renders are marked
+`synthetic` in `tests/corpus/PROVENANCE.json` and are excluded from any
+accuracy claim.
+
+| Fixture | Kraken CER | Tesseract CER | Kraken WER | Tesseract WER |
+|---|---|---|---|---|
+| `polytonic-scan-1` | **0.1066** | 0.1366 | **0.2610** | 0.4364 |
+| `polytonic-scan-2` | 0.1940 | **0.1854** | **0.4509** | 0.4799 |
+| `polytonic-scan-3` | **0.0780** | 0.1065 | **0.2562** | 0.4194 |
+| **mean** | **0.1262** | 0.1428 | **0.3227** | 0.4452 |
+
+Kraken is the manifest default `greek-german_serifs_bsb10234118`; Tesseract is
+`grc`. Both were run through the pipeline path, per the limitation noted above.
+
+### What this changes
+
+1. **Rule 2 survives contact with a second measurement, and gets narrower.**
+   Kraken wins the corpus on CER and wins every page on WER, by a wide margin
+   (0.32 against 0.45). But it *loses* `polytonic-scan-2` on CER. The gate in
+   `tests/test_engine_accuracy.py` is therefore an aggregate over the scan
+   tier, not a per-page assertion — excluding the page that disagrees would
+   make the suite assert what we wish were true.
+
+2. **The 0.038 headline does not generalize.** Measured on three further
+   pages, the same model scores 0.078–0.194. Two confounds are unresolved and
+   should not be papered over: the 0.038 page was rendered at a higher DPI
+   than these three, and it was a single page of clean body prose whereas
+   `scan-2` carries a two-column hymn quotation. The honest summary is that
+   this model reads this book at roughly **0.08–0.19 CER**, and that one page
+   at 0.038 was optimistic rather than representative.
+
+3. **The synthetic fixtures were flattering by an order of magnitude.**
+   Tesseract scores 0.0000–0.0135 on the Arial renders and 0.1065–0.1854 on
+   real scans of the same script. `tests/corpus/README.md` warned about
+   exactly this; the numbers now quantify it. The plausible-CER ceiling in the
+   accuracy tests is tiered accordingly (0.15 synthetic, 0.30 scan).
+
+4. **Neither engine is anywhere near shippable on this material.** A WER of
+   0.32 means roughly one word in three needs a human touch. This is the
+   baseline that A2 (fine-tuning) and A3 (preprocessing) have to beat, and it
+   is the first honest starting point the project has had.
+
+### Preprocessing (ENHANCEMENT_PLAN A3), measured the same way
+
+Tesseract `grc` over the same three fixtures, mean across pages:
+
+| Chain | CER | WER |
+|---|---|---|
+| grayscale only (what shipped) | 0.1436 | 0.4479 |
+| grayscale + deskew | 0.1491 | 0.4480 |
+| **grayscale + despeckle** | **0.1224** | **0.3685** |
+| grayscale + deskew + despeckle | 0.1222 | 0.3721 |
+
+Despeckle is a **14.8% relative CER** and **17.7% relative WER** improvement
+and wins every page. It is now the desktop composition root's default.
+
+Deskew made things worse and is not wired in. These three pages are already
+square, so the estimator buys an interpolation pass and a slightly wrong angle
+for nothing. That is a fact about this corpus rather than about deskewing —
+the stage recovers a known skew to within 0.2° in the unit tests — so the code
+stays and the default does not. Revisit when a scan-tier fixture is crooked.
+
+Adding deskew on top of despeckle changes CER by 0.0002 and makes WER worse,
+which is noise at n=3. Two stages are not better than one here.
+
+**The gate does not see this.** `engine_baselines.json` and
+`tests/test_engine_accuracy.py` call the engine directly on raw fixture bytes;
+no preprocessing runs. So the committed baselines are unchanged by this wiring,
+and a future preprocessing regression would not trip them. Closing that gap —
+running the baseline harness through the composition root's own processor —
+is worth doing and is not done here.
+
+Still open: five of the six target varieties (modern, ancient, Byzantine,
+Pontian, critical-edition apparatus) have no scan-tier fixture at all, and all
+three that exist come from one book by one publisher. `docs/ENHANCEMENT_PLAN.md`
+A1 sizes the real corpus at 115 pages.
+
 ## Reproducing
 
 Kraken runs at roughly 60–90 s per page per model on CPU, so all three models

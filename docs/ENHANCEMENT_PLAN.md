@@ -16,10 +16,10 @@ Not deleted; not driving anything. Its one durable finding is in §2.1.
 
 "Perfect OCR" is not a slogan you can optimize against. The operational target:
 
-| Variety | Current (n=1) | Target | Basis |
+| Variety | Current | Target | Basis |
 |---|---|---|---|
 | Modern monotonic | not measured | **< 0.005** | Clean print, strong lexicon. This should be near-solved. |
-| Polytonic 20th c. | **0.038** | **< 0.010** | Fine-tuning on-typeface reliably lands here. |
+| Polytonic 20th c. | **0.126** (n=3) | **< 0.010** | Was listed as 0.038 from a single page; three scan-tier fixtures give a mean of 0.126 (Kraken) / 0.143 (Tesseract). Fine-tuning on-typeface reliably lands at the target, but from further away than this table first claimed. |
 | 19th c. German serif | not measured | **< 0.015** | Two bundled models were trained on this material. |
 | Critical edition, main text | not measured | **< 0.015** | Same as polytonic, plus zone separation. |
 | Critical edition, apparatus | not measured | **< 0.05** | Small type, siglum-dense. Honestly hard. |
@@ -120,7 +120,7 @@ this one optimizes CER, full stop.
 | # | Workstream | Expected CER impact | Days |
 |---|---|---|---|
 | **A1** | Ground-truth corpus (measurement **and** training fuel) | Enables everything. Zero alone. | 6 |
-| **A2** | **Fine-tune on target material** | **0.038 → 0.005–0.015.** Largest single lever by a wide margin. | 5 |
+| **A2** | **Fine-tune on target material** | **0.126 → 0.005–0.015.** Largest single lever by a wide margin — and the gap is wider than first estimated. | 5 |
 | **A3** | Preprocessing: deskew, dewarp, denoise + variant ensembling | 10–30% relative on scanned material | 5 |
 | **A4** | Word-level alignment merge | 5–15% relative; scales with engine count | 3 |
 | **A5** | Agreement tiers | 0 alone — enables A9 and review triage | 2 |

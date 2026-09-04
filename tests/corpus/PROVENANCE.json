@@ -39,6 +39,33 @@
       "generated_by": "scripts/generate_fixtures.py",
       "typeface": "Arial",
       "note": "Named 'byzantine' but rendered in Arial — no Byzantine typeface, no ligatures. Does not exercise what the name implies."
+    },
+    "polytonic-scan-1": {
+      "tier": "scan",
+      "script": "polytonic",
+      "source": "Τα Βυζαντινά Μνημεία της Θεσσαλονίκης (Πολυχρονιάδης/Δεδούσης), PDF page index 20, printed p. 21, 300 DPI",
+      "licence": "© rights holder, used by permission of the rights holder",
+      "transcribed_by": "AI-drafted, reviewed and approved by the repository owner",
+      "typeface": "20c polytonic serif",
+      "note": "Body prose. First scan-tier fixture in the corpus — the accuracy gates may compute baselines from this tier, unlike the Arial renders above."
+    },
+    "polytonic-scan-2": {
+      "tier": "scan",
+      "script": "polytonic",
+      "source": "Τα Βυζαντινά Μνημεία της Θεσσαλονίκης (Πολυχρονιάδης/Δεδούσης), PDF page index 34, printed p. 35, 300 DPI",
+      "licence": "© rights holder, used by permission of the rights holder",
+      "transcribed_by": "AI-drafted, reviewed and approved by the repository owner",
+      "typeface": "20c polytonic serif",
+      "note": "Prose plus a two-column hymn quotation, transcribed left column fully then right, per TRANSCRIBE.md. Retains the original's bracketed verse-continuation marker rather than normalising it."
+    },
+    "polytonic-scan-3": {
+      "tier": "scan",
+      "script": "polytonic",
+      "source": "Τα Βυζαντινά Μνημεία της Θεσσαλονίκης (Πολυχρονιάδης/Δεδούσης), PDF page index 48, printed p. 49, 300 DPI",
+      "licence": "© rights holder, used by permission of the rights holder",
+      "transcribed_by": "AI-drafted, reviewed and approved by the repository owner",
+      "typeface": "20c polytonic serif",
+      "note": "Body prose, architectural description."
     }
   }
 }

@@ -41,9 +41,22 @@ The 2025 results are consistent and directly relevant to this project:
 
 - Gains from LLM post-correction are **strongest under moderate-to-high OCR
   noise; low-noise text is inherently sensitive to over-correction**
-  ([HIPE-OCRepair / ICDAR 2026](https://arxiv.org/html/2607.08143)). Our best
-  Kraken model measures **0.038 CER** — squarely in the low-noise regime where
-  the literature reports the worst risk/reward.
+  ([HIPE-OCRepair / ICDAR 2026](https://arxiv.org/html/2607.08143)).
+
+  **This premise weakened on 2026-09-03 and the conclusion has to be re-argued,
+  not restated.** The 0.038 figure this section originally cited was one page.
+  Measured across three scan-tier fixtures the same model scores a mean
+  **0.126 CER** (`docs/ENGINE_ACCURACY.md`) — moderate noise, which is the
+  regime where the literature reports post-correction gains are *strongest*,
+  not weakest. The risk/reward argument below no longer follows from the
+  numbers the way it did when written.
+
+  What does not change is CLAUDE.md rule 1: post-correction suggests, the
+  human decides. That is a faithfulness constraint, not a cost/benefit
+  judgement, and it holds at any CER. So the restraint this document argues
+  for survives — but on the grounds of faithfulness alone, with the empirical
+  argument now pointing the other way. Anyone reopening this decision should
+  start from 0.126, not 0.038.
 - Post-correction requires restoring intended word forms **without introducing
   content absent from the source**; LLM fluency bias and hallucination are
   liabilities rather than assets here

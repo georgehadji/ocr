@@ -14,5 +14,17 @@
   "polytonic-1": {
     "cer": 0.0,
     "wer": 0.0
+  },
+  "polytonic-scan-1": {
+    "cer": 0.0,
+    "wer": 0.0
+  },
+  "polytonic-scan-2": {
+    "cer": 0.0,
+    "wer": 0.0
+  },
+  "polytonic-scan-3": {
+    "cer": 0.0,
+    "wer": 0.0
   }
 }

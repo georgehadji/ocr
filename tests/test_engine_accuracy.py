@@ -20,6 +20,7 @@ import importlib.util
 import json
 import shutil
 import unicodedata
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,9 @@ from omniocr.application.metrics import (
 )
 from omniocr.domain.models import TenantContext
 from omniocr.testing.fixtures import (
+    fixture_tier,
     list_fixture_ids,
+    list_scan_ids,
     load_fixture_ground_truth,
     load_fixture_image_bytes,
 )
@@ -41,7 +44,15 @@ from omniocr.testing.fixtures import (
 # than emitting noise. Deliberately looser than the committed baselines:
 # baselines catch drift, this catches catastrophic failure (wrong language
 # pack, unreadable render, silently-empty output).
-MAX_PLAUSIBLE_CER = 0.15
+#
+# Tiered, because the two tiers are different problems. A synthetic Arial
+# render is trivial — Tesseract scores 0.0000-0.0135 on the four of them, so
+# anything past 0.15 there means something broke. Real 20c polytonic serif
+# scans measure 0.1065-0.1854 (2026-09-03, tests/corpus/engine_baselines.json),
+# so the synthetic ceiling would fail a page the engine is reading correctly-
+# for-its-difficulty. 0.30 still catches noise, which lands past 0.70.
+MAX_PLAUSIBLE_CER: dict[str, float] = {"synthetic": 0.15, "scan": 0.30}
+DEFAULT_MAX_PLAUSIBLE_CER = 0.15
 
 # Allowance for minor Tesseract/model version differences across machines
 # and CI runners. Tight enough that a real regression still trips it.
@@ -112,8 +123,15 @@ def _load_engine_baselines() -> dict[str, dict[str, dict[str, float]]]:
     return data
 
 
+@lru_cache(maxsize=None)
 def _recognize(fixture_id: str) -> str:
-    """Run the real Tesseract engine over a fixture and return its text."""
+    """Run the real Tesseract engine over a fixture and return its text.
+
+    Cached: recognition is a pure function of the fixture, and three tests
+    ask for the same page. On the synthetic renders that was cheap; on a
+    300 DPI scan it is tens of seconds each, so the suite was spending
+    minutes re-deriving identical strings.
+    """
     from omniocr.infrastructure.tesseract import TesseractEngine
 
     engine = TesseractEngine(language=_language_for(fixture_id))
@@ -145,10 +163,12 @@ def test_tesseract_actually_recognizes_greek(fixture_id: str) -> None:
     hypothesis = _recognize(fixture_id)
 
     assert hypothesis, f"{fixture_id}: engine produced no text"
+    tier = fixture_tier(fixture_id)
+    ceiling = MAX_PLAUSIBLE_CER.get(tier, DEFAULT_MAX_PLAUSIBLE_CER)
     cer = character_error_rate(reference, hypothesis)
-    assert cer < MAX_PLAUSIBLE_CER, (
+    assert cer < ceiling, (
         f"{fixture_id}: CER {cer:.4f} exceeds plausible ceiling "
-        f"{MAX_PLAUSIBLE_CER} — engine is not reading this script"
+        f"{ceiling} for tier '{tier}' — engine is not reading this script"
     )
 
 
@@ -185,46 +205,54 @@ def test_polytonic_diacritics_survive_recognition() -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(
-    not list(Path("models").glob("*.mlmodel")),
-    reason="no Kraken .mlmodel available; see models/README.md",
-)
-@pytest.mark.xfail(
-    reason=(
-        "corpus is synthetic: fixtures are PIL renders of Arial (see "
-        "scripts/generate_fixtures.py). Arial is out of domain for the committed "
-        "Kraken models, which are trained on 19c Porson/German-serif print, and "
-        "trivial for Tesseract. Measured 2026-08-01: Kraken CER 0.70 vs Tesseract "
-        "0.00 on polytonic-1, 0.71 vs 0.01 on ancient-1. This gate only becomes "
-        "meaningful on real scans — do not tune to the synthetic fixture."
-    ),
-    strict=False,
-)
-@pytest.mark.parametrize("fixture_id", ["polytonic-1", "ancient-1"])
-def test_kraken_beats_tesseract_on_hard_scripts(fixture_id: str) -> None:
-    """BUILD_PLAN §10 Phase 1: Kraken must beat Tesseract on polytonic/ancient.
+@requires_tesseract
+@pytest.mark.skipif(not list_scan_ids(), reason="no scan-tier fixture in the corpus")
+def test_kraken_beats_tesseract_on_the_scan_corpus() -> None:
+    """BUILD_PLAN §10 Phase 1: Kraken must beat Tesseract on real polytonic print.
 
     **SLOW** — Kraken model inference on CPU can take several minutes. Run
     with ``--runslow`` or use ``pytest -m slow``.
 
-    Currently ``xfail``: the assertion is correct, the corpus is not. Remove
-    the marker when real scanned fixtures land.
+    Was ``xfail`` until 2026-09-03: the assertion was always correct, the
+    corpus was not. The synthetic fixtures are Arial renders, out of domain
+    for models trained on 19c serif print, so Kraken scored CER 0.70 there
+    against Tesseract's 0.00 — a fact about the fixture, not the engine.
+
+    Aggregate rather than per-fixture, and deliberately so. Measured over the
+    three scan fixtures (2026-09-03, model greek-german_serifs_bsb10234118):
+
+        scan-1  Kraken 0.1066  Tesseract 0.1366
+        scan-2  Kraken 0.1940  Tesseract 0.1854   <- Tesseract wins this page
+        scan-3  Kraken 0.0780  Tesseract 0.1065
+
+    Kraken wins the corpus and loses one page. A per-fixture gate would have
+    to exclude scan-2 to stay green, and excluding the page that disagrees is
+    how a suite starts asserting what we wish were true. The claim in
+    CLAUDE.md rule 2 is about the corpus, so the gate is too.
     """
     from omniocr.infrastructure.kraken import KrakenEngine
+    from omniocr.infrastructure.model_manifest import MANIFEST_PATH, MODELS_DIR, ModelManifest
 
-    model = next(iter(Path("models").glob("*.mlmodel")))
-    reference = _normalize(load_fixture_ground_truth(fixture_id))
+    # Rule 2: never select a model by filename order. The default is declared.
+    entry = ModelManifest(MANIFEST_PATH).default_for("kraken")
+    engine = KrakenEngine(str(MODELS_DIR / entry.name))
     context = TenantContext(organization_id="test", user_id="test", subscription_tier="desktop")
 
-    kraken_result = KrakenEngine(str(model)).extract(
-        _FixturePage(load_fixture_image_bytes(fixture_id)), context
-    )
-    assert kraken_result.is_ok(), f"kraken failed: {kraken_result.error}"
-    kraken_text = _normalize(" ".join(b.text for b in kraken_result.value))
+    kraken_cers: list[float] = []
+    tesseract_cers: list[float] = []
+    for fixture_id in list_scan_ids():
+        reference = _normalize(load_fixture_ground_truth(fixture_id))
+        result = engine.extract(_FixturePage(load_fixture_image_bytes(fixture_id)), context)
+        assert result.is_ok(), f"{fixture_id}: kraken failed: {result.error}"
+        kraken_cers.append(
+            character_error_rate(reference, _normalize(" ".join(b.text for b in result.value)))
+        )
+        tesseract_cers.append(character_error_rate(reference, _recognize(fixture_id)))
 
-    kraken_cer = character_error_rate(reference, kraken_text)
-    tesseract_cer = character_error_rate(reference, _recognize(fixture_id))
-
-    assert kraken_cer <= tesseract_cer, (
-        f"{fixture_id}: Kraken CER {kraken_cer:.4f} worse than Tesseract {tesseract_cer:.4f}"
+    kraken_mean = sum(kraken_cers) / len(kraken_cers)
+    tesseract_mean = sum(tesseract_cers) / len(tesseract_cers)
+    assert kraken_mean <= tesseract_mean, (
+        f"Kraken mean CER {kraken_mean:.4f} worse than Tesseract {tesseract_mean:.4f} "
+        f"over {len(kraken_cers)} scan fixture(s) — the default model no longer "
+        f"earns its place in models/manifest.json"
     )
