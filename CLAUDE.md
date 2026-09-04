@@ -10,7 +10,9 @@ Pontian. It ingests large PDFs and images and exports DOCX, Markdown, searchable
 and ALTO/PAGE-XML.
 
 **The full design of record is [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Read it before
-non-trivial work.** Locked scope decisions: **CPU-only**, **printed material**, **faithful
+non-trivial work.** Locked scope decisions: **CPU-capable / GPU-opportunistic** (never
+*requires* a GPU; uses one automatically via `infrastructure/device.py` when present,
+otherwise page-level parallelism), **printed material**, **faithful
 (diplomatic) transcription**, **Desktop edition primary**.
 
 ## Current state (important)
