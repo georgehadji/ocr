@@ -9,7 +9,11 @@ from omniocr.application.layout import FallbackLayoutAnalyzer
 from omniocr.infrastructure.config import DEFAULT_TESSERACT_LANGUAGE
 from omniocr.infrastructure.tesseract import TesseractEngine, TesseractLayoutAnalyzer
 from omniocr.infrastructure.ingest import DocumentPageSource
-from omniocr.infrastructure.preprocess import GrayscaleProcessor
+from omniocr.infrastructure.preprocess import (
+    ChainProcessor,
+    DespeckleProcessor,
+    GrayscaleProcessor,
+)
 from omniocr.infrastructure.resilience import RetryingEngine
 from omniocr.application.reconcile import ConfidenceWeightedReconciler, ScriptAwareReconciler
 from omniocr.domain.models import OCRLine, Script, TenantContext
@@ -44,6 +48,31 @@ except ImportError:
     _VLM_AVAILABLE = False
 
 
+def _default_image_processor() -> ChainProcessor:
+    """Grayscale then despeckle — the chain the accuracy measurement earned.
+
+    Measured 2026-09-03 with Tesseract ``grc`` over the three scan-tier
+    fixtures (mean of ``polytonic-scan-1/2/3``):
+
+        grayscale only          CER 0.1436  WER 0.4479
+        grayscale + despeckle   CER 0.1224  WER 0.3685
+        grayscale + deskew      CER 0.1491  WER 0.4480
+
+    Despeckle is a 14.8% relative CER improvement and wins every page.
+
+    Deskew is deliberately *not* here despite being the more obvious stage.
+    It made things worse: these three pages are already square, so the
+    estimator buys an interpolation pass and a slightly wrong angle for
+    nothing. That is a fact about this corpus, not about deskewing — the
+    stage recovers a known skew to within 0.2 degrees in
+    ``tests/test_preprocess_geometry.py``. It stays available for callers
+    with skewed input; it does not become a default on evidence that says
+    it costs accuracy. Revisit when a scan-tier fixture is actually
+    crooked.
+    """
+    return ChainProcessor(GrayscaleProcessor(), DespeckleProcessor())
+
+
 def create_tesseract_pipeline(
     language: str = DEFAULT_TESSERACT_LANGUAGE,
     script: Script = Script.MODERN,
@@ -56,7 +85,7 @@ def create_tesseract_pipeline(
     assembler = DocumentAssembler() if assemble_structure else IdentityAssembler()
     return PipelineOrchestrator(
         page_source=DocumentPageSource(),
-        image_processor=GrayscaleProcessor(),
+        image_processor=_default_image_processor(),
         layout_analyzer=FallbackLayoutAnalyzer(
             KrakenLayoutAnalyzer(script), TesseractLayoutAnalyzer(language, script)
         ),
@@ -144,7 +173,7 @@ def create_ensemble_pipeline(
     assembler = DocumentAssembler() if assemble_structure else IdentityAssembler()
     return PipelineOrchestrator(
         page_source=DocumentPageSource(),
-        image_processor=GrayscaleProcessor(),
+        image_processor=_default_image_processor(),
         # Kraken segmentation returns zero lines with no error on grainy
         # scans; without a fallback those pages vanish from the output.
         layout_analyzer=FallbackLayoutAnalyzer(

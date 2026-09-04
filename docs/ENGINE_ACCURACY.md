@@ -137,6 +137,36 @@ Kraken is the manifest default `greek-german_serifs_bsb10234118`; Tesseract is
    baseline that A2 (fine-tuning) and A3 (preprocessing) have to beat, and it
    is the first honest starting point the project has had.
 
+### Preprocessing (ENHANCEMENT_PLAN A3), measured the same way
+
+Tesseract `grc` over the same three fixtures, mean across pages:
+
+| Chain | CER | WER |
+|---|---|---|
+| grayscale only (what shipped) | 0.1436 | 0.4479 |
+| grayscale + deskew | 0.1491 | 0.4480 |
+| **grayscale + despeckle** | **0.1224** | **0.3685** |
+| grayscale + deskew + despeckle | 0.1222 | 0.3721 |
+
+Despeckle is a **14.8% relative CER** and **17.7% relative WER** improvement
+and wins every page. It is now the desktop composition root's default.
+
+Deskew made things worse and is not wired in. These three pages are already
+square, so the estimator buys an interpolation pass and a slightly wrong angle
+for nothing. That is a fact about this corpus rather than about deskewing —
+the stage recovers a known skew to within 0.2° in the unit tests — so the code
+stays and the default does not. Revisit when a scan-tier fixture is crooked.
+
+Adding deskew on top of despeckle changes CER by 0.0002 and makes WER worse,
+which is noise at n=3. Two stages are not better than one here.
+
+**The gate does not see this.** `engine_baselines.json` and
+`tests/test_engine_accuracy.py` call the engine directly on raw fixture bytes;
+no preprocessing runs. So the committed baselines are unchanged by this wiring,
+and a future preprocessing regression would not trip them. Closing that gap —
+running the baseline harness through the composition root's own processor —
+is worth doing and is not done here.
+
 Still open: five of the six target varieties (modern, ancient, Byzantine,
 Pontian, critical-edition apparatus) have no scan-tier fixture at all, and all
 three that exist come from one book by one publisher. `docs/ENHANCEMENT_PLAN.md`
