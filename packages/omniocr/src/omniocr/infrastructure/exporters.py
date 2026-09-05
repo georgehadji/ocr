@@ -114,6 +114,12 @@ class AltoXmlExporter(IExporter):
                         "SCRIPT": line.script.value,
                         "REGION_TYPE": line.region_type.value,
                         "READING_ORDER": str(line.reading_order),
+                        # ENHANCEMENT_PLAN A5. An archival consumer should be
+                        # able to see how contested a line was — engines
+                        # disagreeing is better evidence than any engine's
+                        # self-reported confidence. Recorded, never acted on:
+                        # a SPLIT line exports its full text like any other.
+                        "AGREEMENT": line.agreement.value,
                     }
                     if line.provenance is not None:
                         attrs.update(
@@ -172,7 +178,11 @@ class PageXmlExporter(IExporter):
                     text_line = ET.SubElement(
                         text_region,
                         "TextLine",
-                        {"id": line.id, "regionType": line.region_type.value},
+                        {
+                            "id": line.id,
+                            "regionType": line.region_type.value,
+                            "agreement": line.agreement.value,
+                        },
                     )
                     ET.SubElement(text_line, "Coords", {"points": points})
                     if line.provenance is not None:
