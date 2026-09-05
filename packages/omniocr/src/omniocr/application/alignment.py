@@ -28,10 +28,12 @@ far for a stage whose whole purpose is to stay traceable.
 
 from __future__ import annotations
 
+import unicodedata
+from collections import Counter
 from difflib import SequenceMatcher
 from typing import Mapping, Sequence
 
-from omniocr.domain.models import AlignedToken, OCRLine, Suggestion
+from omniocr.domain.models import AgreementTier, AlignedToken, OCRLine, Suggestion
 
 # Lines longer than this are not prose. SequenceMatcher is O(n²) in the worst
 # case, and a segmenter that merged a whole page into one "line" would other-
@@ -42,11 +44,20 @@ MERGE_REASON = "alignment_merge"
 
 
 def _engine_name(line: OCRLine) -> str:
-    """The engine behind a candidate, or a stable placeholder."""
+    """The voter behind a candidate: engine, plus preprocessing variant if any.
+
+    The variant belongs in the key. With A3's variant ensembling one engine
+    produces several candidates from differently binarized images, and keying
+    on the engine alone would collapse them into a single voter — the ensemble
+    benefit would silently disappear, and a reviewer could not tell which
+    image a reading came from.
+    """
     provenance = line.provenance
     if provenance is None:
         return "unknown"
-    return provenance.model_ref.model_name
+    name = provenance.model_ref.model_name
+    variant = getattr(provenance, "variant", "")
+    return f"{name}@{variant}" if variant else name
 
 
 def _weight(engine: str, weights: Mapping[str, float] | None) -> float:
@@ -146,6 +157,32 @@ def _vote(
     )
 
 
+def agreement_tier(candidates: Sequence[OCRLine]) -> AgreementTier:
+    """Classify how much the candidates agreed (ENHANCEMENT_PLAN A5).
+
+    A pure function of the candidate texts, compared NFC-normalized with
+    whitespace collapsed — two engines differing only in how they spaced a
+    line did not disagree about what it says, and calling that SPLIT would
+    flood the review queue with non-findings.
+
+    This is a better confidence signal than any engine reports about itself,
+    because it is evidence from independent readers rather than a model's
+    opinion of its own output.
+    """
+    if not candidates:
+        return AgreementTier.UNKNOWN
+    if len(candidates) == 1:
+        return AgreementTier.SINGLE
+
+    texts = [unicodedata.normalize("NFC", " ".join(c.text.split())) for c in candidates]
+    counts = Counter(texts)
+    if len(counts) == 1:
+        return AgreementTier.UNANIMOUS
+    if max(counts.values()) >= 2:
+        return AgreementTier.MAJORITY
+    return AgreementTier.SPLIT
+
+
 def merged_text(tokens: Sequence[AlignedToken]) -> str:
     """The voted line. Never becomes `OCRLine.text` — see the module docstring."""
     return " ".join(token.winning_text for token in tokens)
@@ -179,4 +216,11 @@ def merge_suggestion(
     )
 
 
-__all__ = ["MAX_TOKENS", "MERGE_REASON", "align", "merge_suggestion", "merged_text"]
+__all__ = [
+    "MAX_TOKENS",
+    "MERGE_REASON",
+    "agreement_tier",
+    "align",
+    "merge_suggestion",
+    "merged_text",
+]

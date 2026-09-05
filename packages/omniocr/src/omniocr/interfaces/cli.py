@@ -419,6 +419,7 @@ def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> Any:
         exporter=exporter,
         assemble_structure=args.structure,
         workers=args.workers,
+        variants=getattr(args, "variants", 1),
     )
 
 
@@ -706,6 +707,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         default=None,
         help="Kraken .mlmodel path (default: the model flagged in models/manifest.json)",
+    )
+    run.add_argument(
+        "--variants",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "recognize each page from N differently binarized images and offer the "
+            "word-level merge for review (default: 1, no extra cost). Each variant "
+            "multiplies recognition time; the merge is a suggestion, never the text."
+        ),
     )
     run.add_argument(
         "--model-select",

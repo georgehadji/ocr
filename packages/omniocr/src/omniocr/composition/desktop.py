@@ -13,16 +13,22 @@ from omniocr.infrastructure.preprocess import (
     ChainProcessor,
     DespeckleProcessor,
     GrayscaleProcessor,
+    OtsuProcessor,
+    SauvolaProcessor,
 )
 from omniocr.infrastructure.resilience import RetryingEngine
-from omniocr.application.reconcile import ConfidenceWeightedReconciler, ScriptAwareReconciler
+from omniocr.application.reconcile import (
+    AlignedReconciler,
+    ConfidenceWeightedReconciler,
+    ScriptAwareReconciler,
+)
 from omniocr.domain.models import OCRLine, Script, TenantContext
 from omniocr.application.router import ScriptRouter
 from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
 from omniocr.infrastructure.exporters import MarkdownExporter
 from omniocr.infrastructure.jobs import InMemoryJobStore
 from omniocr.infrastructure.lexicons import lexicons_by_script
-from omniocr.ports.interfaces import IExporter, IJobStore, IOCREngine
+from omniocr.ports.interfaces import IExporter, IImageProcessor, IJobStore, IOCREngine
 
 # Defaults only — no optional third-party imports in vlm's module scope, so
 # these resolve even when the VLM extra is absent. They are function-signature
@@ -46,6 +52,39 @@ try:
     _VLM_AVAILABLE = True
 except ImportError:
     _VLM_AVAILABLE = False
+
+
+def _variant_processors(count: int) -> tuple[tuple[str, IImageProcessor], ...]:
+    """Extra preprocessing variants beyond the primary (ENHANCEMENT_PLAN A3).
+
+    ``count`` is the *total* number of images each page is recognized from, so
+    1 means the primary alone and no extra cost. Each variant multiplies
+    recognition time, which dominates a run, so this stays opt-in.
+
+    The variants are binarizations rather than geometric transforms, and that
+    is a hard constraint rather than a preference: layout is segmented once on
+    the primary page and every variant's word boxes are matched against those
+    segments, so anything that rotated or rescaled would misassign every block.
+    The pipeline rejects such a variant defensively, but there is no reason to
+    offer one here.
+
+    Ordered by expected usefulness, so ``--variants 2`` gets the most valuable
+    addition. Otsu comes first because it is a global threshold where Sauvola
+    is local: the two fail on opposite kinds of page — Otsu on uneven
+    lighting, Sauvola by inventing texture in blank margins — and their
+    disagreement is exactly what A4's merge turns into signal.
+    """
+    if count < 1:
+        raise ValueError("variants must be >= 1 (1 means the primary page alone)")
+    available: tuple[tuple[str, IImageProcessor], ...] = (
+        ("otsu", ChainProcessor(GrayscaleProcessor(), OtsuProcessor())),
+        ("sauvola", ChainProcessor(GrayscaleProcessor(), SauvolaProcessor())),
+        (
+            "despeckled-otsu",
+            ChainProcessor(GrayscaleProcessor(), DespeckleProcessor(), OtsuProcessor()),
+        ),
+    )
+    return available[: count - 1]
 
 
 def _default_image_processor() -> ChainProcessor:
@@ -112,6 +151,7 @@ def create_ensemble_pipeline(
     calamari_model_glob: str | None = None,
     assemble_structure: bool = False,
     workers: int = 1,
+    variants: int = 1,
 ) -> PipelineOrchestrator:
     """Build a CPU ensemble with script rules injected at the composition root.
 
@@ -184,12 +224,16 @@ def create_ensemble_pipeline(
         # confidence vote hands Latin lines (footnote URLs, western-language
         # citations) to a model that cannot spell them. Pass Latin packs in
         # ``tesseract_language`` for this to have anything to choose.
-        reconciler=ScriptAwareReconciler(),
+        # AlignedReconciler delegates the choice to ScriptAwareReconciler and
+        # adds A4's word-level merge as a suggestion. It chooses nothing
+        # differently; it only offers the merge for review.
+        reconciler=AlignedReconciler(ScriptAwareReconciler()),
         post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
         exporter=exporter or MarkdownExporter(),
         assembler=assembler,
         job_store=job_store or InMemoryJobStore(),
         max_workers=workers if workers > 1 else None,
+        variants=_variant_processors(variants),
     )
 
 

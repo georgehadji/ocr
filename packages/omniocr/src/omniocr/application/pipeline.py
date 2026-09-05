@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import Iterable, Iterator, Protocol, Sequence, cast
+from omniocr.application.alignment import agreement_tier
 from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.domain.errors import EngineError, ExportError, IngestError, LayoutError, PipelineError
 from omniocr.domain.models import (
@@ -178,7 +179,12 @@ class PipelineOrchestrator:
         event_bus: IEventBus | None = None,
         max_workers: int | None = None,
         checkpoint_every: int = 25,
+        variants: Sequence[tuple[str, IImageProcessor]] = (),
     ) -> None:
+        # Extra preprocessing variants (ENHANCEMENT_PLAN A3). Empty by default,
+        # so this changes nothing for a caller that does not ask: N variants
+        # cost N times the recognition, which is the dominant cost of a run.
+        self._variants = tuple(variants)
         self._page_source = page_source or NullPageSource()
         self._image_processor = image_processor or PassthroughImageProcessor()
         self._layout_analyzer = layout_analyzer or SingleLineLayoutAnalyzer()
@@ -479,12 +485,63 @@ class PipelineOrchestrator:
                 )
             yield (raw_page.number, page)
 
+    def _variant_pages(
+        self, raw_page: RawPage, context: TenantContext
+    ) -> list[tuple[str, RawPage]]:
+        """Preprocess the page once per variant (ENHANCEMENT_PLAN A3).
+
+        The same model on the same line, given differently preprocessed images,
+        makes *different* errors — so N variants feed A4's merge and produce
+        ensemble benefit from a single model. The primary comes first and is
+        the page layout is segmented from.
+
+        A failing variant is dropped with a warning rather than failing the
+        page: losing one binarization costs accuracy, losing the page costs
+        everything. The primary is exempt — if that fails there is no layout to
+        segment and nothing to fall back to.
+
+        Every variant must preserve geometry, and one that does not is dropped.
+        Word boxes from all variants are matched against segments found once on
+        the primary, so a variant that rotated or rescaled pixels would
+        silently misassign every block. That rules out deskew and upscaling as
+        variants whatever A3's illustrative list says — deskew belongs in the
+        always-on chain ahead of the fan-out, where it moves the page and its
+        layout together.
+        """
+        primary = self._image_processor.process(raw_page, context)
+        if isinstance(primary, Err):
+            raise primary.error
+        assert isinstance(primary, Ok)
+        pages: list[tuple[str, RawPage]] = [("primary", primary.value)]
+
+        for name, processor in self._variants:
+            produced = processor.process(raw_page, context)
+            if isinstance(produced, Err):
+                self._log.warning(
+                    "variant_failed",
+                    page=raw_page.number,
+                    variant=name,
+                    error=str(produced.error),
+                )
+                continue
+            assert isinstance(produced, Ok)
+            if (
+                produced.value.width != primary.value.width
+                or produced.value.height != primary.value.height
+            ):
+                self._log.warning(
+                    "variant_changed_geometry",
+                    page=raw_page.number,
+                    variant=name,
+                    detail="dropped: its word boxes would not match the primary layout",
+                )
+                continue
+            pages.append((name, produced.value))
+        return pages
+
     def _process_page(self, raw_page: RawPage, context: TenantContext) -> DocumentPage:
-        processed = self._image_processor.process(raw_page, context)
-        if isinstance(processed, Err):
-            raise processed.error
-        assert isinstance(processed, Ok)
-        processed_page = processed.value
+        variant_pages = self._variant_pages(raw_page, context)
+        processed_page = variant_pages[0][1]
 
         segments = self._layout_analyzer.segment(processed_page, context)
         if isinstance(segments, Err):
@@ -494,41 +551,48 @@ class PipelineOrchestrator:
 
         page_lines: list[OCRLine] = []
         suggestions: list[Suggestion] = []
-        engine_results: dict[int, Sequence[OCRBlock]] = {}
-        engine_assignments: dict[int, dict[int, list[OCRBlock]]] = {}
+        # Keyed by (engine identity, variant name): one engine reading two
+        # variants is two independent results, and collapsing them would throw
+        # away exactly the disagreement the ensemble exists to exploit.
+        engine_results: dict[tuple[int, str], Sequence[OCRBlock]] = {}
+        engine_assignments: dict[tuple[int, str], dict[int, list[OCRBlock]]] = {}
         for segment_index, segment in enumerate(segment_values):
             engines = self._router.route(segment, context)
             candidate_lines: list[OCRLine] = []
-            for engine in engines:
-                engine_key = id(engine)
-                if engine_key not in engine_results:
-                    extracted = engine.extract(processed_page, context)
-                    if isinstance(extracted, Err):
-                        # An engine failing is survivable — the others still
-                        # vote — but it must never be silent. An ensemble that
-                        # quietly degrades to one engine looks identical to a
-                        # healthy one from the outside.
-                        engine_results[engine_key] = ()
-                        self._log.warning(
-                            "engine_failed",
-                            page=raw_page.number,
-                            engine=getattr(engine, "name", type(engine).__name__),
-                            error=str(extracted.error),
+            for variant_name, variant_page in variant_pages:
+                for engine in engines:
+                    engine_key = (id(engine), variant_name)
+                    if engine_key not in engine_results:
+                        extracted = engine.extract(variant_page, context)
+                        if isinstance(extracted, Err):
+                            # An engine failing is survivable — the others
+                            # still vote — but it must never be silent. An
+                            # ensemble that quietly degrades to one engine
+                            # looks identical to a healthy one from outside.
+                            engine_results[engine_key] = ()
+                            self._log.warning(
+                                "engine_failed",
+                                page=raw_page.number,
+                                engine=getattr(engine, "name", type(engine).__name__),
+                                variant=variant_name,
+                                error=str(extracted.error),
+                            )
+                        else:
+                            assert isinstance(extracted, Ok)
+                            engine_results[engine_key] = extracted.value
+                        engine_assignments[engine_key] = self._assign_blocks(
+                            segment_values, engine_results[engine_key]
                         )
-                    else:
-                        assert isinstance(extracted, Ok)
-                        engine_results[engine_key] = extracted.value
-                    engine_assignments[engine_key] = self._assign_blocks(
-                        segment_values, engine_results[engine_key]
-                    )
-                # All of an engine's blocks inside this segment belong to the
-                # SAME line, so they compose into one candidate. Emitting one
-                # candidate per block would make a line's own words compete
-                # against each other and the reconciler would keep exactly one
-                # — silently discarding the rest of the line.
-                overlapping = tuple(engine_assignments[engine_key].get(segment_index, ()))
-                if overlapping:
-                    candidate_lines.append(self._compose_line(segment, engine, overlapping))
+                    # All of an engine's blocks inside this segment belong to
+                    # the SAME line, so they compose into one candidate.
+                    # Emitting one candidate per block would make a line's own
+                    # words compete against each other and the reconciler
+                    # would keep exactly one — silently discarding the rest.
+                    overlapping = tuple(engine_assignments[engine_key].get(segment_index, ()))
+                    if overlapping:
+                        candidate_lines.append(
+                            self._compose_line(segment, engine, overlapping, variant_name)
+                        )
             if not candidate_lines:
                 candidate_lines.append(segment)
             chosen = self._reconciler.reconcile(candidate_lines, context)
@@ -536,6 +600,12 @@ class PipelineOrchestrator:
                 raise chosen.error
             assert isinstance(chosen, Ok)
             chosen_line = chosen.value
+            # A5: how much the engines agreed, recorded on the line. This is a
+            # better confidence signal than any engine's self-report, and it
+            # orders the review queue. It never gates export - a SPLIT line
+            # exports its text, flagged, because dropping low-agreement lines
+            # would be a faithfulness violation dressed as quality control.
+            chosen_line = replace(chosen_line, agreement=agreement_tier(candidate_lines))
             # A reconciler that can also merge (A4's AlignedReconciler) offers
             # the voted line here. It is a suggestion, never the line itself:
             # a merge is text no single engine produced, so CLAUDE.md rule 1
@@ -576,7 +646,12 @@ class PipelineOrchestrator:
         )
 
     @staticmethod
-    def _compose_line(segment: OCRLine, engine: IOCREngine, blocks: Sequence[OCRBlock]) -> OCRLine:
+    def _compose_line(
+        segment: OCRLine,
+        engine: IOCREngine,
+        blocks: Sequence[OCRBlock],
+        variant: str = "",
+    ) -> OCRLine:
         """Compose one engine's blocks within a segment into a single candidate line.
 
         Block order is the engine's own emission order — Tesseract and Kraken
@@ -592,8 +667,18 @@ class PipelineOrchestrator:
         texts = [block.text for block in blocks if block.text]
         confidences = [block.confidence.value for block in blocks]
         mean_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+        # The variant is stamped onto both the id and the provenance. Without
+        # it, one engine reading three variants would emit three candidates
+        # sharing an id and an indistinguishable provenance — A4's merge would
+        # treat them as one voter and a reviewer could not tell which image a
+        # reading came from. ENHANCEMENT_PLAN A3 calls this out as the point
+        # where faithfulness breaks if the field is missing.
+        provenance = blocks[0].provenance if blocks else None
+        if provenance is not None and variant and variant != "primary":
+            provenance = replace(provenance, variant=variant)
+        suffix = "" if not variant or variant == "primary" else f"-{variant}"
         return OCRLine(
-            id=f"{segment.id}-{engine.name}",
+            id=f"{segment.id}-{engine.name}{suffix}",
             text=" ".join(texts),
             confidence=Confidence(mean_confidence),
             bbox=PipelineOrchestrator._union_bbox(blocks) or segment.bbox,
@@ -601,7 +686,7 @@ class PipelineOrchestrator:
             region_type=segment.region_type,
             reading_order=segment.reading_order,
             blocks=tuple(blocks),
-            provenance=blocks[0].provenance if blocks else None,
+            provenance=provenance,
         )
 
     @staticmethod
