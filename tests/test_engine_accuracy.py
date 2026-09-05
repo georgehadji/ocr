@@ -132,11 +132,21 @@ def _recognize(fixture_id: str) -> str:
     300 DPI scan it is tens of seconds each, so the suite was spending
     minutes re-deriving identical strings.
     """
+    from omniocr.composition.desktop import _default_image_processor
     from omniocr.infrastructure.tesseract import TesseractEngine
 
-    engine = TesseractEngine(language=_language_for(fixture_id))
     context = TenantContext(organization_id="test", user_id="test", subscription_tier="desktop")
-    result = engine.extract(_FixturePage(load_fixture_image_bytes(fixture_id)), context)
+    # Preprocess exactly as the pipeline does, from the same source, so a
+    # preprocessing regression trips this gate. Measuring the engine on raw
+    # bytes measured something the product does not do: despeckle is a 14.8%
+    # relative CER improvement these baselines were entirely blind to, and
+    # they would not have caught its removal either.
+    raw = _FixturePage(load_fixture_image_bytes(fixture_id))
+    processed = _default_image_processor().process(raw, context)
+    assert processed.is_ok(), f"{fixture_id}: preprocessing failed: {processed.error}"
+
+    engine = TesseractEngine(language=_language_for(fixture_id))
+    result = engine.extract(_FixturePage(processed.value.content), context)
     assert result.is_ok(), f"{fixture_id}: engine failed: {result.error}"
     return _normalize(" ".join(block.text for block in result.value))
 
