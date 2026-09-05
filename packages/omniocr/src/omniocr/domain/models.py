@@ -79,6 +79,27 @@ class EngineRun:
 
 
 @dataclass(frozen=True, slots=True)
+class AlignedToken:
+    """One token position across every engine that read the line.
+
+    `readings` carries the per-engine provenance that makes a merge auditable:
+    a reviewer can see which engine supplied the winning token rather than
+    being handed an unattributed synthesis. Kept as a sorted tuple of pairs
+    rather than a dict so the value stays hashable and comparable.
+    """
+
+    position: int
+    pivot_text: str
+    winning_text: str
+    readings: Tuple[Tuple[str, str], ...]
+
+    @property
+    def contested(self) -> bool:
+        """True when the engines did not all read this position the same way."""
+        return len({text for _, text in self.readings}) > 1
+
+
+@dataclass(frozen=True, slots=True)
 class Suggestion:
     line_id: str
     source_text: str

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Mapping, Sequence
 
+from omniocr.application.alignment import merge_suggestion
 from omniocr.application.script_detect import (
     MIN_LATIN_EVIDENCE,
     ascii_letter_count,
     is_latin_dominant,
 )
 from omniocr.domain.errors import EngineError
-from omniocr.domain.models import OCRLine, TenantContext
+from omniocr.domain.models import OCRLine, Suggestion, TenantContext
 from omniocr.domain.result import Err, Ok, Result
+from omniocr.ports.interfaces import IReconciler
 
 
 def _best_by_confidence(candidates: Sequence[OCRLine]) -> OCRLine:
@@ -131,8 +133,44 @@ class ScriptAwareReconciler:
         return Ok(_best_by_confidence(candidates))
 
 
+class AlignedReconciler:
+    """Delegate the choice, then attach the voted merge as a suggestion.
+
+    A drop-in `IReconciler`: it returns a real candidate produced by a real
+    engine, exactly as the others do. What it adds is `suggest`, which offers
+    the word-level merge for review.
+
+    The split is the point. `reconcile` cannot return the merge — a merged
+    line is text no engine produced, and CLAUDE.md rule 1 forbids that
+    reaching `OCRLine.text`. So the merge travels the same road as every other
+    non-authoritative improvement in this pipeline: as a `Suggestion` a human
+    accepts or rejects.
+
+    Wraps another reconciler rather than reimplementing selection, so
+    `ScriptAwareReconciler`'s hard-won mixed-script rules keep applying.
+    """
+
+    def __init__(
+        self,
+        inner: IReconciler | None = None,
+        weights: Mapping[str, float] | None = None,
+    ) -> None:
+        self._inner = inner or ScriptAwareReconciler()
+        self._weights = weights
+
+    def reconcile(
+        self, candidates: Sequence[OCRLine], context: TenantContext
+    ) -> Result[OCRLine, EngineError]:
+        return self._inner.reconcile(candidates, context)
+
+    def suggest(self, chosen: OCRLine, candidates: Sequence[OCRLine]) -> Suggestion | None:
+        """The voted merge, or None when the vote agrees with `chosen`."""
+        return merge_suggestion(chosen, candidates, self._weights)
+
+
 __all__ = [
     "LATIN_LANGUAGE_PACKS",
+    "AlignedReconciler",
     "ConfidenceWeightedReconciler",
     "ScriptAwareReconciler",
 ]
