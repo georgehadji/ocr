@@ -286,3 +286,40 @@ class TestAgreementTier:
 
         assert page.lines
         assert all(line.text for line in page.lines), "a contested line lost its text"
+
+
+class TestVariantCountValidation:
+    """`--variants 2` is refused, on measurement rather than taste.
+
+    With two candidates every disagreement is a 1-1 tie, ties go to the pivot,
+    and the merge is a guaranteed no-op: measured 2026-09-05, 0 merges fired
+    across 136 disagreeing lines while the second recognition pass cost full
+    runtime and made the chosen line worse.
+    """
+
+    def test_two_variants_is_refused_with_a_reason(self) -> None:
+        import pytest
+
+        from omniocr.composition.desktop import _variant_processors
+
+        with pytest.raises(ValueError, match="cannot improve anything"):
+            _variant_processors(2)
+
+    def test_zero_is_refused(self) -> None:
+        import pytest
+
+        from omniocr.composition.desktop import _variant_processors
+
+        with pytest.raises(ValueError):
+            _variant_processors(0)
+
+    def test_one_means_no_extra_variants(self) -> None:
+        from omniocr.composition.desktop import _variant_processors
+
+        assert _variant_processors(1) == ()
+
+    def test_three_gives_two_extra_variants(self) -> None:
+        """Three candidates is the smallest count where a majority can form."""
+        from omniocr.composition.desktop import _variant_processors
+
+        assert len(_variant_processors(3)) == 2

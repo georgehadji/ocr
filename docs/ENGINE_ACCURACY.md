@@ -180,6 +180,49 @@ The four synthetic fixtures did not move at all, which is itself a check:
 despeckle has nothing to remove from a clean PIL render, so any change there
 would have meant the stage was eating real glyphs.
 
+### Variant ensembling does not pay on this corpus (2026-09-05)
+
+ENHANCEMENT_PLAN A3 predicts 10–30% relative CER from recognizing each page
+from N differently binarized images and merging the readings. Measured through
+the real pipeline — Tesseract layout, per-line candidates, A4's merge — over
+the three scan fixtures:
+
+| Variants | Chosen CER | Merged CER | vs 1-variant | Merges fired |
+|---|---|---|---|---|
+| 1 | **0.1226** | 0.1226 | — | 0 |
+| 2 | 0.1283 | 0.1283 | 4.6% worse | 0 |
+| 3 | 0.1306 | 0.1290 | 5.2% worse | 64 |
+| 4 | 0.1277 | 0.1230 | 0.3% worse | 56 |
+
+**Every configuration is worse than the baseline.** A3's DoD requires that no
+variant configuration be worse than plain grayscale; this fails it. The
+feature stays in the tree, opt-in and defaulted off, but it must not be
+described as an improvement.
+
+Two mechanisms, both legible in the numbers:
+
+1. **More candidates make the *chosen* line worse**, before any merge happens.
+   `ScriptAwareReconciler` falls back to highest confidence, and Tesseract
+   reports confident nonsense on binarized input — the same failure this
+   repository already documents for Kraken on Latin URLs. Each extra variant
+   is another chance for a confident wrong reading to win the line.
+2. **Two variants cannot help, by construction.** With two candidates every
+   disagreement is a 1–1 tie, ties go to the pivot, so the merge is a no-op:
+   `merges=0` across 136 `SPLIT` lines. Only three or more candidates can
+   outvote the pivot.
+
+The merge does repair some of the damage the fan-out causes (3.7% relative at
+four variants) but never recovers the baseline. It is cleaning up a mess that
+would not exist without it.
+
+What this does **not** show is that variant ensembling is worthless in
+general. These three fixtures are clean 300 DPI scans of one well-printed
+book, where Otsu and Sauvola have little to disagree about beyond Sauvola
+being worse. The technique targets degraded material — shadowed gutters,
+photographed pages, uneven illumination — and this corpus contains none of it.
+Re-measure once A1 includes a genuinely degraded variety before drawing a
+general conclusion in either direction.
+
 Still open: five of the six target varieties (modern, ancient, Byzantine,
 Pontian, critical-edition apparatus) have no scan-tier fixture at all, and all
 three that exist come from one book by one publisher. `docs/ENHANCEMENT_PLAN.md`

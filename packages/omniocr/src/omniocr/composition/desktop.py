@@ -76,6 +76,20 @@ def _variant_processors(count: int) -> tuple[tuple[str, IImageProcessor], ...]:
     """
     if count < 1:
         raise ValueError("variants must be >= 1 (1 means the primary page alone)")
+    if count == 2:
+        # Measured 2026-09-05: with exactly two candidates every disagreement
+        # is a 1-1 tie, ties go to the pivot, and the merge is a guaranteed
+        # no-op — 0 merges fired across 136 disagreeing lines. The second
+        # recognition pass is pure cost, and it also makes the *chosen* line
+        # worse, because the reconciler falls back to confidence and Tesseract
+        # is confidently wrong on binarized input. Refusing beats silently
+        # doubling the runtime for a negative return.
+        raise ValueError(
+            "variants=2 cannot improve anything: two candidates always tie and the "
+            "tie goes to the pivot, so the merge is a no-op while costing a second "
+            "recognition pass. Use 1 (no ensembling) or >=3 (a majority can outvote "
+            "the pivot). See docs/ENGINE_ACCURACY.md."
+        )
     available: tuple[tuple[str, IImageProcessor], ...] = (
         ("otsu", ChainProcessor(GrayscaleProcessor(), OtsuProcessor())),
         ("sauvola", ChainProcessor(GrayscaleProcessor(), SauvolaProcessor())),

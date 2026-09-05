@@ -121,7 +121,7 @@ this one optimizes CER, full stop.
 |---|---|---|---|
 | **A1** | Ground-truth corpus (measurement **and** training fuel) | Enables everything. Zero alone. | 6 |
 | **A2** | **Fine-tune on target material** | **0.126 → 0.005–0.015.** Largest single lever by a wide margin — and the gap is wider than first estimated. | 5 |
-| **A3** | Preprocessing: deskew, dewarp, denoise + variant ensembling | 10–30% relative on scanned material | 5 |
+| **A3** | Preprocessing: deskew, dewarp, denoise + variant ensembling | **Measured, mixed.** Despeckle: 14.8% relative, shipped. Deskew: worse on square pages, not default. Variant ensembling: **every configuration worse than baseline** on the current corpus — see docs/ENGINE_ACCURACY.md. | 5 |
 | **A4** | Word-level alignment merge | 5–15% relative; scales with engine count | 3 |
 | **A5** | Agreement tiers | 0 alone — enables A9 and review triage | 2 |
 | **A6** | Per-document model bake-off | Prevents 7× regressions; large on mismatched material | 4 |
@@ -293,6 +293,16 @@ variants = [grayscale, sauvola, otsu, denoised+sauvola, 1.5×upscale+sauvola]
 
 5× compute for 10–30% relative CER on degraded material. Under the old CPU-only
 constraint this was unaffordable; it is now one of the better trades available.
+
+**Measured 2026-09-05 and it did not hold.** Through the real per-line pipeline
+on the three scan fixtures, every variant count scored *worse* than the
+single-variant baseline (0.1226 CER): 2 variants 0.1283, 3 variants 0.1306,
+4 variants 0.1277. Two variants cannot help at all — a 1–1 tie goes to the
+pivot, so the merge is a no-op. The extra candidates also degrade the
+*chosen* line, because the reconciler falls back to confidence and Tesseract
+is confidently wrong on binarized input. This corpus is clean print, which is
+not the material the technique targets; the estimate above should be treated
+as unvalidated until a degraded variety exists to test it on.
 
 ```
 infrastructure/preprocess.py   grow   Deskew, Dewarp, Denoise, Despeckle,
