@@ -536,6 +536,15 @@ class PipelineOrchestrator:
                 raise chosen.error
             assert isinstance(chosen, Ok)
             chosen_line = chosen.value
+            # A reconciler that can also merge (A4's AlignedReconciler) offers
+            # the voted line here. It is a suggestion, never the line itself:
+            # a merge is text no single engine produced, so CLAUDE.md rule 1
+            # keeps it out of `OCRLine.text` and in front of a human instead.
+            suggester = getattr(self._reconciler, "suggest", None)
+            if suggester is not None:
+                merged = suggester(chosen_line, candidate_lines)
+                if merged is not None:
+                    suggestions.append(merged)
             corrections = self._post_corrector.correct(chosen_line, context)
             if isinstance(corrections, Err):
                 raise corrections.error
