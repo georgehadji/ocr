@@ -1,63 +1,118 @@
-# Pending scan fixtures — transcription needed
+# Adding scan-tier fixtures
 
-Three real page images are committed and waiting for diplomatic ground truth.
-Until each has a `.txt`, it is **not** a fixture: `list_fixture_ids()` globs
-`*.txt`, so these images are inert and no gate reads them.
+The repeatable procedure for growing the ground-truth corpus. The first three
+polytonic pages were done by hand as a one-off; this is how the remaining ones
+get done.
 
-| Image | Source page | Content |
-|---|---|---|
-| `polytonic-scan-1.png` | PDF page index 20 | body prose |
-| `polytonic-scan-2.png` | PDF page index 34 (printed p. 35) | prose + two-column hymn quotes |
-| `polytonic-scan-3.png` | PDF page index 48 | body prose |
+## Why this is the bottleneck
 
-Source: `PDFs for OCR/Πολυχρονιάδης Δεδούσης 2.0.pdf` — *Τα Βυζαντινά Μνημεία
-της Θεσσαλονίκης*. 74 pages, no text layer, 300 DPI render.
+`docs/ENHANCEMENT_PLAN.md` A1 sizes the corpus at **115 pages**. We have 3.
 
-## Steps
+| Variety | Pages needed | Have | Purpose |
+|---|---|---|---|
+| Polytonic 20c Didot | 30 | **3** | Fine-tune target |
+| 19c German serif | 30 | 0 | Fine-tune target; two bundled models suit this face |
+| Critical edition | 20 | 0 | Fine-tune target + the only A10 material |
+| Byzantine / ligature | 15 | 0 | Hardest variety; needs the most training signal |
+| Modern monotonic | 10 | 0 | Baseline sanity |
+| Pontian | 10 | 0 | Post-correction path |
 
-**1. Transcribe.** For each image write `tests/corpus/polytonic-scan-N.txt`.
+A2 fine-tuning is fully built — `KetosTrainer`, the `BeatsParentOnHeldOut`
+promotion policy, the model registry, the router hand-off — and has never once
+run, for want of ground truth. Nothing in the plan pays off until this table
+fills in.
 
-Diplomatic means: reproduce what is printed, not what it should say. Keep
-original orthography, accents, breathings, and abbreviations. Do not correct
-the source, modernise spelling, or expand abbreviations. Preserve line breaks
-as printed. Save UTF-8, NFC-normalized (`test_ground_truth_is_nfc_normalized`
-enforces this).
+Measurement alone needs ~20 pages. Training wants 50–100 per typeface family.
+Be clear which you are buying.
 
-For `polytonic-scan-2.png`, transcribe the two-column section in reading order
-— left column fully, then right column.
+## 1. Source the pages
 
-**2. Declare provenance.** Add to `PROVENANCE.json` under `fixtures`, one per
-transcribed page, filling `licence` and `transcribed_by`:
+Public-domain digitisations cover most varieties: Internet Archive, the
+Bayerische Staatsbibliothek (BSB), and Anemi. **Pontian is the acquisition
+risk** — start looking for it before you need it.
 
-```json
-"polytonic-scan-1": {
-  "tier": "scan",
-  "script": "polytonic",
-  "source": "Τα Βυζαντινά Μνημεία της Θεσσαλονίκης, PDF page index 20, 300 DPI",
-  "licence": "FILL IN",
-  "transcribed_by": "FILL IN",
-  "typeface": "20c polytonic serif"
-}
+Prefer pages that are *representative*, not clean. A corpus of unusually tidy
+pages produces a model that is confident and wrong on ordinary ones. Include
+the tight gutters, the show-through, and the pages where the ink is heavy.
+
+## 2. Stage them
+
+```bash
+python scripts/stage_corpus_pages.py \
+    --pdf "PDFs for OCR/Some Book.pdf" \
+    --pages 12,40,61 \
+    --prefix german-serif-scan \
+    --script polytonic \
+    --typeface "19c German serif" \
+    --source-title "Full title as printed" \
+    --licence "public domain (published 1887)" \
+    --dry-run
 ```
 
-`licence` is not optional — `test_scan_fixtures_carry_source_licence_and_transcriber`
-fails without it. If the book is not redistributable, say so here and move the
-images out of the repo rather than leaving the field vague.
+Drop `--dry-run` to write. Page numbers are **0-based PDF indices**, matching
+how the existing fixtures record them. The script renders each page at 300 DPI,
+picks the next free `<prefix>-N`, and writes the `PROVENANCE.json` entry with
+the source coordinates already filled in.
 
-**3. Compute baselines.**
+It deliberately writes no `.txt`. `list_fixture_ids()` globs `*.txt`, so a
+staged page is inert until a human transcribes it — no gate can measure against
+it, and nothing can quietly seed ground truth from OCR output.
+
+## 3. Transcribe
+
+For each staged image write `tests/corpus/<id>.txt`.
+
+**Diplomatic** means reproduce what is printed, not what it should say:
+
+- Keep the original orthography, accents, breathings, and abbreviations.
+- Do not correct the source, modernise spelling, or expand abbreviations.
+- Keep the printed variant letterforms where they are meaningful. The existing
+  `polytonic-scan-*` files keep the book's own `μικροσκωπικοῦ` with ω, though
+  the standard spelling has ο.
+- Preserve line breaks as printed, one line per printed line.
+- Multi-column sections: transcribe in reading order, left column fully, then
+  right. `polytonic-scan-2.txt` is the worked example.
+- UTF-8, NFC-normalized. `test_ground_truth_is_nfc_normalized` enforces this.
+
+**Ground truth must come from a human reading the page.** Never seed it from
+OCR output, not even as a starting draft you intend to correct — the errors
+you fail to notice become the errors the model is trained to reproduce, and
+they are invisible afterwards. An AI-drafted transcription reviewed line by
+line against the image by a person is acceptable, and must be declared as such
+in `transcribed_by`.
+
+## 4. Complete the provenance
+
+The staging script leaves two fields for you:
+
+- `licence` — not optional. `test_scan_fixtures_carry_source_licence_and_transcriber`
+  fails without it. If the book is not redistributable, say so plainly and move
+  the image out of the repo rather than leaving the field vague.
+- `transcribed_by` — who read the page. Replace the `PENDING` placeholder.
+
+## 5. Recompute baselines
 
 ```bash
 python scripts/compute_engine_baselines.py
 ```
 
-**4. Retire the synthetic accuracy gate.** Remove the `xfail` marker on
-`test_kraken_beats_tesseract_on_hard_scripts` in `tests/test_engine_accuracy.py`
-and point the accuracy tests at `list_scan_ids()` instead of `list_fixture_ids()`.
-That is the moment the CER gate starts meaning something.
+Review the diff rather than rubber-stamping it. A rise in CER on an existing
+fixture is an accuracy regression, not a new baseline.
 
-## Coverage gap
+## 6. Check what the new pages changed
 
-These three cover **polytonic only** — one book, one typeface. `modern`,
-`ancient`, `byzantine`, and `pontian` still have no scan-tier fixture. Byzantine
-in particular needs a real Byzantine typeface with ligatures, which this source
-does not contain.
+New fixtures shift the aggregate, and two gates are calibrated against it:
+
+- `MAX_PLAUSIBLE_CER` in `tests/test_engine_accuracy.py` is tiered (0.15
+  synthetic, 0.30 scan). A genuinely harder variety may need its own entry —
+  raise it from measured data with the date recorded, never to make a test pass.
+- `test_kraken_beats_tesseract_on_the_scan_corpus` compares corpus means. If a
+  new variety flips it, that is a finding about the default model, not a test
+  to adjust. `docs/ENGINE_ACCURACY.md` is where it gets written up.
+
+## Known gaps
+
+The three existing fixtures are **one book, one publisher, one typeface**. Even
+the polytonic figure is thinner than the count suggests. Byzantine in
+particular needs a real Byzantine face with ligatures, which no source
+currently in the repository contains.
