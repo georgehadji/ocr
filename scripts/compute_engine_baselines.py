@@ -69,10 +69,31 @@ def normalize(text: str) -> str:
     return unicodedata.normalize("NFC", " ".join(text.split()))
 
 
+def preprocess(fixture_id: str) -> _FixturePage:
+    """Apply the same preprocessing the desktop pipeline applies.
+
+    Baselines used to call the engine on raw fixture bytes, so they measured
+    the engine rather than the product. That gap was not academic: despeckle
+    is a 14.8% relative CER improvement on real scans, and the committed
+    baselines could see neither it nor its removal.
+
+    Imported from the composition root rather than reconstructed here, so the
+    two cannot drift apart. A baseline measuring a chain nobody runs is worse
+    than no baseline, because it still looks like evidence.
+    """
+    from omniocr.composition.desktop import _default_image_processor
+
+    page = _FixturePage(load_fixture_image_bytes(fixture_id))
+    processed = _default_image_processor().process(page, _CONTEXT)
+    if isinstance(processed, Err):
+        raise RuntimeError(f"{fixture_id}: preprocessing failed: {processed.error}")
+    return _FixturePage(processed.value.content)
+
+
 def measure(fixture_id: str) -> dict[str, float]:
     reference = normalize(load_fixture_ground_truth(fixture_id))
     engine = TesseractEngine(language=language_for(fixture_id))
-    result = engine.extract(_FixturePage(load_fixture_image_bytes(fixture_id)), _CONTEXT)
+    result = engine.extract(preprocess(fixture_id), _CONTEXT)
     if isinstance(result, Err):
         raise RuntimeError(f"{fixture_id}: engine failed: {result.error}")
     hypothesis = normalize(" ".join(block.text for block in result.value))

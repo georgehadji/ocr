@@ -87,6 +87,51 @@ class SauvolaProcessor:
             return Err(IngestError(f"adaptive binarization failed: {exc}"))
 
 
+class OtsuProcessor:
+    """Global binarization by Otsu's method — the ensemble's third opinion.
+
+    Not a better Sauvola. It is a *differently wrong* one, which is the whole
+    point of ENHANCEMENT_PLAN A3's variant ensembling: the same model on the
+    same line, given differently binarized images, makes different errors, and
+    A4's merge turns that disagreement into signal.
+
+    Where they differ is predictable. Otsu picks one threshold for the whole
+    page from its intensity histogram, so it is clean and fast on evenly lit
+    print and fails badly on a page with a shadowed gutter. Sauvola thresholds
+    locally, so it survives uneven lighting but invents texture in blank
+    margins. On this project's material both happen, on different pages.
+
+    Geometry is preserved exactly — same width, same height, no resampling.
+    That is a requirement rather than an incidental property: layout is
+    segmented once and every variant's word boxes are matched against those
+    segments, so a variant that moved or rescaled pixels would break block
+    assignment.
+    """
+
+    def process(self, page: RawPage, context: TenantContext) -> Result[RawPage, IngestError]:
+        try:
+            import cv2
+            import numpy as np
+
+            image = cv2.imdecode(np.frombuffer(page.content, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                raise ValueError("page content is not a decodable raster image")
+            _, binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            encoded, content = cv2.imencode(".png", binary)
+            if not encoded:
+                raise ValueError("OpenCV could not encode the binarized page")
+            return Ok(
+                ImagePage(
+                    number=page.number,
+                    content=content.tobytes(),
+                    width=int(image.shape[1]),
+                    height=int(image.shape[0]),
+                )
+            )
+        except Exception as exc:
+            return Err(IngestError(f"Otsu binarization failed: {exc}"))
+
+
 class DeskewProcessor:
     """Rotate a page so its text baselines are horizontal.
 

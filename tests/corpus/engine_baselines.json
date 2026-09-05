@@ -25,20 +25,20 @@
   },
   "polytonic-scan-1": {
     "tesseract": {
-      "cer": 0.1366,
-      "wer": 0.4364
+      "cer": 0.1191,
+      "wer": 0.3728
     }
   },
   "polytonic-scan-2": {
     "tesseract": {
-      "cer": 0.1854,
-      "wer": 0.4799
+      "cer": 0.1653,
+      "wer": 0.4062
     }
   },
   "polytonic-scan-3": {
     "tesseract": {
-      "cer": 0.1065,
-      "wer": 0.4194
+      "cer": 0.0828,
+      "wer": 0.3264
     }
   }
 }

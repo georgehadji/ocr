@@ -160,12 +160,25 @@ stays and the default does not. Revisit when a scan-tier fixture is crooked.
 Adding deskew on top of despeckle changes CER by 0.0002 and makes WER worse,
 which is noise at n=3. Two stages are not better than one here.
 
-**The gate does not see this.** `engine_baselines.json` and
-`tests/test_engine_accuracy.py` call the engine directly on raw fixture bytes;
-no preprocessing runs. So the committed baselines are unchanged by this wiring,
-and a future preprocessing regression would not trip them. Closing that gap —
-running the baseline harness through the composition root's own processor —
-is worth doing and is not done here.
+**The gate sees this as of 2026-09-05.** It did not at first: `engine_baselines.json`
+and `tests/test_engine_accuracy.py` called the engine on raw fixture bytes, so
+they measured the engine rather than the product. Despeckle's 14.8% was
+invisible to them, and so would its removal have been. Both now run the
+composition root's `_default_image_processor()`, imported rather than
+reconstructed, so the two cannot drift apart.
+
+The committed baselines moved accordingly, and these are the figures to cite:
+
+| Fixture | CER (through the pipeline) | WER |
+|---|---|---|
+| `polytonic-scan-1` | 0.1191 | 0.3728 |
+| `polytonic-scan-2` | 0.1653 | 0.4062 |
+| `polytonic-scan-3` | 0.0828 | 0.3264 |
+| **mean** | **0.1224** | **0.3685** |
+
+The four synthetic fixtures did not move at all, which is itself a check:
+despeckle has nothing to remove from a clean PIL render, so any change there
+would have meant the stage was eating real glyphs.
 
 Still open: five of the six target varieties (modern, ancient, Byzantine,
 Pontian, critical-edition apparatus) have no scan-tier fixture at all, and all

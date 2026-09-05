@@ -46,6 +46,31 @@ class Script(str, Enum):
     UNKNOWN = "unknown"
 
 
+class AgreementTier(str, Enum):
+    """How much the engines agreed on a line (ENHANCEMENT_PLAN A5).
+
+    The honest confidence number. An engine's self-reported confidence is
+    known to lie on exactly the lines that matter — `ScriptAwareReconciler`
+    records a Kraken model reporting high confidence while emitting Latin
+    mush — whereas independent readers disagreeing is direct evidence that a
+    line is hard.
+
+    Used to order the review queue and exported as an attribute in ALTO and
+    PAGE, because an archival consumer should be able to see how contested a
+    line was.
+
+    **Never gate export on this.** A `SPLIT` line exports its text, flagged.
+    Dropping low-agreement lines would be a faithfulness violation dressed up
+    as quality control.
+    """
+
+    UNANIMOUS = "unanimous"  # every candidate identical after NFC
+    MAJORITY = "majority"  # at least two agree, at least one differs
+    SPLIT = "split"  # no two candidates agree
+    SINGLE = "single"  # only one candidate existed
+    UNKNOWN = "unknown"
+
+
 class RegionType(str, Enum):
     """Page region classification for critical-edition layout.
 
@@ -76,6 +101,12 @@ class EngineRun:
     model_hash: str
     params: Tuple[str, ...]
     timestamp: str
+    # Which preprocessing variant produced this reading (ENHANCEMENT_PLAN A3).
+    # Empty when only one variant ran. Without it A4's merge cannot say whether
+    # two disagreeing readings came from two engines or from one engine given
+    # two differently binarized images — and an unattributable merge is exactly
+    # what CLAUDE.md rule 1 forbids.
+    variant: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +177,9 @@ class OCRLine:
     reading_order: int = 0
     blocks: Tuple[OCRBlock, ...] = field(default_factory=tuple)
     provenance: EngineRun | None = None
+    # Additive with a default, so every existing construction site keeps
+    # working and slots=True is preserved (ENHANCEMENT_PLAN A5).
+    agreement: AgreementTier = AgreementTier.UNKNOWN
 
 
 class ParagraphRole(str, Enum):
