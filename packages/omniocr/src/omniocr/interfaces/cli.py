@@ -29,7 +29,13 @@ from typing import TYPE_CHECKING, Any, Sequence
 from omniocr.domain.corpus import SplitName
 from omniocr.infrastructure.config import DEFAULT_TESSERACT_LANGUAGE
 from omniocr.infrastructure.model_manifest import MANIFEST_PATH, MODELS_DIR
-from omniocr.domain.models import DocumentPage, DocumentStructure, Script, TenantContext
+from omniocr.domain.models import (
+    DocumentPage,
+    DocumentStructure,
+    OCRLine,
+    Script,
+    TenantContext,
+)
 from omniocr.domain.result import Err
 from omniocr.ports.interfaces import IExporter
 
@@ -316,6 +322,79 @@ def _resolve_model(explicit: str | None) -> str:
     return str(candidates[0])
 
 
+def _bakeoff_model(args: argparse.Namespace, document: bytes) -> str:
+    """Probe every bundled Kraken model on the first page and keep the best.
+
+    ENHANCEMENT_PLAN A6. The manifest declares one default for every document,
+    but the three bundled models span 0.038 to 0.264 CER on a single page — a
+    7x spread driven purely by how well each model's training typeface matches
+    the book. A Porson-face volume silently gets a model measured on Didot.
+
+    Costly and deliberately opt-in: this runs Kraken once per candidate, which
+    is roughly a minute each on CPU. Worth it on a 300-page book, absurd on a
+    postcard, so it is a flag rather than the default.
+
+    Scoring runs without ground truth, so the winner is the best *proxy*
+    score, not a measurement — see `application/model_selection`. Every
+    candidate's score is printed so the choice is reviewable rather than
+    merely asserted.
+    """
+    from omniocr.application.model_selection import BakeOffSelector, lexicon_for
+    from omniocr.infrastructure.ingest import DocumentPageSource
+    from omniocr.infrastructure.kraken import KrakenEngine
+    from omniocr.infrastructure.lexicons import lexicons_by_script
+    from omniocr.infrastructure.model_manifest import ModelManifest
+
+    candidates = sorted(_MODELS_DIR.glob("*.mlmodel"))
+    if not candidates:
+        raise FileNotFoundError(
+            f"no Kraken model found in {_MODELS_DIR}/ — pass --model or see models/README.md"
+        )
+    if len(candidates) == 1:
+        return str(candidates[0])
+
+    first_page = next(iter(DocumentPageSource().stream(document)), None)
+    if first_page is None:
+        raise ValueError("document produced no pages to probe")
+
+    script = Script(args.script)
+    context = TenantContext(organization_id="cli", user_id="cli", subscription_tier="desktop")
+
+    def probe(model_name: str) -> Sequence[OCRLine]:
+        result = KrakenEngine(model_path=_MODELS_DIR / model_name).extract(first_page, context)
+        if isinstance(result, Err):
+            return ()
+        # Blocks, not lines, but scoring only reads `.text` and `.confidence`,
+        # which both carry. Assembling real lines would need the layout stage
+        # and would make the probe cost as much as the run it is optimizing.
+        return [
+            OCRLine(
+                id=f"probe-{index}", text=block.text, confidence=block.confidence, bbox=block.bbox
+            )
+            for index, block in enumerate(result.value)
+        ]
+
+    manifest_default = ModelManifest(MANIFEST_PATH).default_for("kraken")
+    selector = BakeOffSelector(
+        [path.name for path in candidates],
+        default_model=manifest_default.name if manifest_default is not None else None,
+        lexicon=lexicon_for(script, lexicons_by_script()),
+    )
+    outcome = selector.run(probe)
+    print(f"model bake-off: {outcome.summary()}", file=sys.stderr)
+    print(f"model bake-off winner: {outcome.winner}", file=sys.stderr)
+    return str(_MODELS_DIR / outcome.winner)
+
+
+def _select_kraken_model(args: argparse.Namespace, document: bytes) -> str:
+    """Explicit `--model` wins, then the bake-off if asked for, else the manifest."""
+    if args.model is not None:
+        return str(args.model)
+    if getattr(args, "model_select", "default") == "bakeoff":
+        return _bakeoff_model(args, document)
+    return _resolve_model(None)
+
+
 def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> Any:
     from omniocr.composition.desktop import (
         create_ensemble_pipeline,
@@ -500,6 +579,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     try:
         exporter = _build_exporter(fmt, payload)
+        if args.engine != "tesseract":
+            # Resolve the model before wiring, so a bake-off's cost and its
+            # verdict are both visible before the run starts.
+            args.model = _select_kraken_model(args, payload)
         orchestrator = _build_pipeline(args, exporter)
     except (FileNotFoundError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
@@ -623,6 +706,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         default=None,
         help="Kraken .mlmodel path (default: the model flagged in models/manifest.json)",
+    )
+    run.add_argument(
+        "--model-select",
+        choices=["default", "bakeoff"],
+        default="default",
+        help=(
+            "how to pick the Kraken model: 'default' trusts models/manifest.json; "
+            "'bakeoff' probes every bundled model on the first page and keeps the "
+            "best scorer (costs about a minute per model, worth it on a long book). "
+            "Ignored when --model is given."
+        ),
     )
     run.add_argument(
         "--max-pages",
