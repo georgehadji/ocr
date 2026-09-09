@@ -126,7 +126,7 @@ this one optimizes CER, full stop.
 | **A5** | Agreement tiers | 0 alone — enables A9 and review triage | 2 |
 | **A6** | Per-document model bake-off | Prevents 7× regressions; large on mismatched material | 4 |
 | **A7** | Engine expansion (Calamari, PaddleOCR, TrOCR, local VLM) | 10–20% relative via decorrelated errors | 6 |
-| **A8** | Real lexicon + confusion model | Small on raw CER; large on *post-review* accuracy | 5 |
+| **A8** | Real lexicon + confusion model | **Prerequisite, not a nice-to-have.** Polytonic/ancient/modern currently have **no lexicon at all** (only byzantine 59 words and pontian 58), so A6's 0.4 lexicon term is identically zero on the primary script and post-correction highlights nothing there. Small on raw CER; large on *post-review* accuracy; unblocks two shipped features. | 5 |
 | **A9** | VLM arbitration + structure-only layout | 5–10% relative on contested lines | 5 |
 | **A10** | Apparatus criticus zoning | Large on critical editions, zero elsewhere | 4 |
 

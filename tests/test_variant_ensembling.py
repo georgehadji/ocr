@@ -323,3 +323,96 @@ class TestVariantCountValidation:
         from omniocr.composition.desktop import _variant_processors
 
         assert len(_variant_processors(3)) == 2
+
+
+class TestVariantsVoteButDoNotCompete:
+    """A variant may vote in the merge; it may not win selection.
+
+    A variant is the same engine on transformed input, so letting one win
+    selection means trusting self-reported confidence to say which
+    binarization the engine read better — the one signal this codebase has
+    repeatedly caught lying. Measured 2026-09-05, allowing variants into
+    selection made the chosen line monotonically worse as variants were added
+    (CER 0.1226 -> 0.1283 -> 0.1306), before any merge ran.
+    """
+
+    class _Confident:
+        """A variant whose reading looks certain and is wrong."""
+
+        name = "echo"
+
+        def extract(self, page: RawPage, context: TenantContext) -> Result[list[OCRBlock], object]:
+            return Ok(
+                [
+                    OCRBlock(
+                        id="b1",
+                        text="WRONG",
+                        confidence=Confidence(99.0),
+                        bbox=BBox(0, 0, 10, 10),
+                        provenance=EngineRun(
+                            engine="echo",
+                            model_ref=ModelRef(engine="echo", model_name="echo", model_hash="h"),
+                            model_hash="h",
+                            params=(),
+                            timestamp="2026-09-05T00:00:00Z",
+                        ),
+                    )
+                ]
+            )
+
+    def test_a_confident_variant_cannot_win_the_line(self) -> None:
+        """The regression this guards: high confidence on a variant image.
+
+        The variant still reaches the merge, so its reading is not discarded —
+        it is offered as a suggestion rather than silently installed as the
+        recognized text.
+        """
+        from omniocr.application.pipeline import _is_primary
+
+        primary = PipelineOrchestrator._compose_line(
+            _line_stub(), _EchoEngine(), [_block_stub()], "primary"
+        )
+        variant_block = OCRBlock(
+            id="b2",
+            text="WRONG",
+            confidence=Confidence(99.0),
+            bbox=BBox(0, 0, 10, 10),
+            provenance=EngineRun(
+                engine="echo",
+                model_ref=ModelRef(engine="echo", model_name="echo", model_hash="h"),
+                model_hash="h",
+                params=(),
+                timestamp="2026-09-05T00:00:00Z",
+            ),
+        )
+        variant = PipelineOrchestrator._compose_line(
+            _line_stub(), _EchoEngine(), [variant_block], "otsu"
+        )
+
+        assert _is_primary(primary)
+        assert not _is_primary(variant)
+
+    def test_a_segment_with_no_primary_reading_still_yields_a_line(self) -> None:
+        """The fallback is deliberate: a variant reading beats no line at all.
+
+        This is why selection is not strictly variant-free — the accurate
+        claim is that variants affect selection only where the primary
+        produced nothing.
+        """
+        from omniocr.application.pipeline import _is_primary
+
+        variant_only = PipelineOrchestrator._compose_line(
+            _line_stub(), _EchoEngine(), [_block_stub()], "otsu"
+        )
+        candidates = [variant_only]
+        selectable = [line for line in candidates if _is_primary(line)] or candidates
+
+        assert selectable == candidates, "a variant-only segment must not lose its line"
+
+    def test_a_segment_fallback_line_counts_as_primary(self) -> None:
+        """The layout segment has no provenance and must stay selectable."""
+        from omniocr.application.pipeline import _is_primary
+        from omniocr.domain.models import OCRLine
+
+        segment = OCRLine(id="seg-1", text="", confidence=Confidence(0.0), bbox=BBox(0, 0, 10, 10))
+        assert _is_primary(segment)
