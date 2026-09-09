@@ -157,6 +157,17 @@ class FirstCandidateReconciler:
         return Ok(candidates[0])
 
 
+def _is_primary(line: OCRLine) -> bool:
+    """True when this candidate came from the primary (unvaried) page.
+
+    A candidate with no provenance is treated as primary: the layout segment
+    fallback has none, and it must stay selectable or a page with no engine
+    output would lose its only line.
+    """
+    provenance = line.provenance
+    return provenance is None or not getattr(provenance, "variant", "")
+
+
 def build_document(
     lines: Sequence[OCRLine], page_number: int = 1, width: int = 1, height: int = 1
 ) -> DocumentStructure:
@@ -595,7 +606,23 @@ class PipelineOrchestrator:
                         )
             if not candidate_lines:
                 candidate_lines.append(segment)
-            chosen = self._reconciler.reconcile(candidate_lines, context)
+            # Variants vote; they do not compete.
+            #
+            # A variant is the same engine on transformed input, so letting one
+            # *win selection* means trusting self-reported confidence to say
+            # which binarization the engine read better — and confidence is the
+            # one signal this codebase has repeatedly caught lying. Measured
+            # 2026-09-05, allowing variants into selection made the chosen line
+            # monotonically worse as variants were added: CER 0.1226 (1 variant)
+            # -> 0.1283 (2) -> 0.1306 (3), before any merge ran.
+            #
+            # So selection sees only the primary, and every variant still
+            # reaches the merge below, where agreement across independent
+            # readings is real evidence rather than an engine's opinion of
+            # itself. This also makes the fan-out monotone: adding variants can
+            # no longer make the result worse than not adding them.
+            selectable = [line for line in candidate_lines if _is_primary(line)] or candidate_lines
+            chosen = self._reconciler.reconcile(selectable, context)
             if isinstance(chosen, Err):
                 raise chosen.error
             assert isinstance(chosen, Ok)

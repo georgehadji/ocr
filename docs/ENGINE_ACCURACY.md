@@ -215,6 +215,37 @@ The merge does repair some of the damage the fan-out causes (3.7% relative at
 four variants) but never recovers the baseline. It is cleaning up a mess that
 would not exist without it.
 
+#### Follow-up, 2026-09-09: the defect was in selection, not in variants
+
+The table above measures a pipeline that let variants *compete* for the line.
+That was the bug. A variant is the same engine on transformed input, so
+letting one win selection means trusting self-reported confidence to say which
+binarization the engine read better — the one signal this codebase keeps
+catching in a lie. Selection now sees only the primary candidate; every
+variant still reaches the merge, where agreement between independent readings
+is real evidence.
+
+| Variants | Chosen CER (before) | Chosen CER (after) | Merged CER (after) |
+|---|---|---|---|
+| 1 | 0.1226 | 0.1226 | 0.1226 |
+| 3 | 0.1306 | **0.1237** | 0.1249 |
+| 4 | 0.1277 | **0.1237** | **0.1217** |
+
+The monotone degradation is gone: chosen CER is now identical at 3 and 4
+variants (WER 0.3700 for both), so selection no longer tracks variant count.
+
+It does not pin to exactly the 1-variant baseline, and the reason is specific
+rather than noise. The filter ends in a fallback to all candidates, so on a
+segment where the primary produced no blocks but a variant did, the variant is
+still selectable — two such segments in this corpus. That fallback is correct,
+since a variant reading beats no line at all, so the accurate claim is that
+**variants affect selection only where the primary produced nothing.**
+
+At four variants the merged output (0.1217) edges below the single-variant
+baseline (0.1226) for the first time. That is 0.7% relative on three pages:
+noise, not a result, and still nothing like the predicted 10–30%. What changed
+is the sign — ensembling is no longer actively harmful.
+
 What this does **not** show is that variant ensembling is worthless in
 general. These three fixtures are clean 300 DPI scans of one well-printed
 book, where Otsu and Sauvola have little to disagree about beyond Sauvola
