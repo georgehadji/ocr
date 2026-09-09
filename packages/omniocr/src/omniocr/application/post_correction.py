@@ -17,6 +17,7 @@ from omniocr.domain.models import (
     Suggestion,
     TenantContext,
 )
+from omniocr.application import confusion
 from omniocr.domain.result import Ok, Result
 from omniocr.ports.interfaces import ILexicon, IPostCorrector
 
@@ -162,7 +163,25 @@ class SuggestOnlyCorrector(IPostCorrector):
         if lexicon is not None:
             for token in line.text.split():
                 lookup = _lexicon_key(token)
-                if lookup and not lexicon.contains(lookup):
+                if not lookup or lexicon.contains(lookup):
+                    continue
+                # A bare "not in lexicon" flag hands the reviewer a problem
+                # with no proposal. Offer OCR-plausible readings the lexicon
+                # does recognize, best first (ENHANCEMENT_PLAN A8b), and fall
+                # back to the bare flag when nothing plausible is found —
+                # inventing a candidate would be worse than admitting none.
+                proposals = confusion.suggest(lookup, [lexicon])
+                for proposal in proposals:
+                    suggestions.append(
+                        Suggestion(
+                            line_id=line.id,
+                            source_text=token,
+                            suggestion_text=proposal,
+                            reason=confusion.SUGGESTION_REASON,
+                            reversible=True,
+                        )
+                    )
+                if not proposals:
                     suggestions.append(
                         Suggestion(
                             line_id=line.id,
