@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "Bulk lexicons built by scripts/build_lexicon.py.",
+    "Blobs are sorted, NFC-normalized, lowercased, Greek-script only,",
+    "one form per line, and are read by SortedBlobLexicon via bisect.",
+    "Re-run the script to refresh; review the form counts in the diff."
+  ],
+  "sources": {
+    "ancient": {
+      "name": "CLTK Greek lemmata (Perseus-derived)",
+      "url": "https://raw.githubusercontent.com/cltk/greek_models_cltk/master/lemmata/greek_lemmata_cltk.py",
+      "licence": "MIT (cltk/greek_models_cltk)",
+      "forms": 850983,
+      "blob_sha256": "a30fbc0980375a4e159d960a4233efc608c87a41df834620228c78b48b34d4d3"
+    },
+    "modern": {
+      "name": "Hunspell el_GR (LibreOffice dictionaries)",
+      "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/master/el_GR/el_GR.dic",
+      "licence": "GPL-2.0 / LGPL-2.1 / MPL-1.1 tri-license (el_GR.aff header)",
+      "forms": 812266,
+      "blob_sha256": "3bbbc110c69afd610949de6dcbf042cfffcea06202e330df67a6fb869145073d"
+    },
+    "wiktionary": {
+      "name": "Greek Wiktionary page titles (ns0)",
+      "url": "https://dumps.wikimedia.org/elwiktionary/latest/elwiktionary-latest-all-titles-in-ns0.gz",
+      "licence": "CC-BY-SA-4.0 (Wikimedia)",
+      "forms": 798975,
+      "blob_sha256": "54607a9acbe0693decab70ef761dc10c1d0636732836b45a36b7be9ce20ac0ee"
+    }
+  }
+}

@@ -1,3 +1,12 @@
-Github/*.zip filter=lfs diff=lfs merge=lfs -text
-PDFs[[:space:]]for[[:space:]]OCR/*.pdf filter=lfs diff=lfs merge=lfs -text
-*.mlmodel filter=lfs diff=lfs merge=lfs -text
+# The lexicon blobs are byte-exact data, not text.
+#
+# Git's autocrlf rewrote them to CRLF on Windows checkout, which appended a
+# stray \r to every line. SortedBlobLexicon compares raw UTF-8 bytes, so every
+# lookup then missed: CI failed on Windows while passing on Linux, and passed
+# locally because the files had been *written* by the build script rather than
+# checked out. Marking them binary stops the translation at the source.
+packages/omniocr/src/omniocr/data/lexicons/*.txt -text
+
+# Ground-truth transcriptions are compared byte-for-byte against OCR output by
+# the CER gate, so they must not be translated either.
+tests/corpus/*.txt -text
