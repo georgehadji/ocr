@@ -206,3 +206,36 @@ class TestScriptMapping:
 
         assert layers[0] == "ancient"
         assert "modern" in layers
+
+
+class TestLineEndings:
+    """CRLF must not silently break every lookup.
+
+    Git's autocrlf rewrote the committed blobs on Windows checkout, appending
+    a carriage return to every line. The byte comparison then missed on every
+    form while the file still looked correct: CI went red on Windows and
+    stayed green on Linux, and local runs passed because the blobs had been
+    written by the build script rather than checked out.
+
+    `.gitattributes` marks the blobs binary so Git cannot do it again, but
+    that guard is outside the code and does not cover a blob arriving from an
+    archive, so the reader tolerates CRLF too.
+    """
+
+    def test_a_crlf_blob_still_resolves(self, tmp_path: Path) -> None:
+        forms = ["ἀγαθός", "βίος", "θεοτόκος", "πόλις", "ὕδωρ"]
+        ordered = sorted(forms, key=lambda form: form.encode("utf-8"))
+        path = tmp_path / "crlf.txt"
+        path.write_bytes(("\r\n".join(ordered) + "\r\n").encode("utf-8"))
+
+        lexicon = SortedBlobLexicon("crlf", path)
+
+        for form in forms:
+            assert lexicon.contains(form), form
+        assert not lexicon.contains("ζζζζ")
+
+    def test_the_blobs_are_marked_binary(self) -> None:
+        """The real fix: stop the translation rather than cope with it."""
+        attributes = Path(".gitattributes")
+        assert attributes.is_file(), ".gitattributes is missing"
+        assert "data/lexicons/*.txt -text" in attributes.read_text(encoding="utf-8")

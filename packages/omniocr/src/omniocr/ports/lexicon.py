@@ -100,10 +100,23 @@ class SortedBlobLexicon(ILexicon):
         self._data = path.read_bytes()
 
     def _line_bounds(self, position: int) -> tuple[int, int]:
-        """Start and end of the line containing ``position``."""
+        """Start and end of the line containing ``position``, excluding CR.
+
+        A trailing carriage return is stripped defensively. ``.gitattributes``
+        marks these blobs binary so Git cannot introduce one, but that guard
+        lives outside the code and a blob can also arrive from an archive or a
+        misconfigured checkout. Without this, CRLF makes every lookup miss
+        while the file still looks correct — which is exactly how it reached
+        CI: red on Windows, green on Linux, and green locally because the
+        blobs had been written by the build script rather than checked out.
+        """
         start = self._data.rfind(b"\n", 0, position) + 1
         end = self._data.find(b"\n", start)
-        return start, len(self._data) if end == -1 else end
+        if end == -1:
+            end = len(self._data)
+        if end > start and self._data[end - 1 : end] == b"\r":
+            end -= 1
+        return start, end
 
     def _holds(self, key: str) -> bool:
         """Binary search the blob directly, without an offset index.
