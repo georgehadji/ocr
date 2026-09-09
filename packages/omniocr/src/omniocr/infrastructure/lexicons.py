@@ -12,8 +12,15 @@ Pontian: words and forms specific to the Pontian Greek dialect.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from omniocr.domain.models import Script
-from omniocr.ports.lexicon import SetLexicon
+from omniocr.ports.interfaces import ILexicon
+from omniocr.ports.lexicon import LayeredLexicon, SetLexicon, SortedBlobLexicon
+
+# Bulk word lists built by scripts/build_lexicon.py and committed alongside
+# the package, so a lexicon is never a network dependency at install time.
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "lexicons"
 
 # `_load_words()` used to live here, reading `<name>.txt` beside this module.
 # No such file was ever committed and nothing called it — the loader existed,
@@ -155,9 +162,65 @@ def pontian_lexicon() -> SetLexicon:
     return SetLexicon(name="pontian", words=_PONTIAN_WORDS)
 
 
-def lexicons_by_script() -> dict[Script, SetLexicon]:
-    """Return a mapping of Script → lexicon for all bundled lexicons."""
-    return {
-        Script.BYZANTINE: byzantine_lexicon(),
-        Script.PONTIAN: pontian_lexicon(),
+def _blob(name: str) -> SortedBlobLexicon | None:
+    """Load a bulk lexicon, or None when its blob is absent.
+
+    Absence is survivable and must stay that way: a source checkout without
+    the data files, or a future build that ships a subset, should degrade to
+    the curated lexicons rather than failing to import.
+    """
+    path = _DATA_DIR / f"{name}.txt"
+    return SortedBlobLexicon(name=name, path=path) if path.is_file() else None
+
+
+def _layered(name: str, *candidates: ILexicon | None) -> ILexicon | None:
+    layers = [layer for layer in candidates if layer is not None]
+    if not layers:
+        return None
+    return layers[0] if len(layers) == 1 else LayeredLexicon(name=name, layers=layers)
+
+
+def lexicons_by_script() -> dict[Script, ILexicon]:
+    """Return a mapping of Script → lexicon.
+
+    Curated dialect vocabularies come **first** in every layered entry. That
+    order is load-bearing rather than cosmetic: `confusion.rank` proposes
+    candidates layer by layer, so a Pontian or Byzantine reading outranks a
+    standard-Greek one. Reversed, a bulk list would propose "corrections"
+    that normalize exactly the regional forms this module exists to protect.
+
+    Ancient forms back the polytonic scripts and modern forms the monotonic
+    one, because the two barely overlap — 45,888 shared forms out of 1.7M
+    when measured on 2026-09-09. Pointing a polytonic page at the modern list
+    would let monotonic spellings validate as correct readings.
+    """
+    ancient = _blob("ancient")
+    modern = _blob("modern")
+    wiktionary = _blob("wiktionary")
+
+    mapping: dict[Script, ILexicon] = {
+        Script.BYZANTINE: LayeredLexicon(
+            name="byzantine",
+            layers=[layer for layer in (byzantine_lexicon(), ancient) if layer is not None],
+        ),
+        Script.PONTIAN: LayeredLexicon(
+            name="pontian",
+            layers=[
+                layer for layer in (pontian_lexicon(), modern, wiktionary) if layer is not None
+            ],
+        ),
     }
+    # Polytonic gets the modern lists as well as the ancient ones, and the
+    # order matters. This project's target material is *modern Greek in
+    # polytonic orthography* - 20th-century prose, not classical texts - so
+    # ancient vocabulary alone covers almost none of it. Measured 2026-09-09
+    # against ancient forms only, 309 of 456 tokens on a human-transcribed
+    # page were flagged unknown: correct text, wrong word list.
+    for script, lexicon in (
+        (Script.ANCIENT, ancient),
+        (Script.POLYTONIC, _layered("polytonic", ancient, modern, wiktionary)),
+        (Script.MODERN, _layered("modern", modern, wiktionary)),
+    ):
+        if lexicon is not None:
+            mapping[script] = lexicon
+    return mapping

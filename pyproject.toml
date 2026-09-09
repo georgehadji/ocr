@@ -47,6 +47,13 @@ package-dir = {"" = "packages/omniocr/src"}
 [tool.setuptools.packages.find]
 where = ["packages/omniocr/src"]
 
+# The bulk lexicon blobs are data, not code, so setuptools would drop them
+# from a wheel without this. A shipped package whose lexicons are missing
+# degrades silently to the ~59-word curated lists (see lexicons._blob), which
+# is exactly the failure this data exists to end.
+[tool.setuptools.package-data]
+omniocr = ["data/lexicons/*.txt", "data/lexicons/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

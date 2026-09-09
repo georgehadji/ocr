@@ -170,7 +170,12 @@ class SuggestOnlyCorrector(IPostCorrector):
                 # does recognize, best first (ENHANCEMENT_PLAN A8b), and fall
                 # back to the bare flag when nothing plausible is found —
                 # inventing a candidate would be worse than admitting none.
-                proposals = confusion.suggest(lookup, [lexicon])
+                # Pass the layers, not the composite: `rank` proposes from
+                # earlier layers first, so a curated dialect reading outranks
+                # a bulk one. Collapsing to a single lexicon would keep the
+                # union but lose the precedence that protects regional forms.
+                layers = getattr(lexicon, "layers", None) or [lexicon]
+                proposals = confusion.suggest(lookup, list(layers))
                 for proposal in proposals:
                     suggestions.append(
                         Suggestion(
