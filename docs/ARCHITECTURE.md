@@ -103,6 +103,14 @@ the accuracy driver; Tesseract is the fast baseline and searchable-PDF box sourc
    whole book into memory. A resumable job queue (Celery in Cloud, RQ in Server, in-process
    worker in Desktop) processes pages in batches and checkpoints to disk so a 2000-page PDF
    survives interruption. This is the "large PDF" requirement.
+   Ingest also **gates on the PDF's own text layer** and, where that layer demonstrably
+   covers the page, hands its words down instead of recognising the raster — exact text and
+   exact boxes for nothing. The gate is per page rather than per document because real books
+   are mixed: the target scan has born-digital front matter and a photographed body. A mere
+   presence test would be catastrophic here, so a page is only trusted when it embeds no
+   raster image *and* its text covers ≥10% of the page area — see
+   [TEXT_LAYER_PLAN.md](TEXT_LAYER_PLAN.md) for the measurements behind both. The page is
+   still rasterised either way: the human reviews text against the image.
 2. **Preprocess** (`IImageProcessor`) — per-engine: Sauvola/adaptive binarization for
    Tesseract; light-touch grayscale kept for Kraken and any VLM call. Deskew, denoise,
    optional dewarp.

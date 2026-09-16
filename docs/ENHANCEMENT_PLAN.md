@@ -687,6 +687,28 @@ elsewhere, in ALTO and PAGE, DOCX renders it in a distinct style.
 
 ---
 
+### A11 — Embedded PDF text layer
+
+**Why.** Ingest rasterised every PDF page unconditionally, so a born-digital page was
+recognized at the measured CER 0.1226 when the file already contained the exact characters
+and exact boxes. The naive fix — trust any text layer — is far worse than doing nothing: on
+the target book it returns a 44-character running head against a 2,973-character page
+(**CER 0.9939**), because the scan's producer stamped a folio and a running head onto every
+photographed page as real text.
+
+**Shipped.** `infrastructure/text_layer.py` gates per page — no embedded raster image, and
+text covering ≥10% of the page area — then hands word boxes down as `OCRLine`s stamped
+`pdf_text_layer` with `AgreementTier.SINGLE`. The pipeline short-circuits before
+preprocessing, layout, and every engine; post-correction still runs. `--no-text-layer`
+forces recognition so the CER gate cannot go blind on a mixed document.
+
+Full rationale, per-page measurements, and the rejected alternatives are in
+[TEXT_LAYER_PLAN.md](TEXT_LAYER_PLAN.md). Measured on the target book: 5 of 74 pages read
+from the layer, 69 recognized, all three scan-tier corpus fixtures rejected — so no accuracy
+baseline in `ENGINE_ACCURACY.md` moves.
+
+---
+
 ## 6. Sequencing
 
 ```
