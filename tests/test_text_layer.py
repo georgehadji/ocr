@@ -64,12 +64,23 @@ def _write_lines(page: Any, count: int) -> None:
     _write(page, [(40.0, 60.0 + 18.0 * index, GREEK_LINE, 11.0) for index in range(count)])
 
 
-def _born_digital(lines: int = 32, page_count: int = 1) -> Any:
+def _born_digital(lines: int = 32, page_count: int = 1, rotation: int = 0) -> Any:
     """A page of real text and nothing else — the case the feature exists for."""
     doc = fitz.open()
     for _ in range(page_count):
-        _write_lines(doc.new_page(width=PAGE_WIDTH, height=PAGE_HEIGHT), lines)
+        page = doc.new_page(width=PAGE_WIDTH, height=PAGE_HEIGHT)
+        _write_lines(page, lines)
+        if rotation:
+            page.set_rotation(rotation)
     return doc
+
+
+def _render(page: Any) -> Any:
+    """The page as the pipeline rasterises it, opened for pixel inspection."""
+    from PIL import Image
+
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(RENDER_DPI / 72, RENDER_DPI / 72))
+    return Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("L")
 
 
 def _blank_pixmap() -> Any:
@@ -118,13 +129,10 @@ class TestGate:
         with _scanned(text_lines=32) as doc:
             assert extract_text_layer(doc[0], RENDER_DPI) == ()
 
-    def test_a_rotated_page_is_rejected(self) -> None:
-        """Rotation would need a coordinate transform this has no fixture for."""
-        with _born_digital() as doc:
-            page = doc[0]
-            assert extract_text_layer(page, RENDER_DPI), "fixture must pass unrotated"
-            page.set_rotation(90)
-            assert extract_text_layer(page, RENDER_DPI) == ()
+    @pytest.mark.parametrize("rotation", [90, 180, 270])
+    def test_a_rotated_page_is_read_not_refused(self, rotation: int) -> None:
+        with _born_digital(rotation=rotation) as doc:
+            assert extract_text_layer(doc[0], RENDER_DPI)
 
     def test_an_empty_page_is_rejected(self) -> None:
         doc = fitz.open()
@@ -155,42 +163,54 @@ class TestGate:
 
 
 class TestExtraction:
-    def test_boxes_are_scaled_into_rendered_pixel_space(self) -> None:
-        with _born_digital() as doc:
+    @pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+    def test_boxes_are_scaled_into_rendered_pixel_space(self, rotation: int) -> None:
+        with _born_digital(rotation=rotation) as doc:
             page = doc[0]
             lines = extract_text_layer(page, RENDER_DPI)
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(RENDER_DPI / 72, RENDER_DPI / 72))
-            width, height = pixmap.width, pixmap.height
+            rendered = _render(page)
 
         assert lines
         for line in lines:
-            assert line.bbox.right <= width
-            assert line.bbox.bottom <= height
+            assert line.bbox.right <= rendered.width
+            assert line.bbox.bottom <= rendered.height
         # A box left in PDF points would sit in the top-left eighth of a
         # 300-DPI render, so this fails loudly if the scale is dropped.
-        assert max(line.bbox.bottom for line in lines) > height / 2
+        assert max(line.bbox.bottom for line in lines) > rendered.height / 2
 
-    def test_boxes_land_on_ink(self) -> None:
+    @pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+    def test_boxes_land_on_ink(self, rotation: int) -> None:
         """The check a mere in-bounds assertion cannot make.
 
-        A wrong scale factor can keep every box inside the page and still put
-        all of them in the margin. Crop each reported box out of the render and
-        require that it contains something darker than paper.
-        """
-        from PIL import Image
+        A wrong scale factor, or a missing rotation transform, can keep every
+        box inside the page and still put all of them on blank paper. Crop each
+        reported box out of the render and require something darker than paper.
 
-        with _born_digital() as doc:
+        This is the whole reason rotation support has a fixture. Measured
+        2026-09-17 before the transform went in: on a 90-degree page the raw
+        coordinates read luminance 255 — paper — while the mapped ones read 0,
+        and every other signal, the text included, looked perfect.
+        """
+        with _born_digital(rotation=rotation) as doc:
             page = doc[0]
             lines = extract_text_layer(page, RENDER_DPI)
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(RENDER_DPI / 72, RENDER_DPI / 72))
-            rendered = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("L")
+            rendered = _render(page)
 
         assert lines
         for line in lines:
             box = line.bbox
             crop = rendered.crop((box.x, box.y, box.right, box.bottom))
             darkest, _ = crop.getextrema()
-            assert darkest < 200, f"no ink inside {line.id} at {box}"
+            assert darkest < 200, f"no ink inside {line.id} at {box} (rotation {rotation})"
+
+    @pytest.mark.parametrize("rotation", [90, 180, 270])
+    def test_rotating_a_page_does_not_change_its_text(self, rotation: int) -> None:
+        """Rotation moves boxes, never characters."""
+        with _born_digital() as upright, _born_digital(rotation=rotation) as turned:
+            straight = extract_text_layer(upright[0], RENDER_DPI)
+            rotated = extract_text_layer(turned[0], RENDER_DPI)
+
+        assert [line.text for line in rotated] == [line.text for line in straight]
 
     def test_one_line_per_source_line_with_word_blocks(self) -> None:
         with _born_digital(lines=20) as doc:

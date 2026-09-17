@@ -110,6 +110,46 @@ def _scaled_bbox(x0: float, y0: float, x1: float, y1: float, scale: float) -> BB
     )
 
 
+def _rotated(words: Sequence[Word], page: "fitz.Page") -> Sequence[Word]:
+    """Map word rectangles into the space the page is actually rendered in.
+
+    ``get_text("words")`` reports **unrotated** coordinates whatever
+    ``/Rotate`` says — measured 2026-09-17, a word's tuple is byte-identical at
+    0, 90, 180 and 270 — while ``get_pixmap`` applies the rotation. Using them
+    raw on a rotated page puts every box on blank paper: the same probe read
+    luminance 255 (paper) from the raw box and 0 (ink) from the mapped one at
+    all three non-zero rotations. Nothing else would have shown it, because the
+    text is perfect and the boxes stay inside the page.
+
+    The matrix is applied by hand rather than through ``fitz.Rect`` so this
+    module still needs no runtime ``fitz`` import. Two opposite corners are
+    enough: ``/Rotate`` is a multiple of 90 by the PDF spec (and PyMuPDF
+    normalizes it to one), so the transform has no shear and an axis-aligned
+    box maps to an axis-aligned box.
+    """
+    if not page.rotation:
+        return words
+    matrix = page.rotation_matrix
+    a, b, c, d, e, f = matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f
+    mapped: list[Word] = []
+    for x0, y0, x1, y1, text, block_no, line_no, word_no in words:
+        first = (a * x0 + c * y0 + e, b * x0 + d * y0 + f)
+        second = (a * x1 + c * y1 + e, b * x1 + d * y1 + f)
+        mapped.append(
+            (
+                min(first[0], second[0]),
+                min(first[1], second[1]),
+                max(first[0], second[0]),
+                max(first[1], second[1]),
+                text,
+                block_no,
+                line_no,
+                word_no,
+            )
+        )
+    return mapped
+
+
 def _has_raster_image(page: "fitz.Page") -> bool:
     """G1, via the only cheap call that answers it.
 
@@ -180,17 +220,13 @@ def extract_text_layer(
     # 188 ms a text extraction would add to every page of every scan.
     if _has_raster_image(page):
         return ()
-    # A rotated page renders through a rotation the word coordinates do not
-    # carry. The transform is three lines, but the target document is entirely
-    # unrotated, so it would ship untested — and when a coordinate transform is
-    # wrong it misplaces every box on the page while the text still reads
-    # perfectly. Recognise those pages until a fixture proves the transform.
-    if page.rotation:
-        return ()
-
-    words: Sequence[Word] = page.get_text("words")
+    # Mapped into rendered space before anything measures or scales them, so
+    # coverage and every box downstream live in one coordinate system.
+    words: Sequence[Word] = _rotated(page.get_text("words"), page)
     if not words:
         return ()
+    # Already the *rotated* rect, so its area is the rendered page's area and
+    # needs no adjustment of its own.
     rect = page.rect
     if _coverage(words, abs(rect.width * rect.height)) < TEXT_COVERAGE_MIN:
         return ()

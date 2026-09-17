@@ -128,10 +128,17 @@ extract_text_layer(page: fitz.Page, dpi: int, script: Script) -> tuple[OCRLine, 
   review** than recognized ones — the opposite of §5.3's intent. Found by checking, after
   the first version shipped `Script.UNKNOWN` and the pipeline test still passed because its
   fixture lexicon was keyed on `UNKNOWN` too.
-* **Rotated pages are rejected** (`page.rotation != 0` → `()`). The target document is
-  entirely unrotated, so a rotation transform here would ship untested and, if wrong,
-  misplace every box on the page while the text looked perfect. A page that rotates gets
-  OCR'd until there is a fixture that proves the transform.
+* **Rotated pages are mapped through `page.rotation_matrix`**, before coverage is measured,
+  so everything downstream lives in one coordinate system. This was shipped as a rejection
+  first — the target document is entirely unrotated, and an unproven coordinate transform
+  misplaces every box while the text still reads perfectly — and implemented once there was
+  a fixture to prove it. Measured 2026-09-17: `get_text("words")` returns **unrotated**
+  coordinates whatever `/Rotate` says (a word's tuple is byte-identical at 0/90/180/270)
+  while `get_pixmap` applies the rotation, so the raw boxes read luminance **255 — blank
+  paper** — on a 90° page against **0** for the mapped ones. `page.rect` is already the
+  rotated rect, so page area needs no adjustment. The matrix is applied by hand rather than
+  through `fitz.Rect`, keeping this module free of a runtime `fitz` import; two opposite
+  corners suffice because `/Rotate` is a multiple of 90 and the transform has no shear.
 
 ### 5.2 Changed: `infrastructure/ingest.py`
 
@@ -212,13 +219,16 @@ Every test builds its PDF in-process with `fitz`; none needs the copyrighted sou
 3. A running-head-only page is rejected. This is the target book's trap, reproduced at
    44 characters.
 4. A page just under `TEXT_COVERAGE_MIN` is rejected; just over is accepted.
-5. A rotated page is rejected.
+5. A rotated page at 90/180/270 is **read**, not refused.
 6. `text_layer=False` yields no lines anywhere.
 
 **Extraction**
 7. Word boxes scale by `RENDER_DPI / 72` and land inside the rasterised page bounds.
-8. Boxes land on **ink**: crop each reported box out of the rendered pixmap and assert it
-   is not blank. A scale error that keeps boxes in-bounds still fails this.
+8. Boxes land on **ink**, at every rotation: crop each reported box out of the rendered
+   pixmap and assert it is not blank. A scale error, or a missing rotation transform, keeps
+   boxes in-bounds and still fails this — it is the only check that would have caught
+   either.
+8b. Rotating a page changes no character: the line texts match the upright page exactly.
 9. Line grouping follows the PDF's `(block_no, line_no)`, one `OCRLine` per source line,
    with `blocks` populated per word.
 10. Text round-trips NFC-normalized (rule 5) and is otherwise byte-identical to the input.
