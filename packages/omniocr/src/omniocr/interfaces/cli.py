@@ -409,6 +409,7 @@ def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> Any:
             exporter=exporter,
             assemble_structure=args.structure,
             workers=args.workers,
+            text_layer=not getattr(args, "no_text_layer", False),
         )
     # kraken and ensemble share the ensemble root; it routes per script and
     # falls back to Tesseract for varieties Kraken is not the best tool for.
@@ -420,6 +421,7 @@ def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> Any:
         assemble_structure=args.structure,
         workers=args.workers,
         variants=getattr(args, "variants", 1),
+        text_layer=not getattr(args, "no_text_layer", False),
     )
 
 
@@ -748,6 +750,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         metavar="N",
         help="process N pages concurrently (default: 1, sequential)",
+    )
+    run.add_argument(
+        "--no-text-layer",
+        action="store_true",
+        help=(
+            "recognize every PDF page even where it carries a usable embedded "
+            "text layer (default: use the layer when it covers the page)"
+        ),
     )
     run.add_argument("--org", default="cli", help="tenant organization id for provenance")
     run.add_argument("--user", default="cli", help="user id for provenance")

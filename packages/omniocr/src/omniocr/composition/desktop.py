@@ -133,11 +133,12 @@ def create_tesseract_pipeline(
     job_store: IJobStore | None = None,
     assemble_structure: bool = False,
     workers: int = 1,
+    text_layer: bool = True,
 ) -> PipelineOrchestrator:
     """Build the desktop pipeline with the optional Tesseract engine enabled."""
     assembler = DocumentAssembler() if assemble_structure else IdentityAssembler()
     return PipelineOrchestrator(
-        page_source=DocumentPageSource(),
+        page_source=DocumentPageSource(text_layer=text_layer, script=script),
         image_processor=_default_image_processor(),
         layout_analyzer=FallbackLayoutAnalyzer(
             KrakenLayoutAnalyzer(script), TesseractLayoutAnalyzer(language, script)
@@ -166,6 +167,7 @@ def create_ensemble_pipeline(
     assemble_structure: bool = False,
     workers: int = 1,
     variants: int = 1,
+    text_layer: bool = True,
 ) -> PipelineOrchestrator:
     """Build a CPU ensemble with script rules injected at the composition root.
 
@@ -226,7 +228,7 @@ def create_ensemble_pipeline(
     )
     assembler = DocumentAssembler() if assemble_structure else IdentityAssembler()
     return PipelineOrchestrator(
-        page_source=DocumentPageSource(),
+        page_source=DocumentPageSource(text_layer=text_layer, script=script),
         image_processor=_default_image_processor(),
         # Kraken segmentation returns zero lines with no error on grainy
         # scans; without a fallback those pages vanish from the output.

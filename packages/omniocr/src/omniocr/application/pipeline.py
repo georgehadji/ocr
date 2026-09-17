@@ -550,7 +550,51 @@ class PipelineOrchestrator:
             pages.append((name, produced.value))
         return pages
 
+    def _page_from_text_layer(
+        self, raw_page: RawPage, lines: Sequence[OCRLine], context: TenantContext
+    ) -> DocumentPage:
+        """Build a page from the PDF's own text instead of recognizing pixels.
+
+        Preprocessing, layout segmentation, routing, and every engine are
+        skipped. The PDF already states its own line structure; rendering it to
+        a bitmap and segmenting that to rediscover the same lines is strictly
+        worse, and recognizing characters the file already contains exactly
+        replaces a CER of 0.000 with the measured 0.1226.
+
+        Nothing is reconciled either. There is one reading, so a vote would
+        need a second engine run — burning the whole time saving — and would
+        then let self-reported confidence, the one signal this codebase has
+        repeatedly caught lying, choose recognition over exact text.
+
+        Post-correction still runs. A born-digital PDF can carry a typo, the
+        checks are suggest-only either way, and skipping them would quietly
+        give these pages a weaker review than recognized ones.
+        """
+        suggestions: list[Suggestion] = []
+        for line in lines:
+            corrections = self._post_corrector.correct(line, context)
+            if isinstance(corrections, Err):
+                raise corrections.error
+            assert isinstance(corrections, Ok)
+            suggestions.extend(corrections.value)
+        return DocumentPage(
+            number=raw_page.number,
+            width=getattr(raw_page, "width", 1),
+            height=getattr(raw_page, "height", 1),
+            lines=tuple(lines),
+            suggestions=tuple(suggestions),
+        )
+
     def _process_page(self, raw_page: RawPage, context: TenantContext) -> DocumentPage:
+        # Read off the *raw* page, before `_variant_pages`: preprocessing
+        # returns new page objects that do not carry the field. Accessed
+        # defensively because `RawPage` is a structural protocol that only the
+        # PDF source can satisfy this far — the same pattern as
+        # `provenance.variant` and `lexicon.layers`.
+        text_lines: Sequence[OCRLine] = getattr(raw_page, "text_lines", ())
+        if text_lines:
+            return self._page_from_text_layer(raw_page, text_lines, context)
+
         variant_pages = self._variant_pages(raw_page, context)
         processed_page = variant_pages[0][1]
 
