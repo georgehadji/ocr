@@ -73,6 +73,16 @@ except ImportError:
     pass
 
 try:
+    from omniocr.infrastructure.unlimited_ocr import UnlimitedOCREngine
+
+    # Port 9 (discard) refuses at once, so the contract sees a fast Err.
+    _CONTRACT_ENGINES.append(
+        ("unlimited_ocr", UnlimitedOCREngine(api_url="http://127.0.0.1:9/v1"), True)
+    )
+except ImportError:
+    pass
+
+try:
     from omniocr.infrastructure.calamari import CalamariEngine
 
     _CONTRACT_ENGINES.append(("calamari", CalamariEngine(), True))

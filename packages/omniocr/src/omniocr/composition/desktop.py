@@ -37,6 +37,8 @@ from omniocr.ports.interfaces import IExporter, IImageProcessor, IJobStore, IOCR
 from omniocr.infrastructure.vlm import DEFAULT_API_URL as DEFAULT_VLM_API_URL
 from omniocr.infrastructure.vlm import DEFAULT_MAX_EDGE_PX as DEFAULT_VLM_MAX_EDGE_PX
 from omniocr.infrastructure.vlm import DEFAULT_MODEL as DEFAULT_VLM_MODEL
+from omniocr.infrastructure.unlimited_ocr import DEFAULT_MODEL as DEFAULT_UNLIMITED_OCR_MODEL
+from omniocr.infrastructure.unlimited_ocr import UnlimitedOCREngine
 
 # VLM and Calamari are optional extras; import failures gracefully disable them.
 try:
@@ -163,6 +165,8 @@ def create_ensemble_pipeline(
     vlm_api_url: str | None = None,
     vlm_model: str = DEFAULT_VLM_MODEL,
     vlm_max_edge_px: int = DEFAULT_VLM_MAX_EDGE_PX,
+    unlimited_ocr_url: str | None = None,
+    unlimited_ocr_model: str = DEFAULT_UNLIMITED_OCR_MODEL,
     calamari_model_glob: str | None = None,
     assemble_structure: bool = False,
     workers: int = 1,
@@ -178,7 +182,9 @@ def create_ensemble_pipeline(
     defaults are not restated here: this root previously hardcoded an OpenAI
     fallback URL while passing an OpenRouter model id, which sent
     ``google/...`` to a provider that does not serve it. When
-    ``calamari_model_glob``
+    ``unlimited_ocr_url`` is provided, Unlimited-OCR-2 served at that
+    OpenAI-compatible endpoint joins the same scripts as a further opt-in
+    voter. When ``calamari_model_glob``
     is provided, a Calamari subprocess engine is added as a voting booster.
     Both are wrapped in ``RetryingEngine`` for transient-failure resilience.
     """
@@ -202,6 +208,13 @@ def create_ensemble_pipeline(
         for script_key in (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC):
             by_script[script_key] = (*by_script[script_key], retrying_vlm)
 
+    if unlimited_ocr_url is not None:
+        retrying_unlimited = RetryingEngine(
+            UnlimitedOCREngine(api_url=unlimited_ocr_url, model=unlimited_ocr_model)
+        )
+        for script_key in (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC):
+            by_script[script_key] = (*by_script[script_key], retrying_unlimited)
+
     if calamari_model_glob is not None:
         calamari = CalamariEngine(model_glob=calamari_model_glob)
         retrying_calamari = RetryingEngine(calamari)
@@ -217,6 +230,8 @@ def create_ensemble_pipeline(
     }
     if vlm_api_key is not None:
         engine_map[VLMEngine.name] = retrying_vlm
+    if unlimited_ocr_url is not None:
+        engine_map[UnlimitedOCREngine.name] = retrying_unlimited
     if calamari_model_glob is not None:
         engine_map[CalamariEngine.name] = retrying_calamari
 

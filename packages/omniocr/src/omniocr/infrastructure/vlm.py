@@ -61,6 +61,11 @@ class VLMEngine(IOCREngine):
     """
 
     name = "vlm"
+    # Class-level so a subclass serving a different model can raise them
+    # without restating the request: a dense page from a dedicated OCR model
+    # overruns 2048 tokens, and a local model can take minutes per page.
+    max_tokens = 2048
+    timeout_s = 120
 
     def __init__(
         self,
@@ -208,7 +213,7 @@ class VLMEngine(IOCREngine):
                     ],
                 }
             ],
-            "max_tokens": 2048,
+            "max_tokens": self.max_tokens,
             "temperature": 0.0,
             "top_p": 1.0,
         }
@@ -233,9 +238,23 @@ class VLMEngine(IOCREngine):
             method="POST",
         )
         with urllib.request.urlopen(  # nosec B310 - scheme validated in __init__
-            request, timeout=120
+            request, timeout=self.timeout_s
         ) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    def _engine_run(self) -> EngineRun:
+        return EngineRun(
+            engine=self.name,
+            model_ref=ModelRef(
+                engine=self.name,
+                model_name=self._model,
+                model_hash="",
+                params=(),
+            ),
+            model_hash="",
+            params=(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
 
     def _parse_response(
         self, data: Any, page_width: int, page_height: int, scale: float = 1.0
@@ -247,19 +266,7 @@ class VLMEngine(IOCREngine):
         they are divided by it to land back in full-page space where the
         grounding guard can compare them against engine boxes.
         """
-        timestamp = datetime.now(timezone.utc).isoformat()
-        run = EngineRun(
-            engine=self.name,
-            model_ref=ModelRef(
-                engine=self.name,
-                model_name=self._model,
-                model_hash="",
-                params=(),
-            ),
-            model_hash="",
-            params=(),
-            timestamp=timestamp,
-        )
+        run = self._engine_run()
         blocks: list[OCRBlock] = []
 
         try:
