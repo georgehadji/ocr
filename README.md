@@ -41,7 +41,10 @@ of the pipeline silently alters recognized text.
 ## Install
 
 Requires Python 3.11+ and [Tesseract](https://github.com/tesseract-ocr/tesseract) on
-`PATH` with the `grc` and `ell` language packs.
+`PATH` with the `grc` and `ell` language packs. The committed accuracy baselines
+were measured with the [`tessdata_fast`](https://github.com/tesseract-ocr/tessdata_fast)
+packs; `tessdata` and `tessdata_best` give different numbers and fail
+`tests/test_engine_accuracy.py`.
 
 ```bash
 pip install -e ".[pdf,kraken,opencv,docx,dev]"

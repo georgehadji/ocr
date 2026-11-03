@@ -291,6 +291,11 @@ The conclusion is unchanged: Kraken wins the corpus and loses scan-2.
 Kraken runs at roughly 60–90 s per page per model on CPU, so all three models
 plus Tesseract take about 5 minutes for one page.
 
+Tesseract baselines need the `grc` and `ell` packs from
+[`tessdata_fast`](https://github.com/tesseract-ocr/tessdata_fast). The
+standard `tessdata` and `tessdata_best` packs are different models and do not
+reproduce `tests/corpus/engine_baselines.json`.
+
 ```bash
 python -m omniocr.interfaces.cli run "PDFs for OCR/Πολυχρονιάδης Δεδούσης 2.0.pdf" --max-pages 1 --engine kraken --json
 ```
