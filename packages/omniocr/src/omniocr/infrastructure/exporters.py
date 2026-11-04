@@ -241,6 +241,41 @@ class SearchablePdfExporter(IExporter):
         self._font_path = Path(font_path) if font_path is not None else None
         self._resolved_font: str | None = None
 
+    @classmethod
+    def create(
+        cls, source_pdf: bytes, font_path: str | Path | None = None
+    ) -> Result[SearchablePdfExporter, ExportError]:
+        """Build the exporter, or say now what would fail after a long run.
+
+        Without this a wrong input or a missing Greek font only surfaced at
+        export, after every page had been recognized.
+
+        shortcut: checks basic Greek (α) only, so a font lacking polytonic
+        glyphs still passes; check a precomposed polytonic letter if that bites.
+        """
+        if b"%PDF-" not in source_pdf[:1024]:
+            return Err(
+                ExportError("searchable PDF output needs a PDF input; the source is not a PDF")
+            )
+        exporter = cls(source_pdf, font_path)
+        font = exporter._resolve_font()
+        if font is None:
+            return Err(
+                ExportError(
+                    "searchable PDF output needs a font with Greek glyphs; none found on "
+                    "system paths and no font_path given"
+                )
+            )
+        try:
+            import fitz
+
+            has_greek = fitz.Font(fontfile=font).has_glyph(0x3B1)
+        except Exception as exc:
+            return Err(ExportError(f"cannot read font {font}: {exc}"))
+        if not has_greek:
+            return Err(ExportError(f"font {font} has no Greek glyphs"))
+        return Ok(exporter)
+
     @staticmethod
     def _find_system_font() -> str | None:
         """Walk known font paths for a file with Greek glyph coverage."""
@@ -296,11 +331,20 @@ class SearchablePdfExporter(IExporter):
                             line.bbox.bottom * y_scale,
                         )
                         fontsize = max(4.0, min(12.0, rect.height * 0.6))
+                        # OCR boxes are in the visible (rotated) page's space,
+                        # but insert_text works in the unrotated one: map the
+                        # baseline point across and turn the text with the page
+                        # so it reads along the visible line.
+                        baseline = (
+                            fitz.Point(rect.x0, rect.y1 - max(2.0, fontsize * 0.2))
+                            * page.derotation_matrix
+                        )
                         inserted = page.insert_text(
-                            (rect.x0, rect.y1 - max(2.0, fontsize * 0.2)),
+                            baseline,
                             line.text,
                             fontsize=fontsize,
                             fontname=page_font,
+                            rotate=page.rotation,
                             render_mode=3,
                             overlay=True,
                         )

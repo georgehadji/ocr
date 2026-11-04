@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess  # nosec B404 - fixed argv, no shell, used only to query tesseract
 import sys
@@ -269,7 +270,14 @@ def _build_exporter(fmt: str, source_bytes: bytes) -> IExporter:
     if fmt == "pdf":
         # Overlays the invisible text layer on the original page images, so it
         # needs the source document, not just the recognized structure.
-        return exporters.SearchablePdfExporter(source_pdf=source_bytes)
+        #
+        # Built before any page is recognized: a non-PDF input or a missing
+        # Greek font would otherwise only fail at export, after the whole run.
+        # _cmd_run turns the ValueError into EXIT_ENVIRONMENT.
+        created = exporters.SearchablePdfExporter.create(source_pdf=source_bytes)
+        if isinstance(created, Err):
+            raise ValueError(str(created.error))
+        return created.value
     raise ValueError(f"unsupported output format: {fmt}")
 
 
@@ -651,7 +659,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return EXIT_FAILURE
 
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(exported.value)
+    # Write beside the target, then swap: a crash or full disk mid-write must
+    # not replace a previous good output with a truncated one.
+    partial = out.with_name(out.name + ".part")
+    try:
+        partial.write_bytes(exported.value)
+        os.replace(partial, out)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
 
     line_count = sum(len(page.lines) for page in pages)
     suggestion_count = sum(len(page.suggestions) for page in pages)

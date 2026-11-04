@@ -31,6 +31,17 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 - The Celery broker now follows `OMNIOCR_REDIS_URL` (it was hard-coded to
   localhost, ignoring the compose env), and the unused `max_retries` is gone.
 
+### Fixed — export and CLI (audit remediation PR6)
+
+- **[17]** Searchable PDF text lands inside its box on `/Rotate` 90/180/270
+  pages: baselines go through `page.derotation_matrix` and text is rotated with
+  the page. Before, it was placed in the unrotated page's space.
+- **[18]** `SearchablePdfExporter.create` rejects a non-PDF source and a missing
+  or non-Greek font up front. `omniocr run --out x.pdf` on a PNG now exits 3
+  before recognizing page 1 instead of failing at export.
+- **[S8]** The output file is written to `<name>.part` and swapped in with
+  `os.replace`, so a failed write no longer destroys the previous output.
+
 ### Fixed — engines and preprocessing (audit remediation PR5)
 
 - **[14]** Despeckle builds one mask from the component areas instead of a

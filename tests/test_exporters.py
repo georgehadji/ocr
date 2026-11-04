@@ -165,6 +165,72 @@ def test_searchable_pdf_auto_detects_or_requires_unicode_font() -> None:
         assert "font_path" in str(result.error)
 
 
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+def test_searchable_pdf_text_lands_inside_its_box_on_rotated_pages(rotation: int) -> None:
+    """OCR boxes are in the visible page's space, whatever the page's /Rotate."""
+    fitz = pytest.importorskip("fitz")
+    source = fitz.open()
+    source.new_page(width=400, height=600).set_rotation(rotation)
+    source_pdf = source.tobytes()
+    source.close()
+    visible_width, visible_height = (400, 600) if rotation in (0, 180) else (600, 400)
+    box = BBox(100, 100, 200, 30)
+
+    result = SearchablePdfExporter(source_pdf).export(
+        DocumentStructure(
+            (
+                DocumentPage(
+                    1,
+                    visible_width,
+                    visible_height,
+                    (OCRLine("line-1", "HELLO", Confidence(90), box),),
+                ),
+            )
+        ),
+        TenantContext("o", "u", "desktop"),
+    )
+
+    assert result.is_ok()
+    output = fitz.open(stream=result.value, filetype="pdf")
+    page = output[0]
+    [word] = [w for w in page.get_text("words") if w[4] == "HELLO"]
+    # get_text reports the unrotated page; map it back to what a reader sees.
+    seen = fitz.Rect(word[:4]) * page.rotation_matrix
+    expected = fitz.Rect(box.x - 3, box.y - 3, box.right + 3, box.bottom + 3)
+    output.close()
+    assert expected.contains(seen), f"{seen} not inside {expected}"
+
+
+def _pdf_bytes() -> bytes:
+    fitz = pytest.importorskip("fitz")
+    source = fitz.open()
+    source.new_page(width=100, height=100)
+    data = source.tobytes()
+    source.close()
+    return data
+
+
+def test_searchable_pdf_create_rejects_a_source_that_is_not_a_pdf() -> None:
+    result = SearchablePdfExporter.create(b"\x89PNG\r\n\x1a\n not a pdf")
+
+    assert not result.is_ok()
+    assert "not a PDF" in str(result.error)
+
+
+def test_searchable_pdf_create_rejects_an_unreadable_font(tmp_path) -> None:
+    result = SearchablePdfExporter.create(_pdf_bytes(), font_path=tmp_path / "missing.ttf")
+
+    assert not result.is_ok()
+    assert "cannot read font" in str(result.error)
+
+
+def test_searchable_pdf_create_accepts_a_pdf_with_a_greek_font() -> None:
+    if SearchablePdfExporter._find_system_font() is None:
+        pytest.skip("no Greek-capable system font on this machine")
+
+    assert SearchablePdfExporter.create(_pdf_bytes()).is_ok()
+
+
 def _critical_page() -> DocumentPage:
     """Return a page with main text, apparatus, and scholia regions."""
     run = EngineRun(
