@@ -382,7 +382,7 @@ Each scan carries a sidecar `*.meta.json`: source, edition, year, typeface, scri
 **Affected components.** `application/training_orchestrator.py:224,236`; `application/evaluation.py`; `domain/training.py`; `application/router.py`; `infrastructure/mlflow_registry.py`; `composition/training.py` and `composition/desktop.py`.
 
 **Design change.**
-- **F-4.** `_CandidateEngine` / `_ParentEngine` are placeholders that raise `NotImplementedError`, so no candidate can be evaluated. Replace with real adapters that instantiate `KrakenEngine` against the candidate's checkpoint path. This is unblocked by F-1 — before F-1 there was no working Kraken to instantiate.
+- **F-4 (closed in audit PR4: an injected `engine_factory` builds the engines).** `_CandidateEngine` / `_ParentEngine` are placeholders that raise `NotImplementedError`, so no candidate can be evaluated. Replace with real adapters that instantiate `KrakenEngine` against the candidate's checkpoint path. This is unblocked by F-1 — before F-1 there was no working Kraken to instantiate.
 - **F-5.** `PromotedModel` carries `model_ref` but not the checkpoint `path` that `ModelCandidate` had, so promotion loses the artefact. Add `checkpoint: Path` to `PromotedModel` and thread it through `IModelRegistry`.
 - **E-6.** `RegistryAwareRouter` currently resolves `promoted.model_ref.engine` to an *engine family* from `engine_map`. With F-5 landed it must construct or look up an engine bound to the promoted checkpoint. Introduce a small `IEngineFactory` keyed by `ModelRef` rather than widening `engine_map` — widening a `Mapping[str, IOCREngine]` to carry per-checkpoint instances would smear model lifecycle across the router.
 

@@ -25,8 +25,8 @@ def test_default_pipeline_wires_the_no_corpus_no_mlflow_defaults(tmp_path: Path)
     assert isinstance(orchestrator._cropper, PilLineCropper)
     assert isinstance(orchestrator._trainer, KetosTrainer)
     assert isinstance(orchestrator._model_registry, InMemoryModelRegistry)
-    # No corpus_root -> the private _NoOpEvaluator, not _CorpusEvaluator.
-    assert not isinstance(orchestrator._evaluator, _CorpusEvaluator)
+    # No corpus_root -> no evaluator, and the orchestrator refuses to train.
+    assert orchestrator._evaluator is None
 
 
 def test_pipeline_wires_corpus_evaluator_when_corpus_root_given(tmp_path: Path) -> None:
