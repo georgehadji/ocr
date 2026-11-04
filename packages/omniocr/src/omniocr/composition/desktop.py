@@ -26,9 +26,8 @@ from omniocr.domain.models import OCRLine, Script, TenantContext
 from omniocr.application.router import ScriptRouter
 from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
 from omniocr.infrastructure.exporters import MarkdownExporter
-from omniocr.infrastructure.jobs import InMemoryJobStore
 from omniocr.infrastructure.lexicons import lexicons_by_script
-from omniocr.ports.interfaces import IExporter, IImageProcessor, IJobStore, IOCREngine
+from omniocr.ports.interfaces import IExporter, IImageProcessor, IOCREngine
 
 # Defaults only — no optional third-party imports in vlm's module scope, so
 # these resolve even when the VLM extra is absent. They are function-signature
@@ -141,7 +140,6 @@ def create_tesseract_pipeline(
     language: str = DEFAULT_TESSERACT_LANGUAGE,
     script: Script = Script.MODERN,
     exporter: IExporter | None = None,
-    job_store: IJobStore | None = None,
     assemble_structure: bool = False,
     workers: int = 1,
     text_layer: bool = True,
@@ -159,7 +157,6 @@ def create_tesseract_pipeline(
         post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
         exporter=exporter or MarkdownExporter(),
         assembler=assembler,
-        job_store=job_store or InMemoryJobStore(),
         max_workers=workers if workers > 1 else None,
     )
 
@@ -169,7 +166,6 @@ def create_ensemble_pipeline(
     kraken_model_path: str,
     script: Script = Script.POLYTONIC,
     exporter: IExporter | None = None,
-    job_store: IJobStore | None = None,
     vlm_api_key: str | None = None,
     vlm_api_url: str | None = None,
     vlm_model: str = DEFAULT_VLM_MODEL,
@@ -277,7 +273,6 @@ def create_ensemble_pipeline(
         post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
         exporter=exporter or MarkdownExporter(),
         assembler=assembler,
-        job_store=job_store or InMemoryJobStore(),
         max_workers=workers if workers > 1 else None,
         variants=_variant_processors(variants),
     )

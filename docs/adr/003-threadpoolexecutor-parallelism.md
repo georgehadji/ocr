@@ -44,13 +44,14 @@ order.
   (up to I/O and GIL contention limits).
 - **Positive:** Per-page failure isolation is preserved — a crashing engine on
   page N does not affect page N+1.
-- **Neutral:** `run_iteratively()` buffers all pages before yielding when using
-  parallelism, trading streaming progress for throughput. Callers can set
-  `max_workers=None` for the original streaming behavior.
-- **Neutral:** Event-bus and job-store operations are serialized in page-number
-  order after collection, avoiding threading issues in those adapters.
-- **Negative:** Memory footprint increases temporarily (all RawPages loaded
-  before processing). Mitigated by the existing 2 GB upload ceiling.
+- **Neutral:** `run()` and `run_iteratively()` share one lazy path. With
+  parallelism, up to `2 × max_workers` pages are in flight and pages are yielded
+  in page order, so progress still streams. (Amended by audit remediation PR1;
+  this ADR originally buffered every page before yielding.)
+- **Neutral:** Event-bus operations are published from the consuming thread in
+  page-number order, avoiding threading issues in those adapters.
+- **Negative:** Memory footprint grows by the in-flight window
+  (`2 × max_workers` raw pages), not by the document.
 
 ## Compliance
 

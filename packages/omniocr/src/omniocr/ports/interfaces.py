@@ -86,12 +86,6 @@ class IExporter(Protocol):
     ) -> Result[bytes, ExportError]: ...
 
 
-class IJobStore(Protocol):
-    def checkpoint(self, job_id: str, document: DocumentStructure) -> Result[None, IngestError]: ...
-
-    def load(self, job_id: str) -> DocumentStructure | None: ...
-
-
 class IEventBus(Protocol):
     def publish(self, event: object) -> None: ...
 
@@ -170,7 +164,6 @@ __all__ = [
     "IExporter",
     "IDocumentAssembler",
     "IImageProcessor",
-    "IJobStore",
     "ILexicon",
     "ILayoutAnalyzer",
     "ILineCropper",

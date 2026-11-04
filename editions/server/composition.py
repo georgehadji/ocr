@@ -11,26 +11,24 @@ from omniocr.composition import create_ensemble_pipeline
 from omniocr.domain.models import Script, TenantContext
 from omniocr.domain.result import Err
 from omniocr.infrastructure.config import Settings
-from omniocr.infrastructure.jobs import SQLiteJobStore
 from omniocr.infrastructure.security import validate_upload
 
 
 def create_server_pipeline(
     settings: Settings | None = None,
 ) -> PipelineOrchestrator:
-    """Build a server-grade pipeline with retry resilience and persistence.
+    """Build a server-grade pipeline with retry resilience.
 
     Queuing is handled externally by RQ; the pipeline runs synchronously
-    inside the worker process. Only the job store is server-specific — engines,
-    routing and post-correction come from the shared composition root, so this
-    edition cannot drift from the invariants the core enforces.
+    inside the worker process. Engines, routing and post-correction come from
+    the shared composition root, so this edition cannot drift from the
+    invariants the core enforces.
     """
     cfg = settings or Settings.from_env()
     return create_ensemble_pipeline(
         tesseract_language=cfg.tesseract_language,
         kraken_model_path=cfg.kraken_model_path,
         script=Script.POLYTONIC,
-        job_store=SQLiteJobStore("omniocr_jobs.db"),
         vlm_api_key=cfg.vlm_api_key if cfg.enable_vlm else None,
         unlimited_ocr_url=cfg.unlimited_ocr_url if cfg.enable_vlm else None,
     )

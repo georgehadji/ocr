@@ -204,9 +204,10 @@ per engine instance (its `rpred` path has no upstream thread-safety guarantee), 
 the flag mainly benefits Tesseract; see
 [ADR-003](docs/adr/003-threadpoolexecutor-parallelism.md).
 
-Ingest streams pages lazily, so a 2000-page book never lands in memory at once. Page
-failures are isolated — one bad page never kills a job — and SQLite-backed checkpointing
-lets an interrupted run resume.
+Ingest streams pages lazily, so a 2000-page book never lands in memory at once; with
+`--workers K` at most `2K` pages are in flight. Page failures are isolated — one bad page,
+an unreadable PDF page, or a page where every engine failed is reported on that page and
+never kills the job. There is no checkpoint/resume: an interrupted run starts over.
 
 ---
 

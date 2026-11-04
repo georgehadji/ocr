@@ -21,7 +21,6 @@ from omniocr.domain.models import (
 )
 from omniocr.domain.result import Err, Ok
 from omniocr.infrastructure.preprocess import normalize_nfc
-from omniocr.infrastructure.jobs import InMemoryJobStore, SQLiteJobStore
 from omniocr.infrastructure.events import InMemoryEventBus
 
 
@@ -261,57 +260,6 @@ def test_lexicons_by_script_returns_mapping() -> None:
     assert mapping[Script.PONTIAN].name == "pontian"
 
 
-def test_pipeline_checkpoint_is_complete_at_end_of_run() -> None:
-    class TwoPageSource:
-        def stream(self, document: bytes):
-            yield InMemoryPage(1, b"one", 10, 10)
-            yield InMemoryPage(2, b"two", 20, 20)
-
-    store = InMemoryJobStore()
-    result = PipelineOrchestrator(page_source=TwoPageSource(), job_store=store).run(
-        b"document", job_id="job-1"
-    )
-
-    assert result.is_ok()
-    checkpoint = store.load("job-1")
-    assert checkpoint is not None
-    assert [page.number for page in checkpoint.pages] == [1, 2]
-    assert [page.width for page in checkpoint.pages] == [10, 20]
-
-
-def test_pipeline_batches_checkpoints_instead_of_writing_every_page() -> None:
-    """Checkpointing serializes the whole document, so per-page writes are O(n²).
-
-    Batching must still leave a complete final checkpoint — otherwise a resume
-    would silently lose the pages after the last batch boundary.
-    """
-
-    class TenPageSource:
-        def stream(self, document: bytes):
-            for number in range(1, 11):
-                yield InMemoryPage(number, b"x", 10, 10)
-
-    class CountingStore(InMemoryJobStore):
-        writes = 0
-
-        def checkpoint(self, job_id, document):
-            CountingStore.writes += 1
-            return super().checkpoint(job_id, document)
-
-    store = CountingStore()
-    result = PipelineOrchestrator(
-        page_source=TenPageSource(), job_store=store, checkpoint_every=5
-    ).run(b"document", job_id="job-batch")
-
-    assert result.is_ok()
-    # pages 5 and 10 hit the boundary, plus the forced final write.
-    assert CountingStore.writes == 3, f"expected 3 batched writes, got {CountingStore.writes}"
-
-    checkpoint = store.load("job-batch")
-    assert checkpoint is not None
-    assert [page.number for page in checkpoint.pages] == list(range(1, 11))
-
-
 def test_run_iteratively_consumes_the_page_source_lazily() -> None:
     """The streaming method must not materialize the document first.
 
@@ -340,114 +288,6 @@ def test_run_iteratively_consumes_the_page_source_lazily() -> None:
     assert rest == [2, 3, 4, 5]
 
 
-def test_checkpoint_every_must_be_positive() -> None:
-    with pytest.raises(ValueError, match="checkpoint_every must be >= 1"):
-        PipelineOrchestrator(checkpoint_every=0)
-
-
-def test_sqlite_job_store_round_trips_document() -> None:
-    store = SQLiteJobStore(":memory:")
-    original = build_document((), page_number=3, width=300, height=400)
-
-    result = store.checkpoint("job-1", original)
-    loaded = store.load("job-1")
-    store.close()
-
-    assert result.is_ok()
-    assert loaded == original
-
-
-def test_redis_job_store_round_trips_document() -> None:
-    """RedisJobStore persists and reloads a checkpoint.
-
-    Uses a stub ``redis`` client in place of a live server so the JSON
-    serialization/deserialization round-trip is verified deterministically.
-    Skipped automatically if the ``redis`` package is unavailable, per
-    the implementation plan's ``pytest.importorskip`` requirement.
-    """
-    pytest.importorskip("redis")
-
-    from omniocr.infrastructure.jobs import RedisJobStore
-
-    class StubRedis:
-        """Minimal in-memory stand-in mimicking ``redis`` set/get semantics."""
-
-        def __init__(self) -> None:
-            self._data: dict[str, str] = {}
-
-        def set(self, key: str, value: str) -> None:
-            self._data[key] = value
-
-        def get(self, key: str) -> bytes | None:
-            raw = self._data.get(key)
-            return raw.encode("utf-8") if raw is not None else None
-
-    store = RedisJobStore()
-    store._redis = StubRedis()  # substitute a stub client so no live server is needed
-
-    original = build_document(
-        (
-            OCRLine(
-                id="l1", text="ἄνθρωπος", confidence=Confidence(92.0), bbox=BBox(0, 0, 100, 20)
-            ),
-            OCRLine(id="l2", text="λόγος", confidence=Confidence(88.0), bbox=BBox(0, 20, 80, 20)),
-        ),
-        page_number=1,
-        width=500,
-        height=700,
-    )
-
-    result = store.checkpoint("job-redis", original)
-    loaded = store.load("job-redis")
-
-    assert result.is_ok()
-    assert loaded is not None
-    assert loaded == original
-    assert loaded.pages[0].lines[0].text == "ἄνθρωπος"  # polytonic survives round-trip
-
-
-def test_redis_job_store_ping_reports_unreachable_server() -> None:
-    """RedisJobStore.ping() returns False rather than raising when Redis is down.
-
-    The connection failure is injected instead of relying on a real port.
-    This previously pointed at the default localhost:6379 and so asserted the
-    *absence* of a service: it passed only on a machine with no Redis running,
-    and this project's own ``editions/cloud/orchestration/docker-compose.yml``
-    starts one. It failed the moment a developer had Redis up, which says
-    nothing about ``ping()``. Aiming at a closed port instead is no better on
-    Windows, where an unreachable port stalls on SYN retries rather than
-    refusing.
-    """
-    pytest.importorskip("redis")
-
-    from omniocr.infrastructure.jobs import RedisJobStore
-
-    store = RedisJobStore("redis://localhost:6379/0")
-
-    def _unreachable() -> bool:
-        raise ConnectionError("Error 111 connecting to localhost:6379")
-
-    store._redis.ping = _unreachable  # type: ignore[method-assign]
-
-    assert store.ping() is False
-
-
-def test_redis_job_store_ping_reports_a_reachable_server() -> None:
-    """The other half: ``ping()`` must say True when the server answers.
-
-    Without this, a ``ping()`` hardcoded to ``return False`` would pass the
-    unreachable test above and look correct.
-    """
-    pytest.importorskip("redis")
-
-    from omniocr.infrastructure.jobs import RedisJobStore
-
-    store = RedisJobStore("redis://localhost:6379/0")
-    store._redis.ping = lambda: True  # type: ignore[method-assign]
-
-    assert store.ping() is True
-
-
 def test_settings_loads_redis_url_from_env() -> None:
     """Settings reads OMNIOCR_REDIS_URL, defaulting to localhost."""
     from omniocr.infrastructure.config import Settings
@@ -457,34 +297,6 @@ def test_settings_loads_redis_url_from_env() -> None:
 
     custom = Settings.from_env({"OMNIOCR_REDIS_URL": "redis://my-broker:7000/2"})
     assert custom.redis_url == "redis://my-broker:7000/2"
-
-
-def test_pipeline_resume_skips_completed_pages() -> None:
-    class TwoPageSource:
-        def __init__(self, pages: tuple[InMemoryPage, ...]) -> None:
-            self.pages = pages
-
-        def stream(self, document: bytes):
-            for page in self.pages:
-                yield page
-
-    store = InMemoryJobStore()
-    first_source = TwoPageSource((InMemoryPage(1, b"one", 10, 10),))
-    first = PipelineOrchestrator(page_source=first_source, job_store=store).run(
-        b"document", job_id="job-1"
-    )
-    assert first.is_ok()
-
-    second_source = TwoPageSource(
-        (InMemoryPage(1, b"one", 10, 10), InMemoryPage(2, b"two", 20, 20))
-    )
-    resumed = PipelineOrchestrator(page_source=second_source, job_store=store).run(
-        b"document", resume_job_id="job-1"
-    )
-
-    assert resumed.is_ok()
-    assert [page.number for page in resumed.value.pages] == [1, 2]
-    assert [page.width for page in resumed.value.pages] == [10, 20]
 
 
 def test_pipeline_keeps_failed_page_and_continues_to_later_pages() -> None:

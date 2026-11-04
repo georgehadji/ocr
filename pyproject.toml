@@ -92,11 +92,3 @@ no_implicit_optional = true
 module = "omniocr.infrastructure.exporters"
 disallow_untyped_calls = false
 
-# redis-py ships py.typed, but `from_url` takes an unannotated `**kwargs`, so
-# --strict counts the call as untyped. The return is typed (`-> "Redis"`), so
-# nothing downstream loses checking. This only became visible once CI started
-# installing the cloud/server extras; before that redis was absent and
-# --ignore-missing-imports quietly typed the whole call as Any.
-[[tool.mypy.overrides]]
-module = "omniocr.infrastructure.jobs"
-disallow_untyped_calls = false

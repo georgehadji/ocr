@@ -28,6 +28,8 @@ from omniocr.domain.models import (
     Script,
     Suggestion,
     TenantContext,
+    UnreadablePage,
+    page_scoped_id,
 )
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.domain.training import (
@@ -78,4 +80,6 @@ __all__ = [
     "TrainingError",
     "TrainingRun",
     "TrainingSample",
+    "UnreadablePage",
+    "page_scoped_id",
 ]

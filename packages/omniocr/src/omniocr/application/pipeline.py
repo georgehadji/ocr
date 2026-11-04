@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from time import perf_counter
-from typing import Iterable, Iterator, Protocol, Sequence, cast
+from typing import Iterator, Protocol, Sequence, cast
 from omniocr.application.alignment import agreement_tier
 from omniocr.application.post_correction import SuggestOnlyCorrector
 from omniocr.domain.errors import EngineError, ExportError, IngestError, LayoutError, PipelineError
@@ -20,6 +21,8 @@ from omniocr.domain.models import (
     Script,
     Suggestion,
     TenantContext,
+    UnreadablePage,
+    page_scoped_id,
 )
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.ports.interfaces import (
@@ -27,7 +30,6 @@ from omniocr.ports.interfaces import (
     IEventBus,
     IExporter,
     IImageProcessor,
-    IJobStore,
     ILayoutAnalyzer,
     IOCREngine,
     IPageSource,
@@ -175,6 +177,12 @@ def build_document(
     return DocumentStructure(pages=(page,))
 
 
+def _or_default(context: TenantContext | None) -> TenantContext:
+    return context or TenantContext(
+        organization_id="default", user_id="system", subscription_tier="desktop"
+    )
+
+
 class PipelineOrchestrator:
     def __init__(
         self,
@@ -186,10 +194,8 @@ class PipelineOrchestrator:
         post_corrector: IPostCorrector | None = None,
         exporter: IExporter | None = None,
         assembler: IDocumentAssembler | None = None,
-        job_store: IJobStore | None = None,
         event_bus: IEventBus | None = None,
         max_workers: int | None = None,
-        checkpoint_every: int = 25,
         variants: Sequence[tuple[str, IImageProcessor]] = (),
     ) -> None:
         # Extra preprocessing variants (ENHANCEMENT_PLAN A3). Empty by default,
@@ -204,49 +210,28 @@ class PipelineOrchestrator:
         self._post_corrector = post_corrector or SuggestOnlyCorrector()
         self._exporter = exporter or _DefaultTextExporter()
         self._assembler = assembler or IdentityAssembler()
-        self._job_store = job_store
         self._event_bus = event_bus
         self._max_workers = max_workers
-        if checkpoint_every < 1:
-            raise ValueError("checkpoint_every must be >= 1")
-        self._checkpoint_every = checkpoint_every
         self._log = _get_logger("omniocr.pipeline")
 
     def run(
-        self,
-        document: bytes,
-        context: TenantContext | None = None,
-        job_id: str | None = None,
-        resume_job_id: str | None = None,
+        self, document: bytes, context: TenantContext | None = None
     ) -> Result[DocumentStructure, PipelineError]:
-        ctx = context or TenantContext(
-            organization_id="default", user_id="system", subscription_tier="desktop"
-        )
-        checkpoint_id = job_id or resume_job_id
-        loaded_checkpoint = None
-        if self._job_store is not None and checkpoint_id is not None:
-            loaded_checkpoint = self._job_store.load(checkpoint_id)
-        pages: list[DocumentPage] = (
-            list(loaded_checkpoint.pages) if loaded_checkpoint is not None else []
-        )
-        completed_numbers = {page.number for page in pages}
-        self._log.info("pipeline_start", page_count=len(pages), resume=resume_job_id is not None)
+        """Recognize every page and assemble the document.
 
+        A fold over the same lazy page path ``run_iteratively`` uses, so a
+        single-shot run and a streamed run apply one per-page error rule and
+        hold at most a bounded window of pages in memory.
+        """
+        ctx = _or_default(context)
+        self._log.info("pipeline_start")
         try:
-            page_stream = self._page_source.stream(document)
-            raw_pages = list(page_stream)
+            pages = tuple(self._pages(document, ctx))
         except PipelineError as exc:
             return Err(exc)
-
-        # Filter out already-completed pages (from checkpoint resume).
-        pending = [rp for rp in raw_pages if rp.number not in completed_numbers]
-
-        if self._max_workers is not None and self._max_workers > 1 and len(pending) > 1:
-            pages = self._run_parallel(pending, ctx, pages, checkpoint_id)
-        else:
-            pages = self._run_sequential(pending, ctx, pages, checkpoint_id)
-
-        return self.assemble(DocumentStructure(pages=tuple(pages)), ctx)
+        if not pages:
+            return Err(PipelineError("no pages were produced from the input"))
+        return self.assemble(DocumentStructure(pages=pages), ctx)
 
     def assemble(
         self, document: DocumentStructure, context: TenantContext
@@ -260,138 +245,6 @@ class PipelineOrchestrator:
         if isinstance(result, Err):
             return Err(result.error)
         return result
-
-    def _run_parallel(
-        self,
-        raw_pages: list[RawPage],
-        ctx: TenantContext,
-        pages: list[DocumentPage],
-        checkpoint_id: str | None,
-    ) -> list[DocumentPage]:
-        """Process pages concurrently with a ThreadPoolExecutor.
-
-        Results are collected in page-number order. Per-page failures are
-        isolated — a failed page produces a ``DocumentPage`` with a
-        ``PageFailure`` entry and does not abort the whole run.
-        Event-bus and job-store operations are serialized in order after
-        all pages finish to avoid threading issues in those adapters.
-        """
-        page_results: dict[int, DocumentPage] = {}
-        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-            future_to_page: dict[Future[DocumentPage], int] = {}
-            for raw_page in raw_pages:
-                future = executor.submit(self._process_page, raw_page, ctx)
-                future_to_page[future] = raw_page.number
-
-            for future in as_completed(future_to_page):
-                page_number = future_to_page[future]
-                try:
-                    page_results[page_number] = future.result()
-                except Exception as exc:
-                    # Map to the raw page that failed.
-                    raw = next(rp for rp in raw_pages if rp.number == page_number)
-                    page_results[page_number] = DocumentPage(
-                        number=page_number,
-                        width=getattr(raw, "width", 1),
-                        height=getattr(raw, "height", 1),
-                        failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
-                    )
-                    if self._event_bus is not None:
-                        self._event_bus.publish(
-                            PipelineEvent("page_failed", page_number, str(exc), 0.0)
-                        )
-                    self._log.warning("page_failed", page=page_number, error=str(exc))
-
-        # Reassemble in page-number order.
-        for raw_page in raw_pages:
-            page_number = raw_page.number
-            result = page_results[page_number]
-            if self._event_bus is not None and not result.failures:
-                self._event_bus.publish(
-                    PipelineEvent("page_completed", page_number, duration_ms=0.0)
-                )
-            pages.append(result)
-            self._maybe_checkpoint(checkpoint_id, pages)
-
-        self._maybe_checkpoint(checkpoint_id, pages, force=True)
-        return pages
-
-    def _run_sequential(
-        self,
-        raw_pages: list[RawPage],
-        ctx: TenantContext,
-        pages: list[DocumentPage],
-        checkpoint_id: str | None,
-    ) -> list[DocumentPage]:
-        """Process pages one at a time in the calling thread (original path)."""
-        for raw_page in raw_pages:
-            started_at = perf_counter()
-            try:
-                page = self._process_page(raw_page, ctx)
-            except Exception as exc:
-                page = DocumentPage(
-                    number=raw_page.number,
-                    width=getattr(raw_page, "width", 1),
-                    height=getattr(raw_page, "height", 1),
-                    failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
-                )
-                if self._event_bus is not None:
-                    self._event_bus.publish(
-                        PipelineEvent(
-                            "page_failed",
-                            raw_page.number,
-                            str(exc),
-                            (perf_counter() - started_at) * 1000,
-                        )
-                    )
-                self._log.warning("page_failed", page=raw_page.number, error=str(exc))
-            else:
-                duration = (perf_counter() - started_at) * 1000
-                if self._event_bus is not None:
-                    self._event_bus.publish(
-                        PipelineEvent(
-                            "page_completed",
-                            raw_page.number,
-                            duration_ms=duration,
-                        )
-                    )
-                self._log.info(
-                    "page_completed", page=raw_page.number, duration_ms=round(duration, 1)
-                )
-            pages.append(page)
-
-            if not self._maybe_checkpoint(checkpoint_id, pages):
-                return pages  # return partial results on checkpoint failure
-
-        self._maybe_checkpoint(checkpoint_id, pages, force=True)
-        return pages
-
-    def _maybe_checkpoint(
-        self,
-        checkpoint_id: str | None,
-        pages: list[DocumentPage],
-        force: bool = False,
-    ) -> bool:
-        """Persist progress every ``checkpoint_every`` pages. Returns success.
-
-        Checkpointing serializes the whole accumulated document, so doing it
-        after every page costs O(n²) I/O over a book — worst exactly where the
-        target documents live (hundreds of pages). Batching trades at most
-        ``checkpoint_every`` pages of redone work on a crash for linear I/O.
-        ``force=True`` at the end of a run keeps the final checkpoint complete
-        regardless of where the batch boundary fell.
-        """
-        if self._job_store is None or checkpoint_id is None:
-            return True
-        if not force and len(pages) % self._checkpoint_every != 0:
-            return True
-        checkpoint_result = self._job_store.checkpoint(
-            checkpoint_id, DocumentStructure(pages=tuple(pages))
-        )
-        if isinstance(checkpoint_result, Err):
-            self._log.error("checkpoint_failed", error=str(checkpoint_result.error))
-            return False
-        return True
 
     def count_pages(self, document: bytes) -> int:
         """Return the number of pages in a document without processing them."""
@@ -420,10 +273,10 @@ class PipelineOrchestrator:
         report progress in real time. Per-page failures are wrapped in
         ``DocumentPage`` with a ``PageFailure`` entry.
 
-        When ``max_workers > 1`` is configured, pages are collected from
-        the source, submitted to a ``ThreadPoolExecutor``, and yielded in
-        page-number order after all complete. This trades streaming
-        progress for reduced wall-clock time on multi-page documents.
+        Pages come out in page order. With ``max_workers > 1`` up to
+        ``2 * max_workers`` pages are in flight at once, so memory stays flat
+        on a long book and stopping early (``--max-pages``) wastes at most
+        that window.
 
         Error behaviour: If the page source itself raises a
         ``PipelineError`` (e.g. corrupt document, I/O failure), the
@@ -431,82 +284,68 @@ class PipelineOrchestrator:
         stream position. Callers that need an explicit error signal
         should use ``run()`` instead, which returns a ``Result``.
         """
-        ctx = context or TenantContext(
-            organization_id="default", user_id="system", subscription_tier="desktop"
-        )
-        # Only the parallel path needs every page up front, to fan out. The
-        # sequential path streams: materializing a 300-page scan here would
-        # hold every page image in memory at once and defeat the point of a
-        # page-streaming ingest, which is the whole reason this method exists.
-        parallel = self._max_workers is not None and self._max_workers > 1
         try:
-            if not parallel:
-                yield from self._iterate_sequentially(self._page_source.stream(document), ctx)
-                return
-            raw_pages = list(self._page_source.stream(document))
+            for page in self._pages(document, _or_default(context)):
+                yield (page.number, page)
         except PipelineError as exc:
             self._log.error("pipeline_failed", error=str(exc))
-            return
 
-        if len(raw_pages) > 1:
-            page_results: dict[int, DocumentPage] = {}
-            with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-                future_to_page: dict[Future[DocumentPage], int] = {}
-                for raw_page in raw_pages:
-                    future = executor.submit(self._process_page, raw_page, ctx)
-                    future_to_page[future] = raw_page.number
+    def _pages(self, document: bytes, ctx: TenantContext) -> Iterator[DocumentPage]:
+        """The one page path: lazy, in page order, with a bounded window in flight.
 
-                for future in as_completed(future_to_page):
-                    page_number = future_to_page[future]
-                    try:
-                        page_results[page_number] = future.result()
-                    except Exception as exc:
-                        raw = next(rp for rp in raw_pages if rp.number == page_number)
-                        page_results[page_number] = DocumentPage(
-                            number=page_number,
-                            width=getattr(raw, "width", 1),
-                            height=getattr(raw, "height", 1),
-                            failures=(
-                                PageFailure(error_type=type(exc).__name__, message=str(exc)),
-                            ),
-                        )
-                        self._log.warning("page_failed", page=page_number, error=str(exc))
-
-            # Yield in page-number order.
-            for raw_page in raw_pages:
-                page_number = raw_page.number
-                page = page_results[page_number]
-                self._log.info("page_completed", page=page_number, duration_ms=0.0)
-                yield (page_number, page)
-        else:
-            yield from self._iterate_sequentially(raw_pages, ctx)
-
-    def _iterate_sequentially(
-        self, raw_pages: Iterable[RawPage], ctx: TenantContext
-    ) -> Iterator[tuple[int, DocumentPage]]:
-        """Yield one processed page at a time, consuming the source lazily.
-
-        Takes an ``Iterable`` rather than a list so a generator streams through
-        untouched — one page in memory at a time regardless of document size.
+        The source is consumed in the calling thread (PyMuPDF is not
+        thread-safe); only recognition fans out. Events are published here,
+        in page order, so event-bus adapters never see two threads at once.
         """
-        for raw_page in raw_pages:
-            started_at = perf_counter()
+        raw_pages = self._page_source.stream(document)
+        workers = self._max_workers or 1
+        if workers <= 1:
+            for raw_page in raw_pages:
+                yield self._announce(*self._guarded(raw_page, ctx))
+            return
+        window: deque[Future[tuple[DocumentPage, float]]] = deque()
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             try:
-                page = self._process_page(raw_page, ctx)
-            except PipelineError as exc:
-                page = DocumentPage(
-                    number=raw_page.number,
-                    width=getattr(raw_page, "width", 1),
-                    height=getattr(raw_page, "height", 1),
-                    failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
+                for raw_page in raw_pages:
+                    window.append(executor.submit(self._guarded, raw_page, ctx))
+                    if len(window) >= 2 * workers:
+                        yield self._announce(*window.popleft().result())
+                while window:
+                    yield self._announce(*window.popleft().result())
+            finally:
+                # A consumer that stops early abandons the queued pages.
+                for pending in window:
+                    pending.cancel()
+
+    def _guarded(self, raw_page: RawPage, ctx: TenantContext) -> tuple[DocumentPage, float]:
+        """Process one page; any error becomes a failure on that page, not the run's."""
+        started_at = perf_counter()
+        try:
+            page = self._process_page(raw_page, ctx)
+        except Exception as exc:
+            page = DocumentPage(
+                number=raw_page.number,
+                width=getattr(raw_page, "width", 1),
+                height=getattr(raw_page, "height", 1),
+                failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
+            )
+        return page, (perf_counter() - started_at) * 1000
+
+    def _announce(self, page: DocumentPage, duration_ms: float) -> DocumentPage:
+        if page.failures:
+            message = "; ".join(failure.message for failure in page.failures)
+            if self._event_bus is not None:
+                self._event_bus.publish(
+                    PipelineEvent("page_failed", page.number, message, duration_ms)
                 )
-                self._log.warning("page_failed", page=raw_page.number, error=str(exc))
-            else:
-                duration = (perf_counter() - started_at) * 1000
-                self._log.info(
-                    "page_completed", page=raw_page.number, duration_ms=round(duration, 1)
+            self._log.warning("page_failed", page=page.number, error=message)
+        else:
+            if self._event_bus is not None:
+                self._event_bus.publish(
+                    PipelineEvent("page_completed", page.number, duration_ms=duration_ms)
                 )
-            yield (raw_page.number, page)
+            self._log.info("page_completed", page=page.number, duration_ms=round(duration_ms, 1))
+        return page
 
     def _variant_pages(
         self, raw_page: RawPage, context: TenantContext
@@ -603,6 +442,13 @@ class PipelineOrchestrator:
         # defensively because `RawPage` is a structural protocol that only the
         # PDF source can satisfy this far — the same pattern as
         # `provenance.variant` and `lexicon.layers`.
+        if isinstance(raw_page, UnreadablePage):
+            return DocumentPage(
+                number=raw_page.number,
+                width=raw_page.width,
+                height=raw_page.height,
+                failures=(PageFailure(error_type="IngestError", message=raw_page.error),),
+            )
         text_lines: Sequence[OCRLine] = getattr(raw_page, "text_lines", ())
         if text_lines:
             return self._page_from_text_layer(raw_page, text_lines, context)
@@ -614,8 +460,14 @@ class PipelineOrchestrator:
         if isinstance(segments, Err):
             raise segments.error
         assert isinstance(segments, Ok)
-        segment_values = segments.value
+        # Engines number lines per page (``line-3``); the page number makes the
+        # id unique across the document, here and nowhere else.
+        segment_values = tuple(
+            replace(segment, id=page_scoped_id(raw_page.number, segment.id))
+            for segment in segments.value
+        )
 
+        failed_engines: list[str] = []
         page_lines: list[OCRLine] = []
         suggestions: list[Suggestion] = []
         # Keyed by (engine identity, variant name): one engine reading two
@@ -637,10 +489,12 @@ class PipelineOrchestrator:
                             # ensemble that quietly degrades to one engine
                             # looks identical to a healthy one from outside.
                             engine_results[engine_key] = ()
+                            engine_name = getattr(engine, "name", type(engine).__name__)
+                            failed_engines.append(f"{engine_name}: {extracted.error}")
                             self._log.warning(
                                 "engine_failed",
                                 page=raw_page.number,
-                                engine=getattr(engine, "name", type(engine).__name__),
+                                engine=engine_name,
                                 variant=variant_name,
                                 error=str(extracted.error),
                             )
@@ -710,13 +564,23 @@ class PipelineOrchestrator:
         # raising, and that used to surface as `page N: ok (0 lines)` with
         # exit code 0 — a job could drop a third of a book and still look
         # clean to a scripted caller.
-        failures: tuple[PageFailure, ...] = ()
+        failures: list[PageFailure] = []
         if not page_lines:
-            failures = (
+            failures.append(
                 PageFailure(
                     error_type="EmptyPage",
                     message="no text lines were produced for this page",
-                ),
+                )
+            )
+        # Every engine that ran on this page failed: the lines are the layout
+        # boxes with no text. Kept so a reviewer sees the geometry, but the
+        # page must not read as a clean one.
+        if engine_results and len(failed_engines) == len(engine_results):
+            failures.append(
+                PageFailure(
+                    error_type="EngineError",
+                    message="every engine failed on this page: " + "; ".join(failed_engines),
+                )
             )
 
         return DocumentPage(
@@ -725,7 +589,7 @@ class PipelineOrchestrator:
             height=getattr(raw_page, "height", 1),
             lines=tuple(page_lines),
             suggestions=tuple(suggestions),
-            failures=failures,
+            failures=tuple(failures),
         )
 
     @staticmethod
