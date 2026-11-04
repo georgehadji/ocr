@@ -246,8 +246,20 @@ class PipelineOrchestrator:
         else:
             pages = self._run_sequential(pending, ctx, pages, checkpoint_id)
 
-        doc = DocumentStructure(pages=tuple(pages))
-        return self._assembler.assemble(doc, ctx)
+        return self.assemble(DocumentStructure(pages=tuple(pages)), ctx)
+
+    def assemble(
+        self, document: DocumentStructure, context: TenantContext
+    ) -> Result[DocumentStructure, PipelineError]:
+        """Apply the injected assembler (paragraphs, hyphen joins, running heads).
+
+        ``run()`` does this itself; a ``run_iteratively()`` caller must call it
+        on the collected pages before ``export()``, or ``--structure`` is lost.
+        """
+        result = self._assembler.assemble(document, context)
+        if isinstance(result, Err):
+            return Err(result.error)
+        return result
 
     def _run_parallel(
         self,
