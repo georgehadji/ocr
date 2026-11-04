@@ -9,6 +9,27 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Fixed — suggestions apply to the right text (audit remediation PR3)
+- A token suggestion used to replace the **whole line** when accepted: accepting
+  `λέγει,` → `λέγη` on `Ὁ θεὸς λέγει,` left the line as `λέγη`. `Suggestion` now
+  carries an optional `start`/`end` span and `apply_suggestion` /
+  `apply_suggestions` (`domain/models.py`) are the one place it is applied, so
+  several accepted suggestions on one line compose. The review UI uses them for
+  single and batch accept. The replacement keeps the punctuation attached to the
+  word.
+- Findings with nothing to apply are flags (`reversible=False`, empty
+  `suggestion_text`): the bare "not in lexicon" flag, dangling combining marks,
+  multiple breathing/accent marks, and `unverified_hyphen_join` (it spans two
+  lines). Accepting one used to overwrite the line with its own text.
+- Review UI button keys were built from `(line_id, reason)`, so two token
+  suggestions on one line crashed Streamlit with a duplicate widget id.
+- Candidates for capital homoglyphs (`ΚAΙ` with a Latin `A`) can now fire: the
+  confusion table was fed a lowercased token and its capital rows never matched.
+- Abbreviations match whole tokens, not substrings: `εἴδε` no longer proposes
+  `ἴδε` → `ὅρα`.
+- `merge_suggestion` returns nothing for a line over `MAX_TOKENS` instead of a
+  merge that silently dropped the tail.
+
 ### Fixed — circuit breaker (audit remediation PR2)
 - `CircuitBreakerEngine` is now an explicit CLOSED / OPEN / HALF_OPEN state
   machine. It used to record the open time *before* the failing call, so a hung

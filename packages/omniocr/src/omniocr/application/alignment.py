@@ -201,6 +201,10 @@ def merge_suggestion(
     """
     if len(candidates) < 2:
         return None
+    # `align` stops at MAX_TOKENS, so on a longer line the merge would drop the
+    # tail of the line. A capped merge is not a merge.
+    if len(chosen.text.split()) > MAX_TOKENS:
+        return None
     others = [candidate for candidate in candidates if candidate is not chosen]
     tokens = align(chosen, others, weights)
     if not tokens:

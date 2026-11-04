@@ -169,6 +169,9 @@ class DocumentAssembler:
                                         source_text=f"{A}{hyphen_char} {B}",
                                         suggestion_text=f"{A}{B}",
                                         reason="unverified_hyphen_join",
+                                        # Spans two lines, so it cannot replace
+                                        # either: a flag for the reviewer.
+                                        reversible=False,
                                     )
                                 )
                         else:

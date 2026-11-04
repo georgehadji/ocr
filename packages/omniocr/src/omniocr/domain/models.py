@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Tuple
@@ -137,6 +138,51 @@ class Suggestion:
     suggestion_text: str
     reason: str
     reversible: bool = True
+    # Where ``source_text`` sits in the line's text; None means the suggestion
+    # replaces the whole line. A flag (``reversible=False``) has no replacement.
+    start: int | None = None
+    end: int | None = None
+
+
+def apply_suggestion(text: str, suggestion: Suggestion) -> str:
+    """The one place a suggestion is applied to a line's text. Pure.
+
+    Without a span the suggestion replaces the whole line. With one it replaces
+    only ``source_text``, so several accepted suggestions on one line compose
+    instead of the last overwriting the rest. A flag is not applicable, and a
+    span the text no longer matches is relocated only when ``source_text`` now
+    occurs exactly once (an earlier accepted edit changed the length); anything
+    ambiguous is left alone rather than guessed.
+    """
+    if not suggestion.reversible:
+        return text
+    if suggestion.start is None or suggestion.end is None:
+        return suggestion.suggestion_text
+    start, end = suggestion.start, suggestion.end
+    if text[start:end] != suggestion.source_text:
+        if text.count(suggestion.source_text) != 1:
+            return text
+        start = text.index(suggestion.source_text)
+        end = start + len(suggestion.source_text)
+    return text[:start] + suggestion.suggestion_text + text[end:]
+
+
+def apply_suggestions(text: str, suggestions: Sequence[Suggestion]) -> str:
+    """Apply several suggestions to one line: whole-line first, then spans right to left.
+
+    Right to left keeps each remaining span valid after a replacement that
+    changes the length.
+    """
+    for suggestion in suggestions:
+        if suggestion.start is None:
+            text = apply_suggestion(text, suggestion)
+    spans = sorted(
+        (s for s in suggestions if s.start is not None),
+        key=lambda s: -(s.start or 0),
+    )
+    for suggestion in spans:
+        text = apply_suggestion(text, suggestion)
+    return text
 
 
 @dataclass(frozen=True, slots=True)
