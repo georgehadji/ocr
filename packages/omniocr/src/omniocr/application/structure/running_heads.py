@@ -2,17 +2,37 @@ from __future__ import annotations
 
 import difflib
 import re
+import unicodedata
 from typing import Mapping
 
 from omniocr.domain.models import DocumentStructure, RegionType, DocumentPage, OCRLine
+
+# A folio such as "— 6 —" keeps its dash-wrapped shape even when OCR misreads
+# the number ("- ΛΦ -"), and a misread number repeats on no other page.
+_FOLIO = re.compile(r"^[-‐–—－]+\s*\S{1,4}\s*[-‐–—－]+$")
+# Latin capitals OCR substitutes for their Greek look-alikes, after lowercasing.
+_LATIN_TO_GREEK = str.maketrans("abehikmnoptxyz", "αβεηικμνορτχυζ")
+_GREEK = re.compile(r"[Ͱ-Ͽἀ-῿]")
+# A footnote opens with its number and reads as running (lower-case) text, so
+# a citation it repeats ("22 Όπ.π., σ. 269.") is not a head. shortcut: a head
+# in lower case after a folio number ("12 Ιλιάδος") is missed; use layout
+# position instead if books like that turn up.
+_FOOTNOTE = re.compile(r"^\d{1,3}\s+\S")
 
 
 def normalize_candidate(text: str) -> str:
     """Normalize text by lowercasing and replacing numbers and Roman numerals with '@'.
 
     This allows variable page numbers (arabic and roman) to match across pages.
+    Accents are dropped and, on a line with Greek in it, Latin look-alikes are
+    read as Greek, so an OCR misreading of a head still matches the head. This
+    key is only compared, never shown: the recognized text is untouched.
     """
-    t = text.lower().strip()
+    t = "".join(
+        c for c in unicodedata.normalize("NFD", text.lower()) if unicodedata.category(c) != "Mn"
+    ).strip()
+    if _GREEK.search(t):
+        t = t.translate(_LATIN_TO_GREEK)
     # Replace arabic digit runs with '@'
     t = re.sub(r"\b\d+\b", "@", t)
     # Replace standalone Roman numerals with '@'
@@ -47,42 +67,55 @@ def detect(
     bottom_k: int = 2,
     window: int = 2,
     threshold: float = 0.9,
-) -> Mapping[str, RegionType]:
-    """Identify lines at the top/bottom of pages that repeat across a window of pages."""
-    results: dict[str, RegionType] = {}
+) -> Mapping[tuple[int, str], RegionType]:
+    """Identify lines at the top/bottom of pages that repeat across a window of pages.
+
+    Keys are ``(page number, line id)``: engines number lines per page, so a
+    line id alone (``line-3-kraken``) names a line on every page.
+
+    A line counts when it matches an edge line on *any* page in the window, not
+    on average: books often alternate heads between facing pages (author on
+    the verso, title on the recto), so a true head matches only every second
+    page. It is compared against all of a neighbour's edge slots, because the
+    head and folio swap order between pages (a text layer may list the folio
+    first). Folios are also recognized by shape alone.
+    """
+    results: dict[tuple[int, str], RegionType] = {}
     pages = document.pages
     if len(pages) < 2:
         return results
 
-    # We evaluate each page and each slot
     for p, page in enumerate(pages):
         for slot_type, k in [("top", top_k), ("bottom", bottom_k)]:
             for i in range(k):
                 line_p = get_slot_line(page, slot_type, i)
-                if line_p is None or not line_p.text:
+                if line_p is None or not line_p.text.strip():
+                    continue
+                if _FOLIO.match(line_p.text.strip()):
+                    results[(page.number, line_p.id)] = RegionType.RUNNING_HEAD
+                    continue
+
+                text_p = line_p.text.strip()
+                if _FOOTNOTE.match(text_p) and any(c.islower() for c in text_p):
                     continue
 
                 normalized_p = normalize_candidate(line_p.text)
                 if not normalized_p:
                     continue
 
-                total_similarity = 0.0
-                valid_neighbors = 0
-
-                for d in range(-window, window + 1):
-                    if d == 0:
+                best = 0.0
+                for q in range(max(0, p - window), min(len(pages), p + window + 1)):
+                    if q == p:
                         continue
-                    q = p + d
-                    if 0 <= q < len(pages):
-                        valid_neighbors += 1
-                        neighbor_page = pages[q]
-                        line_q = get_slot_line(neighbor_page, slot_type, i)
+                    for j in range(k):
+                        line_q = get_slot_line(pages[q], slot_type, j)
                         if line_q and line_q.text:
-                            normalized_q = normalize_candidate(line_q.text)
-                            total_similarity += check_similarity(normalized_p, normalized_q)
+                            similarity = check_similarity(
+                                normalized_p, normalize_candidate(line_q.text)
+                            )
+                            best = max(best, similarity)
 
-                score = total_similarity / valid_neighbors if valid_neighbors > 0 else 0.0
-                if score >= threshold:
-                    results[line_p.id] = RegionType.RUNNING_HEAD
+                if best >= threshold:
+                    results[(page.number, line_p.id)] = RegionType.RUNNING_HEAD
 
     return results
