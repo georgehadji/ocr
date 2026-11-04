@@ -84,7 +84,7 @@ class DocumentAssembler:
             # Re-map lines with region types updated
             marked_lines = []
             for line in page.lines:
-                if line.id in running_heads:
+                if (page.number, line.id) in running_heads:
                     marked_lines.append(
                         dataclasses.replace(line, region_type=RegionType.RUNNING_HEAD)
                     )
