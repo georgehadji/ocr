@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import dataclasses
 import difflib
 import re
 import unicodedata
 from typing import Mapping
 
-from omniocr.domain.models import DocumentStructure, RegionType, DocumentPage, OCRLine
+from omniocr.domain.models import (
+    DocumentPage,
+    DocumentStructure,
+    OCRLine,
+    ParagraphRole,
+    RegionType,
+)
 
 # A folio such as "— 6 —" keeps its dash-wrapped shape even when OCR misreads
 # the number ("- ΛΦ -"), and a misread number repeats on no other page.
@@ -47,16 +54,32 @@ def check_similarity(s1: str, s2: str) -> float:
     return difflib.SequenceMatcher(None, s1, s2).ratio()
 
 
+def _edge_candidates(page: DocumentPage) -> list[OCRLine]:
+    """Text lines in top-to-bottom position, without scan-edge slivers.
+
+    Engines do not list lines in page order (a scan's gutter shadow, read as
+    a tall, narrow "line" such as ``μμ``, can come first), so slots are taken
+    by position. A sliver is more than twice as tall as it is wide; a
+    one-digit folio is not.
+    """
+    lines = [line for line in page.lines if line.text.strip() and line.bbox.h <= 2 * line.bbox.w]
+    return sorted(lines, key=lambda line: line.bbox.y)
+
+
+def _same_size(a: OCRLine, b: OCRLine) -> bool:
+    low, high = sorted((a.bbox.h, b.bbox.h))
+    return high <= 1.5 * max(low, 1)
+
+
 def get_slot_line(page: DocumentPage, slot_type: str, index: int) -> OCRLine | None:
     """Get the OCRLine corresponding to a top or bottom index of a page."""
-    if not page.lines:
+    lines = _edge_candidates(page)
+    if not 0 <= index < len(lines):
         return None
     if slot_type == "top":
-        if 0 <= index < len(page.lines):
-            return page.lines[index]
-    elif slot_type == "bottom":
-        if 0 <= index < len(page.lines):
-            return page.lines[len(page.lines) - 1 - index]
+        return lines[index]
+    if slot_type == "bottom":
+        return lines[len(lines) - 1 - index]
     return None
 
 
@@ -109,7 +132,9 @@ def detect(
                         continue
                     for j in range(k):
                         line_q = get_slot_line(pages[q], slot_type, j)
-                        if line_q and line_q.text:
+                        # A head repeats in the same type size; an article
+                        # title that shares its words is set much larger.
+                        if line_q and line_q.text and _same_size(line_p, line_q):
                             similarity = check_similarity(
                                 normalized_p, normalize_candidate(line_q.text)
                             )
@@ -119,3 +144,25 @@ def detect(
                     results[(page.number, line_p.id)] = RegionType.RUNNING_HEAD
 
     return results
+
+
+def without_running_heads(document: DocumentStructure) -> DocumentStructure:
+    """Drop the lines and paragraphs an assembler marked as running heads or folios.
+
+    Opt-in, for a reading copy. The heads go from ``lines`` too, so no
+    exporter falls back to them on a page left with no paragraphs; body text
+    is never touched.
+    """
+    pages = tuple(
+        dataclasses.replace(
+            page,
+            lines=tuple(line for line in page.lines if line.region_type != RegionType.RUNNING_HEAD),
+            paragraphs=tuple(
+                para
+                for para in page.paragraphs
+                if para.role not in (ParagraphRole.RUNNING_HEAD, ParagraphRole.PAGE_NUMBER)
+            ),
+        )
+        for page in document.pages
+    )
+    return dataclasses.replace(document, pages=pages)

@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 
-from omniocr.application.structure.running_heads import detect, normalize_candidate
+from omniocr.application.structure.assembler import DocumentAssembler
+from omniocr.application.structure.running_heads import (
+    detect,
+    normalize_candidate,
+    without_running_heads,
+)
 from omniocr.domain.models import (
     BBox,
     Confidence,
     DocumentPage,
     DocumentStructure,
     OCRLine,
+    ParagraphRole,
     RegionType,
+    TenantContext,
 )
+from omniocr.domain.result import Ok
+
+_CONTEXT = TenantContext(organization_id="t", user_id="t", subscription_tier="desktop")
 
 
 def test_normalize_candidate_converts_digits_and_roman_numerals() -> None:
@@ -209,3 +219,115 @@ def test_repeated_footnote_citations_are_not_running_heads() -> None:
     decisions = detect(doc)
 
     assert all(not line_id.endswith("-folio") for _, line_id in decisions)
+
+
+def test_without_running_heads_keeps_only_body() -> None:
+    """A page whose paragraphs were all heads must not fall back to its head lines."""
+    doc = DocumentAssembler().assemble(
+        _book([(VERSO if n % 2 == 0 else RECTO, f"— {n} —") for n in range(6, 10)]), _CONTEXT
+    )
+    assert isinstance(doc, Ok)
+
+    reading_copy = without_running_heads(doc.value)
+
+    for page in reading_copy.pages:
+        assert [line.id for line in page.lines] == [f"p{page.number}-body"]
+        assert [para.role for para in page.paragraphs] == [ParagraphRole.BODY]
+        assert page.paragraphs[0].text == _BODIES[page.number % len(_BODIES)]
+
+
+def _scanned_page(number: int, lines: list[tuple[str, str, BBox]]) -> DocumentPage:
+    conf = Confidence(100.0)
+    return DocumentPage(
+        number=number,
+        width=2000,
+        height=2800,
+        lines=tuple(
+            OCRLine(id=f"p{number}-{name}", text=text, confidence=conf, bbox=bbox)
+            for name, text, bbox in lines
+        ),
+    )
+
+
+HEAD_BOX = BBox(800, 150, 460, 25)
+FOLIO_BOX = BBox(950, 2577, 150, 28)
+
+
+_ORDINALS = ("πρῶτος", "δεύτερος", "τρίτος")
+
+
+def _body(number: int, top: int) -> list[tuple[str, str, BBox]]:
+    """Three body lines, each text used on no other page within the window."""
+    return [
+        (
+            f"body{i}",
+            f"{_BODIES[number % len(_BODIES)]} {ordinal}",
+            BBox(320, top + 50 * i, 1380, 48),
+        )
+        for i, ordinal in enumerate(_ORDINALS)
+    ]
+
+
+def test_slots_follow_position_not_engine_order() -> None:
+    """A scan's gutter shadow ("μμ", tall and narrow) came first in line order.
+
+    Taking slots by list index, it and a stray line pushed the head out of
+    the top slots and the folio out of the bottom ones.
+    """
+    pages = []
+    for number in range(1, 5):
+        sliver = ("sliver", "μμ", BBox(12, 2273, 20, 285))
+        head = ("head", VERSO, HEAD_BOX)
+        folio = ("folio", f"—{number}—", FOLIO_BOX)
+        pages.append(_scanned_page(number, [sliver, *_body(number, 320), folio, head]))
+
+    decisions = detect(DocumentStructure(pages=tuple(pages)))
+
+    for number in range(1, 5):
+        assert decisions.get((number, f"p{number}-head")) == RegionType.RUNNING_HEAD
+        assert decisions.get((number, f"p{number}-folio")) == RegionType.RUNNING_HEAD
+    assert all(
+        not line_id.endswith(("sliver", "body0", "body1", "body2")) for _, line_id in decisions
+    )
+
+
+def test_an_article_title_in_larger_type_is_not_a_head() -> None:
+    """The opening page's title repeats the recto head's words, set much larger."""
+    title_page = _scanned_page(
+        1,
+        [
+            ("byline", "ΒΑΣ. ΔΕΔΟΥΣΗ", BBox(800, 733, 300, 32)),
+            ("title", RECTO, BBox(500, 811, 1000, 93)),
+            *_body(1, 1021),
+        ],
+    )
+    pages = [title_page] + [
+        _scanned_page(n, [("head", VERSO if n % 2 == 0 else RECTO, HEAD_BOX), *_body(n, 320)])
+        for n in range(2, 6)
+    ]
+
+    decisions = detect(DocumentStructure(pages=tuple(pages)))
+
+    assert (1, "p1-title") not in decisions
+    assert decisions.get((3, "p3-head")) == RegionType.RUNNING_HEAD
+
+
+def test_heads_are_marked_on_a_multi_column_page() -> None:
+    """Columns are left unassembled, but the head above them is still a head."""
+    columns = [
+        (f"{side}{i}", f"{side} {_BODIES[(i + 4) % len(_BODIES)]}", BBox(x, 400 + 60 * i, 800, 48))
+        for side, x in (("left", 100), ("right", 1100))
+        for i in range(4)
+    ]
+    pages = [
+        _scanned_page(n, [("head", VERSO, HEAD_BOX), *(columns if n == 2 else _body(n, 320))])
+        for n in range(1, 4)
+    ]
+
+    res = DocumentAssembler().assemble(DocumentStructure(pages=tuple(pages)), _CONTEXT)
+
+    assert isinstance(res, Ok)
+    two_column = res.value.pages[1]
+    assert two_column.paragraphs == ()
+    marked = {line.id for line in two_column.lines if line.region_type == RegionType.RUNNING_HEAD}
+    assert marked == {"p2-head"}

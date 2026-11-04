@@ -302,6 +302,33 @@ def test_run_exports_the_assembled_document(tmp_path, monkeypatch) -> None:
     assert stub.exported_document is assembled
 
 
+def test_drop_running_heads_implies_structure_and_drops_them(tmp_path, monkeypatch) -> None:
+    import dataclasses
+
+    from omniocr.domain.models import DocumentStructure, RegionType
+    from omniocr.domain.result import Ok
+
+    source = tmp_path / "in.png"
+    source.write_bytes(b"fake-image")
+    head = dataclasses.replace(_line("h", "ΙΛΙΑΔΟΣ Α"), region_type=RegionType.RUNNING_HEAD)
+    assembled = DocumentStructure(pages=(_page(1, lines=(head, _line("b", "body"))),))
+    stub = _StubOrchestrator([_page(1)], Ok(b"ok"), assemble=lambda doc: Ok(assembled))
+    built_with: list[bool] = []
+
+    def build(args, exporter):
+        built_with.append(args.structure)
+        return stub
+
+    monkeypatch.setattr(cli, "_build_pipeline", build)
+    monkeypatch.setattr(cli, "_build_exporter", lambda fmt, payload: object())
+
+    code = cli.main(["run", str(source), "--out", str(tmp_path / "o.txt"), "--drop-running-heads"])
+
+    assert code == cli.EXIT_OK
+    assert built_with == [True]
+    assert [line.id for line in stub.exported_document.pages[0].lines] == ["b"]
+
+
 def test_run_fails_when_assembly_fails(tmp_path, capsys, monkeypatch) -> None:
     from omniocr.domain.errors import LayoutError
     from omniocr.domain.result import Err, Ok

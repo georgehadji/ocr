@@ -74,13 +74,6 @@ class DocumentAssembler:
 
         new_pages = []
         for page in document.pages:
-            # Every rule below assumes one column; a two-column page would be
-            # assembled into cross-column nonsense instead of just failing to
-            # assemble, so it is left as unassembled lines (plan §9).
-            if is_probably_multi_column(page.lines, page.width):
-                new_pages.append(page)
-                continue
-
             # Re-map lines with region types updated
             marked_lines = []
             for line in page.lines:
@@ -90,6 +83,14 @@ class DocumentAssembler:
                     )
                 else:
                     marked_lines.append(line)
+
+            # Every rule below assumes one column; a two-column page would be
+            # assembled into cross-column nonsense instead of just failing to
+            # assemble, so it is left as unassembled lines (plan §9). Its heads
+            # are still marked: they sit above and below the columns.
+            if is_probably_multi_column(page.lines, page.width):
+                new_pages.append(dataclasses.replace(page, lines=tuple(marked_lines)))
+                continue
 
             if not marked_lines:
                 new_pages.append(page)
