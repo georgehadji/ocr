@@ -9,6 +9,26 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Fixed — page identity and lost pages (audit remediation PR1)
+- Line ids are unique across the document (`p{page}-line-{n}`), set in one place
+  (`page_scoped_id`). Engines number lines per page, so a review edit, a
+  suggestion, a ground-truth crop or an ALTO `ID` on page 2 used to collide
+  with page 1's.
+- A page where every engine failed is reported as an `EngineError` failure
+  instead of passing as a page of empty lines.
+- One unreadable PDF page (or TIFF frame) is reported on that page; the pages
+  after it are still read. A multi-page TIFF now yields one page per frame.
+- `run()` is a fold over the same lazy path as `run_iteratively()`. With
+  `--workers K` at most `2K` pages are in flight (it used to hold the whole
+  book), `--max-pages` stops after about `N + 2K` pages, and the sequential
+  path catches any per-page error, as the parallel one did.
+
+### Removed
+- The unused checkpoint/resume machinery: `IJobStore`, `infrastructure/jobs.py`
+  (`InMemoryJobStore`, `SQLiteJobStore`, `RedisJobStore`), and the `job_store`,
+  `checkpoint_every`, `job_id` and `resume_job_id` parameters. No caller ever
+  passed a job id.
+
 ### Added
 - Headless CLI (`omniocr run`, `omniocr doctor`) with a stable exit-code
   contract (0 ok / 1 pipeline failure / 2 usage / 3 environment) and a

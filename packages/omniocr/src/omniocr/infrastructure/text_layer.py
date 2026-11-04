@@ -49,6 +49,7 @@ from omniocr.domain.models import (
     OCRBlock,
     OCRLine,
     Script,
+    page_scoped_id,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, fitz is a runtime dependency
@@ -241,7 +242,7 @@ def extract_text_layer(
             continue
         grouped.setdefault((block_no, line_no), []).append(
             OCRBlock(
-                id=f"p{page_number}-tl-w{index}",
+                id=page_scoped_id(page_number, f"tl-w{index}"),
                 text=text,
                 # Not an estimate. It records that no recognition happened, so
                 # there is no recognition error to rank. These lines never
@@ -258,7 +259,7 @@ def extract_text_layer(
     for order, blocks in enumerate(grouped.values()):
         lines.append(
             OCRLine(
-                id=f"p{page_number}-tl-l{order}",
+                id=page_scoped_id(page_number, f"tl-l{order}"),
                 text=" ".join(block.text for block in blocks),
                 confidence=Confidence(100.0),
                 bbox=_union(blocks),

@@ -100,9 +100,10 @@ the accuracy driver; Tesseract is the fast baseline and searchable-PDF box sourc
 ### Stage notes
 
 1. **Ingest** — PyMuPDF (`fitz`) streams pages at ~300 DPI as a generator; never load a
-   whole book into memory. A resumable job queue (Celery in Cloud, RQ in Server, in-process
-   worker in Desktop) processes pages in batches and checkpoints to disk so a 2000-page PDF
-   survives interruption. This is the "large PDF" requirement.
+   whole book into memory. A job queue (Celery in Cloud, RQ in Server, in-process worker in
+   Desktop) runs the pipeline, which keeps at most `2 × workers` pages in flight, so a
+   2000-page PDF runs in flat memory. A page that fails is reported on that page; the run
+   does not resume after an interruption. This is the "large PDF" requirement.
    Ingest also **gates on the PDF's own text layer** and, where that layer demonstrably
    covers the page, hands its words down instead of recognising the raster — exact text and
    exact boxes for nothing. The gate is per page rather than per document because real books

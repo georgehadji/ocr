@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Any, Iterator
 
 from omniocr.domain.errors import IngestError
-from omniocr.domain.models import OCRLine, Script
+from omniocr.domain.models import OCRLine, Script, UnreadablePage
 from omniocr.infrastructure.text_layer import extract_text_layer
 
 # Render resolution for every PDF page entering the pipeline. Tesseract and
@@ -57,50 +57,67 @@ class DocumentPageSource:
         # the lexicon checks find no entry for the line and stay silent.
         self._script = script
 
-    def stream(self, document: bytes) -> Iterator[ImagePage]:
+    def stream(self, document: bytes) -> Iterator[ImagePage | UnreadablePage]:
         if document[:4] == b"%PDF":
             yield from self._stream_pdf(document)
             return
-        yield self._image_page(document, 1)
+        yield from self._stream_image(document)
 
-    def _stream_pdf(self, document: bytes) -> Iterator[ImagePage]:
+    def _stream_pdf(self, document: bytes) -> Iterator[ImagePage | UnreadablePage]:
+        # Opening the file is one failure: nothing can be read from it. A page
+        # that fails after that is its own failure, so one bad page does not
+        # end the book.
         try:
             import fitz
 
             pdf = fitz.open(stream=document, filetype="pdf")
-            try:
-                zoom = RENDER_DPI / _PDF_POINTS_PER_INCH
-                matrix = fitz.Matrix(zoom, zoom)
-                for number, page in enumerate(pdf, start=1):
-                    # Gated while the page is already open, so this costs no
-                    # extra I/O and 9.9 ms on a page that rejects.
-                    text_lines = (
-                        extract_text_layer(page, RENDER_DPI, self._script)
-                        if self._text_layer
-                        else ()
-                    )
-                    pixmap = page.get_pixmap(matrix=matrix, alpha=False)
-                    yield ImagePage(
-                        number,
-                        pixmap.tobytes("png"),
-                        pixmap.width,
-                        pixmap.height,
-                        text_lines,
-                    )
-            finally:
-                pdf.close()
+            matrix = fitz.Matrix(
+                RENDER_DPI / _PDF_POINTS_PER_INCH, RENDER_DPI / _PDF_POINTS_PER_INCH
+            )
+            count = len(pdf)
         except Exception as exc:
             raise IngestError(f"PDF ingestion failed: {exc}") from exc
+        try:
+            for number in range(1, count + 1):
+                try:
+                    yield self._pdf_page(pdf, number, matrix)
+                except Exception as exc:
+                    yield UnreadablePage(number, f"PDF page {number} could not be read: {exc}")
+        finally:
+            pdf.close()
+
+    def _pdf_page(self, pdf: Any, number: int, matrix: Any) -> ImagePage:
+        page = pdf[number - 1]
+        # Gated while the page is already open, so this costs no extra I/O and
+        # 9.9 ms on a page that rejects.
+        text_lines = extract_text_layer(page, RENDER_DPI, self._script) if self._text_layer else ()
+        pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+        return ImagePage(number, pixmap.tobytes("png"), pixmap.width, pixmap.height, text_lines)
 
     @staticmethod
-    def _image_page(document: bytes, number: int) -> ImagePage:
+    def _stream_image(document: bytes) -> Iterator[ImagePage | UnreadablePage]:
+        """One page per frame: a multi-page TIFF is a book, not one image."""
         try:
-            from PIL import Image
+            from PIL import Image, ImageSequence
 
             image = Image.open(io.BytesIO(document))
-            return ImagePage(number, document, image.width, image.height)
+            frames = getattr(image, "n_frames", 1)
         except Exception as exc:
             raise IngestError(f"image ingestion failed: {exc}") from exc
+        if frames <= 1:
+            yield ImagePage(1, document, image.width, image.height)
+            return
+        for number, frame in enumerate(ImageSequence.Iterator(image), start=1):
+            try:
+                # shortcut: modes PNG cannot hold (CMYK, 16-bit) are read as
+                # RGB; use a wider encoder if 16-bit scans turn up.
+                if frame.mode not in ("1", "L", "P", "RGB", "RGBA"):
+                    frame = frame.convert("RGB")
+                buffer = io.BytesIO()
+                frame.save(buffer, format="PNG")
+                yield ImagePage(number, buffer.getvalue(), frame.width, frame.height)
+            except Exception as exc:
+                yield UnreadablePage(number, f"image frame {number} could not be read: {exc}")
 
 
 __all__ = ["DocumentPageSource", "ImagePage"]

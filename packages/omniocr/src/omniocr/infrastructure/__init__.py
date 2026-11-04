@@ -10,7 +10,6 @@ from omniocr.infrastructure.exporters import (
     SearchablePdfExporter,
 )
 from omniocr.infrastructure.ingest import DocumentPageSource
-from omniocr.infrastructure.jobs import InMemoryJobStore, SQLiteJobStore
 from omniocr.infrastructure.ketos_trainer import KetosTrainer
 from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
 from omniocr.infrastructure.line_cropper import PilLineCropper
@@ -40,7 +39,6 @@ __all__ = [
     "FileCorpusRepository",
     "GrayscaleProcessor",
     "InMemoryEventBus",
-    "InMemoryJobStore",
     "InMemoryModelRegistry",
     "KetosTrainer",
     "KrakenEngine",
@@ -60,7 +58,6 @@ __all__ = [
     "Settings",
     "sha256_file",
     "SqliteCorrectionStore",
-    "SQLiteJobStore",
     "TesseractEngine",
     "validate_upload",
     "verify_model_hash",

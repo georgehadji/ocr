@@ -48,7 +48,7 @@ API: http://localhost:8000/docs
 | `OMNIOCR_APP_NAME` | `"omniocr"` | App identifier for logs |
 | `OMNIOCR_MAX_WORKERS` | — | Number of threads for parallel page processing (unset = sequential) |
 | `OMNIOCR_CACHE_TTL` | — | Cache TTL in seconds for CachingEngine (unset = no TTL) |
-| `OMNIOCR_REDIS_URL` | `redis://localhost:6379/0` | Redis URL for Cloud job store |
+| `OMNIOCR_REDIS_URL` | `redis://localhost:6379/0` | Redis URL for the Cloud broker |
 
 ## Performance Tuning
 
@@ -74,18 +74,6 @@ leakage in long-running worker processes. Entries expire after `ttl` seconds:
 ```python
 from omniocr.infrastructure.resilience import CachingEngine
 cached = CachingEngine(my_engine, max_size=128, ttl=3600)
-```
-
-### Redis job store (Cloud edition)
-
-The Cloud composition root wires `RedisJobStore` for durable checkpoint persistence
-across worker restarts. Configure via `OMNIOCR_REDIS_URL`. If Redis is unreachable,
-the Cloud composition falls back to a `SQLiteJobStore` (`omniocr_cloud_jobs.db`),
-so a standalone Cloud deployment still persists checkpoints:
-
-```python
-from omniocr.infrastructure.jobs import RedisJobStore
-job_store = RedisJobStore(redis_url="redis://my-redis:6379/0")
 ```
 
 ## Common Issues

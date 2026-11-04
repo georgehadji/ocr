@@ -148,6 +148,26 @@ class PageFailure:
 
 
 @dataclass(frozen=True, slots=True)
+class UnreadablePage:
+    """A page the source could not read; it travels as data, not as an exception.
+
+    Satisfies the ``RawPage`` protocol, so one bad page in a long PDF is
+    reported as a ``PageFailure`` and the pages after it are still read.
+    """
+
+    number: int
+    error: str
+    content: bytes = b""
+    width: int = 1
+    height: int = 1
+
+
+def page_scoped_id(page_number: int, local_id: str) -> str:
+    """Line ids are unique per document: engines number lines per page."""
+    return f"p{page_number}-{local_id}"
+
+
+@dataclass(frozen=True, slots=True)
 class PipelineEvent:
     """Immutable progress event emitted after a page reaches a terminal state."""
 
