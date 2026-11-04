@@ -19,17 +19,25 @@ from omniocr.interfaces import cli
 class _StubOrchestrator:
     """Stands in for a wired pipeline so CLI tests need no OCR engine."""
 
-    def __init__(self, pages, export_result) -> None:
+    def __init__(self, pages, export_result, assemble=None) -> None:
         self._pages = pages
         self._export_result = export_result
+        self._assemble = assemble
         self.exported = False
+        self.exported_document = None
 
     def run_iteratively(self, document, context):
         for page in self._pages:
             yield (page.number, page)
 
+    def assemble(self, document, context):
+        from omniocr.domain.result import Ok
+
+        return self._assemble(document) if self._assemble else Ok(document)
+
     def export(self, document, context):
         self.exported = True
+        self.exported_document = document
         return self._export_result
 
 
@@ -266,6 +274,53 @@ def test_run_writes_output_and_reports_json(tmp_path, capsys, monkeypatch) -> No
     assert payload["pages"] == 1
     assert payload["lines"] == 1
     assert payload["failures"] == []
+
+
+def test_run_exports_the_assembled_document(tmp_path, monkeypatch) -> None:
+    """--structure is applied by the assembler; the CLI must export its result.
+
+    It used to export the raw streamed pages, so --structure did nothing:
+    no paragraphs, no joined hyphens, no running heads.
+    """
+    import dataclasses
+
+    from omniocr.domain.models import DocumentStructure
+    from omniocr.domain.result import Ok
+
+    source = tmp_path / "in.png"
+    source.write_bytes(b"fake-image")
+    assembled = DocumentStructure(pages=(dataclasses.replace(_page(1), width=999),))
+    stub = _StubOrchestrator(
+        [_page(1, lines=(_line("l1", "ok"),))], Ok(b"ok"), assemble=lambda doc: Ok(assembled)
+    )
+    monkeypatch.setattr(cli, "_build_pipeline", lambda args, exporter: stub)
+    monkeypatch.setattr(cli, "_build_exporter", lambda fmt, payload: object())
+
+    code = cli.main(["run", str(source), "--out", str(tmp_path / "out.txt"), "--structure"])
+
+    assert code == cli.EXIT_OK
+    assert stub.exported_document is assembled
+
+
+def test_run_fails_when_assembly_fails(tmp_path, capsys, monkeypatch) -> None:
+    from omniocr.domain.errors import LayoutError
+    from omniocr.domain.result import Err, Ok
+
+    source = tmp_path / "in.png"
+    source.write_bytes(b"fake-image")
+    stub = _StubOrchestrator(
+        [_page(1, lines=(_line("l1", "ok"),))],
+        Ok(b"ok"),
+        assemble=lambda doc: Err(LayoutError("no geometry")),
+    )
+    monkeypatch.setattr(cli, "_build_pipeline", lambda args, exporter: stub)
+    monkeypatch.setattr(cli, "_build_exporter", lambda fmt, payload: object())
+
+    code = cli.main(["run", str(source), "--out", str(tmp_path / "out.txt")])
+
+    assert code == cli.EXIT_FAILURE
+    assert not stub.exported
+    assert "no geometry" in capsys.readouterr().err
 
 
 def test_default_output_path_uses_input_stem() -> None:

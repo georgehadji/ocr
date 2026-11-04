@@ -41,6 +41,7 @@ from omniocr.ports.interfaces import IExporter
 
 if TYPE_CHECKING:
     from omniocr.application.metrics import RegressionBaseline
+    from omniocr.application.pipeline import PipelineOrchestrator
 
 # Exit codes. Stable contract for scripted callers — do not renumber.
 EXIT_OK = 0
@@ -395,7 +396,7 @@ def _select_kraken_model(args: argparse.Namespace, document: bytes) -> str:
     return _resolve_model(None)
 
 
-def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> Any:
+def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> PipelineOrchestrator:
     from omniocr.composition.desktop import (
         create_ensemble_pipeline,
         create_tesseract_pipeline,
@@ -623,7 +624,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print("no pages were produced from the input", file=sys.stderr)
         return EXIT_FAILURE
 
-    document = DocumentStructure(pages=tuple(pages))
+    assembled = orchestrator.assemble(DocumentStructure(pages=tuple(pages)), context)
+    if isinstance(assembled, Err):
+        print(f"structure assembly failed: {assembled.error}", file=sys.stderr)
+        return EXIT_FAILURE
+    document = assembled.value
     exported = orchestrator.export(document, context)
     if isinstance(exported, Err):
         print(f"export failed: {exported.error}", file=sys.stderr)
