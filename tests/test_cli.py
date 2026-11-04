@@ -276,6 +276,44 @@ def test_run_writes_output_and_reports_json(tmp_path, capsys, monkeypatch) -> No
     assert payload["failures"] == []
 
 
+def test_pdf_output_from_a_png_exits_before_the_pipeline_is_built(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "in.png"
+    source.write_bytes(b"\x89PNG\r\n\x1a\n fake-image")
+    built = []
+    monkeypatch.setattr(cli, "_build_pipeline", lambda args, exporter: built.append(1))
+
+    code = cli.main(["run", str(source), "--out", str(tmp_path / "out.pdf")])
+
+    assert code == cli.EXIT_ENVIRONMENT
+    assert built == []
+
+
+def test_a_failed_write_keeps_the_previous_output(tmp_path, monkeypatch) -> None:
+    from omniocr.domain.result import Ok
+
+    source = tmp_path / "in.png"
+    source.write_bytes(b"fake-image")
+    out = tmp_path / "out.txt"
+    out.write_bytes(b"previous good output")
+    stub = _StubOrchestrator([_page(1, lines=(_line("l1", "new"),))], Ok(b"new output"))
+    monkeypatch.setattr(cli, "_build_pipeline", lambda args, exporter: stub)
+    monkeypatch.setattr(cli, "_build_exporter", lambda fmt, payload: object())
+
+    def half_write(self, data):
+        with open(self, "wb") as handle:
+            handle.write(data[:3])
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_bytes", half_write)
+
+    with pytest.raises(OSError, match="disk full"):
+        cli.main(["run", str(source), "--out", str(out)])
+
+    monkeypatch.undo()
+    assert out.read_bytes() == b"previous good output"
+    assert not (tmp_path / "out.txt.part").exists()
+
+
 def test_run_exports_the_assembled_document(tmp_path, monkeypatch) -> None:
     """--structure is applied by the assembler; the CLI must export its result.
 
