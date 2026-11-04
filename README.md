@@ -138,6 +138,7 @@ omniocr run book.pdf --max-pages 5 --json
 | `--variants N` | `1` | Recognize each page from N differently binarized images and offer the word-level merge for review; each variant multiplies recognition time |
 | `--no-text-layer` | off | Recognize every PDF page, even where it has a usable embedded text layer |
 | `--structure` | off | Reconstruct paragraphs, join hyphens, mark running heads |
+| `--drop-running-heads` | off | Leave detected running heads and folios out of the export, for a reading copy (implies `--structure`) |
 | `--workers N` | `1` | Process N pages concurrently |
 | `--max-pages N` | all | Stop after N pages |
 | `--json` | off | One JSON document on stdout |

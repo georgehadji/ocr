@@ -580,6 +580,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
             print(f"--unlimited-ocr-url needs --script {names}", file=sys.stderr)
             return EXIT_USAGE
 
+    if args.drop_running_heads:
+        # Heads are only known once the structure pass has marked them.
+        args.structure = True
+
     if args.out is None:
         # No --out: land in Outputs/ under the current directory, named after
         # the input, instead of forcing every caller to compute a path.
@@ -637,6 +641,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"structure assembly failed: {assembled.error}", file=sys.stderr)
         return EXIT_FAILURE
     document = assembled.value
+    if args.drop_running_heads:
+        from omniocr.application.structure.running_heads import without_running_heads
+
+        document = without_running_heads(document)
     exported = orchestrator.export(document, context)
     if isinstance(exported, Err):
         print(f"export failed: {exported.error}", file=sys.stderr)
@@ -762,6 +770,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--structure",
         action="store_true",
         help="reconstruct paragraphs, join hyphens, and mark running heads",
+    )
+    run.add_argument(
+        "--drop-running-heads",
+        action="store_true",
+        help=(
+            "leave detected running heads and folios out of the export, for a "
+            "reading copy (implies --structure; default: keep them, marked)"
+        ),
     )
     run.add_argument(
         "--workers",

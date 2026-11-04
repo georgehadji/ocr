@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import dataclasses
 import difflib
 import re
 import unicodedata
 from typing import Mapping
 
-from omniocr.domain.models import DocumentStructure, RegionType, DocumentPage, OCRLine
+from omniocr.domain.models import (
+    DocumentPage,
+    DocumentStructure,
+    OCRLine,
+    ParagraphRole,
+    RegionType,
+)
 
 # A folio such as "— 6 —" keeps its dash-wrapped shape even when OCR misreads
 # the number ("- ΛΦ -"), and a misread number repeats on no other page.
@@ -119,3 +126,25 @@ def detect(
                     results[(page.number, line_p.id)] = RegionType.RUNNING_HEAD
 
     return results
+
+
+def without_running_heads(document: DocumentStructure) -> DocumentStructure:
+    """Drop the lines and paragraphs an assembler marked as running heads or folios.
+
+    Opt-in, for a reading copy. The heads go from ``lines`` too, so no
+    exporter falls back to them on a page left with no paragraphs; body text
+    is never touched.
+    """
+    pages = tuple(
+        dataclasses.replace(
+            page,
+            lines=tuple(line for line in page.lines if line.region_type != RegionType.RUNNING_HEAD),
+            paragraphs=tuple(
+                para
+                for para in page.paragraphs
+                if para.role not in (ParagraphRole.RUNNING_HEAD, ParagraphRole.PAGE_NUMBER)
+            ),
+        )
+        for page in document.pages
+    )
+    return dataclasses.replace(document, pages=pages)

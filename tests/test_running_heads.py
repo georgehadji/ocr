@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 
-from omniocr.application.structure.running_heads import detect, normalize_candidate
+from omniocr.application.structure.assembler import DocumentAssembler
+from omniocr.application.structure.running_heads import (
+    detect,
+    normalize_candidate,
+    without_running_heads,
+)
 from omniocr.domain.models import (
     BBox,
     Confidence,
     DocumentPage,
     DocumentStructure,
     OCRLine,
+    ParagraphRole,
     RegionType,
+    TenantContext,
 )
+from omniocr.domain.result import Ok
+
+_CONTEXT = TenantContext(organization_id="t", user_id="t", subscription_tier="desktop")
 
 
 def test_normalize_candidate_converts_digits_and_roman_numerals() -> None:
@@ -209,3 +219,18 @@ def test_repeated_footnote_citations_are_not_running_heads() -> None:
     decisions = detect(doc)
 
     assert all(not line_id.endswith("-folio") for _, line_id in decisions)
+
+
+def test_without_running_heads_keeps_only_body() -> None:
+    """A page whose paragraphs were all heads must not fall back to its head lines."""
+    doc = DocumentAssembler().assemble(
+        _book([(VERSO if n % 2 == 0 else RECTO, f"— {n} —") for n in range(6, 10)]), _CONTEXT
+    )
+    assert isinstance(doc, Ok)
+
+    reading_copy = without_running_heads(doc.value)
+
+    for page in reading_copy.pages:
+        assert [line.id for line in page.lines] == [f"p{page.number}-body"]
+        assert [para.role for para in page.paragraphs] == [ParagraphRole.BODY]
+        assert page.paragraphs[0].text == _BODIES[page.number % len(_BODIES)]
