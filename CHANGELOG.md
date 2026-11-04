@@ -9,6 +9,14 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Fixed — circuit breaker (audit remediation PR2)
+- `CircuitBreakerEngine` is now an explicit CLOSED / OPEN / HALF_OPEN state
+  machine. It used to record the open time *before* the failing call, so a hung
+  server whose call lasted `reset_timeout` (Unlimited-OCR: ten minutes) left the
+  circuit already expired and every page paid the timeout again. The time is now
+  taken after the call, and after the timeout exactly one probe is let through
+  while other workers are refused until it settles.
+
 ### Fixed — page identity and lost pages (audit remediation PR1)
 - Line ids are unique across the document (`p{page}-line-{n}`), set in one place
   (`page_scoped_id`). Engines number lines per page, so a review edit, a

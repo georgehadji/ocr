@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from enum import Enum
 from threading import Lock
 import hashlib
 from time import monotonic
@@ -34,8 +35,23 @@ class RetryingEngine(IOCREngine):
         return Err(last_error or EngineError(f"{self.name} failed"))
 
 
+class _State(Enum):
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+
 class CircuitBreakerEngine(IOCREngine):
-    """Open the circuit after repeated failures and recover after a cool-down."""
+    """Open the circuit after repeated failures and recover after a cool-down.
+
+    CLOSED passes every call through. ``failure_threshold`` failures in a row
+    open it. While OPEN, calls fail at once for ``reset_timeout`` seconds,
+    measured from when the failing call *returned*: a call that itself takes
+    ``reset_timeout`` to fail (the hung-server case this guards) must not
+    leave the circuit already expired. After that, exactly one call is let
+    through as a probe (HALF_OPEN) and the rest are refused until it settles:
+    success closes the circuit, failure re-opens it for a fresh timeout.
+    """
 
     def __init__(
         self,
@@ -54,30 +70,44 @@ class CircuitBreakerEngine(IOCREngine):
         self._reset_timeout = reset_timeout
         self._clock = clock
         self._failures = 0
-        self._opened_at: float | None = None
+        self._state = _State.CLOSED
+        self._opened_at = 0.0
         self._lock = Lock()
 
     def extract(
         self, page: RawPage, context: TenantContext
     ) -> Result[Sequence[OCRBlock], EngineError]:
-        now = self._clock()
         with self._lock:
-            if self._opened_at is not None:
-                if now - self._opened_at < self._reset_timeout:
+            if self._state is _State.HALF_OPEN:
+                return Err(EngineError(f"{self.name} circuit is open"))
+            if self._state is _State.OPEN:
+                if self._clock() - self._opened_at < self._reset_timeout:
                     return Err(EngineError(f"{self.name} circuit is open"))
-                self._opened_at = None
+                self._state = _State.HALF_OPEN  # this caller is the one probe
 
-        result = self.engine.extract(page, context)
-        with self._lock:
-            if isinstance(result, Ok):
+        try:
+            result = self.engine.extract(page, context)
+        except BaseException:
+            # A probe that raises must not leave the circuit stuck half-open.
+            self._record_failure()
+            raise
+        if isinstance(result, Ok):
+            with self._lock:
                 self._failures = 0
-                return Ok(tuple(result.value))
+                self._state = _State.CLOSED
+            return Ok(tuple(result.value))
 
-            assert isinstance(result, Err)
-            self._failures += 1
-            if self._failures >= self._failure_threshold:
-                self._opened_at = now
+        assert isinstance(result, Err)
+        self._record_failure()
         return Err(result.error)
+
+    def _record_failure(self) -> None:
+        with self._lock:
+            self._failures += 1
+            if self._state is _State.HALF_OPEN or self._failures >= self._failure_threshold:
+                self._state = _State.OPEN
+                # After the call: it may have taken as long as the timeout.
+                self._opened_at = self._clock()
 
 
 class CachingEngine(IOCREngine):
