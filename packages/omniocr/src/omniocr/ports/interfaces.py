@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
 from typing import Iterator, Mapping, Protocol, Sequence
 
@@ -156,7 +157,31 @@ class IDocumentAssembler(Protocol):
     ) -> Result[DocumentStructure, LayoutError]: ...
 
 
+class JobState(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    # The queue has no record of the job: never submitted, or past its TTL.
+    NOT_FOUND = "not_found"
+
+
+class IJobQueue(Protocol):
+    """Where an edition's API hands a stored upload to its OCR worker.
+
+    The queue carries the *path* of the upload, never its bytes. State comes
+    from the queue's own backend, so any number of API processes agree on it.
+    Both methods raise ``QueueError`` when the broker is unreachable.
+    """
+
+    def submit(self, job_id: str, upload: Path, filename: str, tenant: str) -> None: ...
+
+    def state(self, job_id: str) -> JobState: ...
+
+
 __all__ = [
+    "IJobQueue",
+    "JobState",
     "ICorrectionStore",
     "ICorpusRepository",
     "IEvaluator",

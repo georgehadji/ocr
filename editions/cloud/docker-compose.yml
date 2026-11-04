@@ -1,13 +1,24 @@
+# Set before `docker compose up`:
+#   REDIS_PASSWORD   password for the queue (Redis is not published to the host)
+#   OMNIOCR_API_KEYS  "key:tenant,key:tenant" - requests without a listed key get 401
+x-omniocr-env: &omniocr-env
+  OMNIOCR_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+  OMNIOCR_API_KEYS: ${OMNIOCR_API_KEYS:?set OMNIOCR_API_KEYS}
+  OMNIOCR_UPLOAD_DIR: /data/uploads
+  OMNIOCR_RESULT_DIR: /data/results
+
 services:
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD}"]
+    # No `ports:` - only the api and worker reach it, over the compose network.
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 5
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
 
   worker:
     build:
@@ -18,10 +29,8 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ../../:/app
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - omniocr-data:/data
+    environment: *omniocr-env
 
   api:
     build:
@@ -31,9 +40,11 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     volumes:
-      - ../../:/app
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - omniocr-data:/data
+    environment: *omniocr-env
+
+volumes:
+  omniocr-data:

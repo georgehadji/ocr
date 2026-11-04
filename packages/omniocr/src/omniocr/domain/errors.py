@@ -21,6 +21,10 @@ class ExportError(PipelineError):
     pass
 
 
+class QueueError(PipelineError):
+    """The job queue could not take, or report on, a job (broker unreachable)."""
+
+
 class TrainingError(PipelineError):
     """Base class for training pipeline errors."""
 

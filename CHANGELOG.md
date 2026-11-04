@@ -9,6 +9,28 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Fixed — server and cloud editions (audit remediation PR7)
+
+- **[6], [7]** Job state comes from the queue (`IJobQueue`: `RqJobQueue`,
+  `CeleryJobQueue`), not an in-process `_jobs` dict, so the APIs no longer need
+  a single uvicorn worker. RQ jobs get a 6 h timeout (default was 180 s) and a
+  7-day result TTL. The worker writes `<job>.md` atomically; the API serves it
+  once the queue says DONE.
+- **[8]** The upload is validated once, at submit, against its real filename.
+  The worker's hard-coded `"upload.pdf"` re-check is gone, so PNG uploads work.
+- **[12]** `job_id` is always server-generated. Every route needs
+  `Authorization: Bearer <key>` (`OMNIOCR_API_KEYS`, constant-time compare); a
+  job is visible only to its tenant. CORS and trusted hosts default to
+  same-origin and `localhost`. Redis is no longer published or open.
+- **[S5]** A Redis/broker outage at submit is a 503 and removes the stored upload.
+- **[S6]** Handlers are plain `def`; uploads stream to disk with the byte limit
+  enforced while copying (413), and the queue carries the path, not the bytes.
+- **[S7]** The cloud image installs Tesseract with `ell` and `grc`, installs the
+  package non-editable, and runs as a non-root user. CI builds it and checks
+  the language packs.
+- The Celery broker now follows `OMNIOCR_REDIS_URL` (it was hard-coded to
+  localhost, ignoring the compose env), and the unused `max_retries` is gone.
+
 ### Fixed — export and CLI (audit remediation PR6)
 
 - **[17]** Searchable PDF text lands inside its box on `/Rotate` 90/180/270

@@ -8,25 +8,27 @@ than assumed.
 
 from __future__ import annotations
 
-import base64
 import inspect
-import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-# --------------------------------------------------------------- cloud tasks
+from editions.common.worker import queue_id, result_path, run_job
+from omniocr.domain.errors import ExportError
+from omniocr.domain.models import DocumentStructure, TenantContext
+from omniocr.domain.result import Err, Ok
+from omniocr.infrastructure.config import Settings
+
+CONTEXT = TenantContext("tenant-a", "worker", "server")
 
 
-def test_celery_task_takes_base64_not_raw_bytes() -> None:
-    """The Celery app sets ``task_serializer="json"``.
+# --------------------------------------------------------------- task signatures
 
-    Enqueuing raw ``bytes`` raises ``EncodeError`` in the *submitting* process,
-    so every Cloud submit failed the moment Celery was importable — the worker
-    never saw a job. The payload parameter must be a ``str``.
-    """
+
+def test_celery_task_takes_a_path_not_the_document() -> None:
+    """The queue carries the stored upload's path. Base64 of a 2 GB book in the
+    broker message was the alternative, and the API had read it all into memory."""
     pytest.importorskip("celery")
     from editions.cloud.tasks import process_ocr
 
@@ -34,106 +36,110 @@ def test_celery_task_takes_base64_not_raw_bytes() -> None:
         p for p in inspect.signature(process_ocr.run).parameters.values() if p.name != "self"
     ]
 
-    assert [p.name for p in parameters] == ["document_b64"]
-    assert parameters[0].annotation in (str, "str")
-
-
-def test_celery_task_takes_no_settings_argument() -> None:
-    """``settings_json`` was never read, and both callers passed a live
-    ``Settings`` dataclass into it — which the JSON serializer also rejects.
-    The worker's own environment is the authority on how it runs."""
-    pytest.importorskip("celery")
-    from editions.cloud.tasks import process_ocr
-
+    assert [p.name for p in parameters] == ["job_id", "upload", "tenant"]
     assert "settings_json" not in inspect.signature(process_ocr.run).parameters
 
 
-def test_celery_payload_round_trips_through_json() -> None:
-    """The whole point of base64: the argument must survive JSON encoding."""
-    document = b"\x89PNG\r\n\x1a\n\xff\xfe binary payload"
-    encoded = base64.b64encode(document).decode("ascii")
+def test_celery_task_keeps_its_limit_below_the_broker_redelivery_timeout() -> None:
+    """With acks_late a task still running past visibility_timeout is redelivered
+    to a second worker, so a long book would be read twice."""
+    pytest.importorskip("celery")
+    from editions.cloud.celery_app import app
 
-    assert base64.b64decode(json.loads(json.dumps(encoded))) == document
+    visibility = app.conf.broker_transport_options["visibility_timeout"]
 
-    with pytest.raises(TypeError):
-        json.dumps(document)  # the original defect, pinned
-
-
-# ------------------------------------------------------------- server worker
+    assert app.conf.task_time_limit < visibility
 
 
-def test_run_ocr_job_takes_only_the_document() -> None:
-    """``run_ocr_job(job_data, settings_json)`` declared a ``str`` parameter it
-    never read, and both call sites passed a ``Settings`` object into it."""
+def test_run_ocr_job_takes_the_stored_upload_not_bytes() -> None:
     from editions.server.composition import run_ocr_job
 
-    assert list(inspect.signature(run_ocr_job).parameters) == ["job_data"]
+    assert list(inspect.signature(run_ocr_job).parameters) == ["job_id", "upload", "tenant"]
 
 
-# -------------------------------------------------------------- cloud routes
+# ------------------------------------------------------------------- run_job
 
 
-def _cloud_client() -> tuple[Any, Any]:
-    pytest.importorskip("fastapi")
-    from fastapi.testclient import TestClient
+class _Pipeline:
+    def __init__(self, run_result: Any = None, export_result: Any = None) -> None:
+        self._run = run_result or Ok(DocumentStructure(pages=()))
+        self._export = export_result or Ok(b"# done")
 
-    from editions.cloud import main
+    def run(self, data: bytes, context: TenantContext) -> Any:
+        return self._run
 
-    main._jobs.clear()
-    return TestClient(main.app), main
-
-
-def test_status_does_not_report_an_unrelated_jobs_state() -> None:
-    """The Celery lookup ran only when the job was *absent*, then picked
-    ``next(j["task_id"] for j in _jobs.values())`` — an arbitrary *other* job —
-    and returned a stranger's status under this job's id."""
-    client, main = _cloud_client()
-    main._jobs["default:mine"] = {"status": "completed", "filename": "mine.pdf"}
-    main._jobs["default:theirs"] = {"status": "queued", "task_id": "celery-task-of-theirs"}
-
-    payload = client.get("/ocr/status/mine").json()
-
-    assert payload["job_id"] == "mine"
-    assert payload["status"] == "completed"
-    assert "celery-task-of-theirs" not in str(payload)
+    def export(self, document: object, context: TenantContext) -> Any:
+        return self._export
 
 
-def test_status_404s_for_an_unknown_job() -> None:
-    client, _ = _cloud_client()
+def test_run_job_writes_the_result_whole_and_deletes_the_upload(tmp_path: Path) -> None:
+    upload = tmp_path / "in.png"
+    upload.write_bytes(b"png")
+    out = tmp_path / "results" / "job.md"
 
-    assert client.get("/ocr/status/nope").status_code == 404
+    run_job(upload, out, _Pipeline(), CONTEXT)  # type: ignore[arg-type]
+
+    assert out.read_bytes() == b"# done"
+    assert not upload.exists()
+    assert not (tmp_path / "results" / "job.md.part").exists()
 
 
-def test_failed_export_is_reported_as_failed_not_completed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A failed export substituted ``b""``, wrote an empty ``.md``, and still
-    reported "completed" — the caller downloaded an empty file believing the
-    run had worked."""
-    client, main = _cloud_client()
+def test_a_failed_export_raises_and_leaves_no_result(tmp_path: Path) -> None:
+    """A failed export used to become an empty .md reported as completed."""
+    upload = tmp_path / "in.png"
+    upload.write_bytes(b"png")
+    out = tmp_path / "job.md"
+    pipeline = _Pipeline(export_result=Err(ExportError("disk full")))
 
-    from omniocr.domain.errors import ExportError
-    from omniocr.domain.models import DocumentStructure
-    from omniocr.domain.result import Err, Ok
+    with pytest.raises(RuntimeError, match="disk full"):
+        run_job(upload, out, pipeline, CONTEXT)  # type: ignore[arg-type]
 
-    class _ExportFailsPipeline:
-        def run(self, data: bytes, ctx: object) -> Any:
-            return Ok(DocumentStructure(pages=()))
+    assert not out.exists()
+    assert not upload.exists(), "the upload is deleted even when the run fails"
 
-        def export(self, document: object, ctx: object) -> Any:
-            return Err(ExportError("disk full"))
 
-    # Force the synchronous fallback, then fail the export inside it.
-    monkeypatch.setitem(sys.modules, "editions.cloud.tasks", None)
-    monkeypatch.setattr(
-        "editions.cloud.composition.create_cloud_pipeline",
-        lambda settings=None: _ExportFailsPipeline(),
-    )
-    monkeypatch.chdir(tmp_path)
+def test_a_failed_run_raises(tmp_path: Path) -> None:
+    upload = tmp_path / "in.png"
+    upload.write_bytes(b"png")
+    pipeline = _Pipeline(run_result=Err(ExportError("no engine")))
 
-    response = client.post(
-        "/ocr/submit", files={"file": ("a.pdf", b"%PDF-1.4 fake", "application/pdf")}
-    )
+    with pytest.raises(RuntimeError, match="no engine"):
+        run_job(upload, tmp_path / "job.md", pipeline, CONTEXT)  # type: ignore[arg-type]
 
-    assert response.json()["status"] == "failed"
-    assert not (tmp_path / "cloud_results").exists()
+
+def test_queue_ids_differ_per_tenant_for_the_same_job() -> None:
+    job_id = "a" * 32
+
+    assert queue_id("tenant-a", job_id) != queue_id("tenant-b", job_id)
+    assert queue_id("tenant-a", job_id) == queue_id("tenant-a", job_id)
+
+
+def test_result_paths_follow_the_queue_id(tmp_path: Path) -> None:
+    settings = Settings(result_dir=tmp_path)
+
+    assert result_path(settings, "x") == tmp_path / "x.md"
+
+
+# ------------------------------------------------------------------- settings
+
+
+def test_api_keys_parse_as_key_tenant_pairs() -> None:
+    settings = Settings.from_env({"OMNIOCR_API_KEYS": "k1:acme, k2:globex"})
+
+    assert settings.api_keys == (("k1", "acme"), ("k2", "globex"))
+    assert "k1" not in repr(settings)
+
+
+def test_a_malformed_api_key_entry_is_rejected() -> None:
+    with pytest.raises(ValueError, match="key:tenant"):
+        Settings.from_env({"OMNIOCR_API_KEYS": "no-tenant"})
+
+
+def test_the_edition_defaults_are_same_origin_and_localhost() -> None:
+    settings = Settings.from_env({})
+
+    assert settings.cors_origins == ()
+    assert settings.allowed_hosts == ("localhost", "127.0.0.1")
+    assert settings.api_keys == (), "no keys configured means no access"
+    assert settings.job_timeout_s == 6 * 3600
+    assert settings.result_ttl_s == 7 * 24 * 3600
