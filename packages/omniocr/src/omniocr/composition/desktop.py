@@ -115,6 +115,11 @@ def _default_image_processor() -> ChainProcessor:
 
     Despeckle is a 14.8% relative CER improvement and wins every page.
 
+    These absolute figures predate the 2026-11-03 fix to the
+    ``polytonic-scan-1`` reference, which was missing two lines; current
+    numbers are in ``docs/ENGINE_ACCURACY.md``. The comparison between
+    chains was not re-run.
+
     Deskew is deliberately *not* here despite being the more obvious stage.
     It made things worse: these three pages are already square, so the
     estimator buys an interpolation pass and a slightly wrong angle for

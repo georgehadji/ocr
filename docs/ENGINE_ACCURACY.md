@@ -259,10 +259,42 @@ Pontian, critical-edition apparatus) have no scan-tier fixture at all, and all
 three that exist come from one book by one publisher. `docs/ENHANCEMENT_PLAN.md`
 A1 sizes the real corpus at 115 pages.
 
+## Update, 2026-11-03: `polytonic-scan-1` ground truth was missing two lines
+
+The transcription jumped from "…πραγματικότητα." straight to "Τοῦτο
+φαίνεται…", dropping two printed lines ("Τὸ βυζαντινὸ κράτος … διά-/σωσή
+του."). Every engine that read them was charged for text the reference did
+not contain, so every scan-1 number above is pessimistic. Restored from a
+full-resolution crop of the page, not from engine output.
+
+Re-measured against the corrected reference. Tesseract is `grc` from
+`tessdata_fast` through `_default_image_processor()` — the variant that
+reproduces every other committed baseline exactly; `tessdata` and
+`tessdata_best` do not. Kraken is the manifest default, 7.1.1 on CUDA, fed raw
+fixture bytes as `test_kraken_beats_tesseract_on_the_scan_corpus` feeds it.
+
+| Fixture | Kraken CER | Tesseract CER | Kraken WER | Tesseract WER |
+|---|---|---|---|---|
+| `polytonic-scan-1` | **0.0499** | 0.0761 | **0.2021** | 0.3200 |
+| `polytonic-scan-2` | 0.1775 | **0.1653** | 0.4509 | **0.4062** |
+| `polytonic-scan-3` | **0.0629** | 0.0828 | **0.2562** | 0.3264 |
+| **mean** | **0.0968** | 0.1081 | **0.3031** | 0.3509 |
+
+Tesseract moved only on scan-1 (0.1191 → 0.0761), as a reference fix should.
+Kraken also moved on scan-2 and scan-3, whose references did not change
+(0.1940 → 0.1775, 0.0780 → 0.0629), so part of its shift is the setup — Kraken
+version, device, or input path — not the fix. That is not separated here.
+The conclusion is unchanged: Kraken wins the corpus and loses scan-2.
+
 ## Reproducing
 
 Kraken runs at roughly 60–90 s per page per model on CPU, so all three models
 plus Tesseract take about 5 minutes for one page.
+
+Tesseract baselines need the `grc` and `ell` packs from
+[`tessdata_fast`](https://github.com/tesseract-ocr/tessdata_fast). The
+standard `tessdata` and `tessdata_best` packs are different models and do not
+reproduce `tests/corpus/engine_baselines.json`.
 
 ```bash
 python -m omniocr.interfaces.cli run "PDFs for OCR/Πολυχρονιάδης Δεδούσης 2.0.pdf" --max-pages 1 --engine kraken --json
