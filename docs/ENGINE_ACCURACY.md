@@ -286,6 +286,53 @@ Kraken also moved on scan-2 and scan-3, whose references did not change
 version, device, or input path — not the fix. That is not separated here.
 The conclusion is unchanged: Kraken wins the corpus and loses scan-2.
 
+## Update, 2026-11-04: Unlimited-OCR-2 as an opt-in voter
+
+[`baidu/Unlimited-OCR-2`](https://huggingface.co/baidu/Unlimited-OCR-2), a
+dedicated document-OCR VLM, was run on the three scan fixtures through the
+model's own `model.infer` (bf16, one 8 GB laptop GPU, ~140–175 s and 7.4 GB peak
+VRAM per page). Its block markup was stripped to plain text and scored with
+`omniocr.application.metrics` against the corrected references, beside the
+Kraken and Tesseract numbers from the table above.
+
+| Fixture | Unlimited-OCR-2 CER | Kraken CER | Tesseract CER | Unlimited-OCR-2 WER |
+|---|---|---|---|---|
+| `polytonic-scan-1` | 0.0541 | **0.0499** | 0.0761 | 0.2084 |
+| `polytonic-scan-2` | **0.0801** | 0.1775 | 0.1653 | 0.3013 |
+| `polytonic-scan-3` | 0.0684 | **0.0629** | 0.0828 | 0.2893 |
+| **mean** | **0.0675** | 0.0968 | 0.1081 | **0.2663** |
+
+It has the best mean, mostly by not collapsing on scan-2, the page where both
+box-grounded engines fail. It hallucinated no text. But its errors include
+diacritic swaps that change meaning (`ἡ` read as `ἢ`), and it gives no
+per-character confidence, so it is wired as one more voter, never as the
+source (CLAUDE.md rule 1):
+
+- **Opt-in.** `omniocr run … --unlimited-ocr-url http://host:30000/v1` adds it
+  for the polytonic, ancient and Byzantine scripts on the `kraken` and
+  `ensemble` engines. `--engine tesseract` rejects the flag. The model is
+  served separately behind an OpenAI-compatible endpoint (e.g. SGLang); the
+  adapter imports no torch.
+- **Zero confidence.** Its line blocks lose every confidence-weighted choice
+  and reach the output mostly as aligned merge suggestions for the reviewer.
+  On scan-1 it gave a candidate on 49 of 50 lines.
+- **Guarded by a circuit breaker, not retried.** A failure (usually a
+  600 s timeout) skips the engine for one timeout's length instead of
+  resubmitting the page.
+
+**End to end, 2026-11-04.** The real `UnlimitedOCREngine.extract` was then
+driven over HTTP against a minimal OpenAI-compatible server wrapping the same
+`model.infer` (SGLang itself is Linux-only). The adapter's request (prompt
+`"Multi page parsing."`, `max_tokens` 8192) and parser reproduced the scores
+above exactly, 0.0541 / 0.0801 / 0.0684 CER. Each page returned its blocks
+in 95–136 s with `finish_reason` `stop` at ~1,800–1,900 tokens, and every box
+fell inside the page.
+
+Limits: not yet run through SGLang, whose chat template and image
+preprocessing may differ from `model.infer`. The fixtures are 2008×2835 px,
+under the 3508 px cap, so no downscaling took place. Three pages of one
+book, as above.
+
 ## Reproducing
 
 Kraken runs at roughly 60–90 s per page per model on CPU, so all three models
