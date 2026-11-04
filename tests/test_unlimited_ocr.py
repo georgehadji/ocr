@@ -7,8 +7,17 @@ is tested against the format the model actually emits, typos included.
 
 from __future__ import annotations
 
+import unicodedata
+from pathlib import Path
+
+import pytest
+
 from omniocr.composition.desktop import create_ensemble_pipeline
-from omniocr.infrastructure.unlimited_ocr import UnlimitedOCREngine
+from omniocr.domain.models import Script, TenantContext
+from omniocr.domain.result import Err
+from omniocr.infrastructure.resilience import CircuitBreakerEngine
+from omniocr.infrastructure.unlimited_ocr import DEFAULT_MAX_EDGE_PX, UnlimitedOCREngine
+from omniocr.interfaces import cli
 
 RAW = (
     "<PAGE><BLOCK>header[240, 52, 730, 62]<FORK>ΤΑ ΒΥΖΑΝΤΙΝΑ ΜΝΗΜΕΙΑ ΤΗΣ ΘΕΣΕΑΛΟΝΙΚΗΣ\n"
@@ -69,12 +78,77 @@ def test_image_blocks_and_markup_are_dropped() -> None:
     assert blocks[-1].text == "Α Β"
 
 
-def test_unparseable_output_yields_no_blocks() -> None:
-    """No full-page fallback: one box over every word would mis-assign them all."""
+@pytest.mark.parametrize(
+    "data",
+    [_response("plain text, no blocks"), _response(None), {}],
+    ids=["no-blocks", "null-content", "no-choices"],
+)
+def test_unparseable_output_is_an_engine_failure(data: object) -> None:
+    """A wrong prompt or chat reply must surface as Err, not as a blank page.
+
+    No full-page fallback either: one box over every word would mis-assign
+    them all.
+    """
+    with pytest.raises(ValueError):
+        _engine()._parse_response(data, 100, 100)
+
+
+def test_empty_page_is_not_a_failure() -> None:
+    assert _engine()._parse_response(_response("<PAGE>"), 100, 100) == []
+
+
+def test_extract_turns_unparseable_output_into_err(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _engine()
-    assert engine._parse_response(_response("plain text, no blocks"), 100, 100) == []
-    assert engine._parse_response(_response(None), 100, 100) == []
-    assert engine._parse_response({}, 100, 100) == []
+    monkeypatch.setattr(engine, "_call_api", lambda _: _response("Sorry, I can't help."))
+
+    class _Page:
+        number = 1
+        content = b""
+        width = 100
+        height = 100
+
+    assert isinstance(engine.extract(_Page(), TenantContext("t", "u", "desktop")), Err)
+
+
+def test_editorial_angle_brackets_are_kept() -> None:
+    """Critical editions print supplements as ``<καὶ>``; they are text, not markup."""
+    raw = "<PAGE><BLOCK>text[0, 0, 1000, 100]<FORK>τοῦ <καὶ> λόγου<|im_end|></PAGE>"
+    [block] = _engine()._parse_response(_response(raw), 1000, 1000)
+    assert block.text == "τοῦ <καὶ> λόγου"
+
+
+def test_truncated_output_drops_the_cut_off_block() -> None:
+    data = {"choices": [{"message": {"content": RAW}, "finish_reason": "length"}]}
+    blocks = _engine()._parse_response(data, 2000, 3000)
+    assert blocks[-1].text == "κούσματα."
+
+
+def test_text_is_nfc_normalized() -> None:
+    decomposed = unicodedata.normalize("NFD", "ἢ")
+    raw = f"<BLOCK>text[0, 0, 1000, 100]<FORK>{decomposed}"
+    [block] = _engine()._parse_response(_response(raw), 1000, 1000)
+    assert block.text == "ἢ"
+
+
+def test_hyphenated_labels_and_float_coords_parse() -> None:
+    raw = "<BLOCK>section-header[100.4, 0, 500.6, 100]<FORK>ΚΕΦΑΛΑΙΟΝ"
+    [block] = _engine()._parse_response(_response(raw), 1000, 1000)
+    assert (block.text, block.bbox.x, block.bbox.w) == ("ΚΕΦΑΛΑΙΟΝ", 100, 401)
+
+
+def test_inverted_and_out_of_range_boxes_are_ordered_and_clamped() -> None:
+    raw = "<BLOCK>text[819, 139, 127, 1004]<FORK>α"
+    [block] = _engine()._parse_response(_response(raw), 1000, 1000)
+    assert (block.bbox.x, block.bbox.y, block.bbox.right, block.bbox.bottom) == (
+        127,
+        139,
+        819,
+        1000,
+    )
+
+
+def test_pages_are_sent_at_ingest_resolution() -> None:
+    assert _engine()._max_edge_px == DEFAULT_MAX_EDGE_PX == 3508
 
 
 def test_ensemble_adds_unlimited_ocr_only_when_url_given() -> None:
@@ -91,3 +165,24 @@ def test_ensemble_adds_unlimited_ocr_only_when_url_given() -> None:
 
     assert "unlimited_ocr" not in names(without)
     assert "unlimited_ocr" in names(with_url)
+
+
+def test_ensemble_guards_unlimited_ocr_with_a_breaker_not_retries() -> None:
+    pipeline = create_ensemble_pipeline(
+        tesseract_language="grc",
+        kraken_model_path="x.mlmodel",
+        unlimited_ocr_url="http://localhost:30000/v1",
+    )
+    by_script = pipeline._router._by_script  # type: ignore[attr-defined]
+    [engine] = [e for e in by_script[Script.POLYTONIC] if e.name == "unlimited_ocr"]
+    assert isinstance(engine, CircuitBreakerEngine)
+    assert isinstance(engine.engine, UnlimitedOCREngine)
+
+
+def test_cli_rejects_unlimited_ocr_with_tesseract(tmp_path: Path) -> None:
+    source = tmp_path / "page.png"
+    source.write_bytes(b"")
+    code = cli.main(
+        ["run", str(source), "--engine", "tesseract", "--unlimited-ocr-url", "http://x/v1"]
+    )
+    assert code == cli.EXIT_USAGE

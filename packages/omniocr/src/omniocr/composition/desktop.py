@@ -16,7 +16,7 @@ from omniocr.infrastructure.preprocess import (
     OtsuProcessor,
     SauvolaProcessor,
 )
-from omniocr.infrastructure.resilience import RetryingEngine
+from omniocr.infrastructure.resilience import CircuitBreakerEngine, RetryingEngine
 from omniocr.application.reconcile import (
     AlignedReconciler,
     ConfidenceWeightedReconciler,
@@ -38,7 +38,6 @@ from omniocr.infrastructure.vlm import DEFAULT_API_URL as DEFAULT_VLM_API_URL
 from omniocr.infrastructure.vlm import DEFAULT_MAX_EDGE_PX as DEFAULT_VLM_MAX_EDGE_PX
 from omniocr.infrastructure.vlm import DEFAULT_MODEL as DEFAULT_VLM_MODEL
 from omniocr.infrastructure.unlimited_ocr import DEFAULT_MODEL as DEFAULT_UNLIMITED_OCR_MODEL
-from omniocr.infrastructure.unlimited_ocr import UnlimitedOCREngine
 
 # VLM and Calamari are optional extras; import failures gracefully disable them.
 try:
@@ -49,6 +48,7 @@ except ImportError:
     _CALAMARI_AVAILABLE = False
 
 try:
+    from omniocr.infrastructure.unlimited_ocr import UnlimitedOCREngine
     from omniocr.infrastructure.vlm import VLMEngine  # noqa: F811
 
     _VLM_AVAILABLE = True
@@ -192,6 +192,11 @@ def create_ensemble_pipeline(
     voter. When ``calamari_model_glob``
     is provided, a Calamari subprocess engine is added as a voting booster.
     Both are wrapped in ``RetryingEngine`` for transient-failure resilience.
+    Unlimited-OCR is not retried: its failures are mostly ten-minute timeouts
+    from a busy or dead GPU server, so a retry doubles the stall and resubmits
+    a job the server may still be running. A circuit breaker instead skips it
+    for one timeout's length after a failure, so a dead server costs one
+    timeout per window rather than two per page.
     """
     tesseract = RetryingEngine(TesseractEngine(tesseract_language))
     kraken = RetryingEngine(KrakenEngine(kraken_model_path))
@@ -214,11 +219,13 @@ def create_ensemble_pipeline(
             by_script[script_key] = (*by_script[script_key], retrying_vlm)
 
     if unlimited_ocr_url is not None:
-        retrying_unlimited = RetryingEngine(
-            UnlimitedOCREngine(api_url=unlimited_ocr_url, model=unlimited_ocr_model)
+        guarded_unlimited = CircuitBreakerEngine(
+            UnlimitedOCREngine(api_url=unlimited_ocr_url, model=unlimited_ocr_model),
+            failure_threshold=1,
+            reset_timeout=UnlimitedOCREngine.timeout_s,
         )
         for script_key in (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC):
-            by_script[script_key] = (*by_script[script_key], retrying_unlimited)
+            by_script[script_key] = (*by_script[script_key], guarded_unlimited)
 
     if calamari_model_glob is not None:
         calamari = CalamariEngine(model_glob=calamari_model_glob)
@@ -236,7 +243,7 @@ def create_ensemble_pipeline(
     if vlm_api_key is not None:
         engine_map[VLMEngine.name] = retrying_vlm
     if unlimited_ocr_url is not None:
-        engine_map[UnlimitedOCREngine.name] = retrying_unlimited
+        engine_map[UnlimitedOCREngine.name] = guarded_unlimited
     if calamari_model_glob is not None:
         engine_map[CalamariEngine.name] = retrying_calamari
 
