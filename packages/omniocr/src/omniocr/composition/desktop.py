@@ -195,7 +195,8 @@ def create_ensemble_pipeline(
     OpenAI-compatible endpoint joins the same scripts as a further opt-in
     voter. When ``calamari_model_glob``
     is provided, a Calamari subprocess engine is added as a voting booster.
-    Both are wrapped in ``RetryingEngine`` for transient-failure resilience.
+    The VLM and Calamari are wrapped in ``RetryingEngine`` for transient-failure
+    resilience.
     Unlimited-OCR is not retried: its failures are mostly ten-minute timeouts
     from a busy or dead GPU server, so a retry doubles the stall and resubmits
     a job the server may still be running. A circuit breaker instead skips it
