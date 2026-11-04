@@ -56,6 +56,126 @@ def test_circuit_breaker_opens_and_allows_a_half_open_recovery() -> None:
     assert engine.calls == 3
 
 
+def test_circuit_stays_open_after_a_call_that_took_the_whole_timeout() -> None:
+    """The hung-server case: the failing call itself lasts ``reset_timeout``.
+
+    The open time is taken when the call returns, not when it started, or the
+    circuit would be expired the instant it opened and every page would pay
+    the full timeout again.
+    """
+    now = [0.0]
+    context = TenantContext("o", "u", "d")
+
+    class Hangs:
+        name = "hangs"
+        calls = 0
+
+        def extract(self, page, context):
+            Hangs.calls += 1
+            now[0] += 5.0  # the call blocks for the whole timeout, then fails
+            return Err(EngineError("timed out"))
+
+    breaker = CircuitBreakerEngine(
+        Hangs(), failure_threshold=1, reset_timeout=5, clock=lambda: now[0]
+    )
+
+    assert breaker.extract(None, context).is_err()
+    assert "circuit is open" in str(breaker.extract(None, context).error)
+    assert Hangs.calls == 1
+
+
+def test_only_one_probe_runs_while_half_open() -> None:
+    import threading
+
+    now = [0.0]
+    context = TenantContext("o", "u", "d")
+    entered = threading.Event()
+    release = threading.Event()
+
+    class Recovering:
+        name = "recovering"
+        calls = 0
+        healthy = False
+
+        def extract(self, page, context):
+            Recovering.calls += 1
+            if not Recovering.healthy:
+                return Err(EngineError("down"))
+            entered.set()
+            release.wait(5)
+            return Ok(())
+
+    engine = Recovering()
+    breaker = CircuitBreakerEngine(
+        engine, failure_threshold=1, reset_timeout=5, clock=lambda: now[0]
+    )
+    assert breaker.extract(None, context).is_err()  # opens
+    now[0] = 5.0
+    Recovering.healthy = True
+
+    probe = threading.Thread(target=lambda: breaker.extract(None, context))
+    probe.start()
+    assert entered.wait(5)
+
+    # The probe is still running: everyone else is refused without a call.
+    assert "circuit is open" in str(breaker.extract(None, context).error)
+    assert Recovering.calls == 2
+
+    release.set()
+    probe.join(5)
+
+    assert breaker.extract(None, context).is_ok()  # the probe closed the circuit
+    assert Recovering.calls == 3
+
+
+def test_a_failed_probe_reopens_for_a_fresh_timeout() -> None:
+    now = [0.0]
+    engine = AlwaysFailEngine()
+    breaker = CircuitBreakerEngine(
+        engine, failure_threshold=3, reset_timeout=5, clock=lambda: now[0]
+    )
+    context = TenantContext("o", "u", "d")
+    for _ in range(3):
+        breaker.extract(None, context)
+    now[0] = 5.0
+
+    assert breaker.extract(None, context).is_err()  # the probe fails: one failure is enough
+    now[0] = 9.0
+
+    assert "circuit is open" in str(breaker.extract(None, context).error)
+    assert engine.calls == 4
+
+
+def test_a_probe_that_raises_does_not_leave_the_circuit_stuck() -> None:
+    import pytest
+
+    now = [0.0]
+    context = TenantContext("o", "u", "d")
+
+    class Raises:
+        name = "raises"
+        calls = 0
+
+        def extract(self, page, context):
+            Raises.calls += 1
+            if Raises.calls == 1:
+                return Err(EngineError("down"))
+            if Raises.calls == 2:
+                raise RuntimeError("boom")
+            return Ok(())
+
+    breaker = CircuitBreakerEngine(
+        Raises(), failure_threshold=1, reset_timeout=5, clock=lambda: now[0]
+    )
+    breaker.extract(None, context)
+    now[0] = 5.0
+    with pytest.raises(RuntimeError):
+        breaker.extract(None, context)
+    now[0] = 10.0
+
+    assert breaker.extract(None, context).is_ok()  # a new probe is allowed
+
+
 def test_caching_engine_reuses_successful_result_for_same_page_and_context() -> None:
     engine = FlakyEngine()
     cached = CachingEngine(engine)
