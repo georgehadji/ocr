@@ -293,7 +293,10 @@ dedicated document-OCR VLM, was run on the three scan fixtures through the
 model's own `model.infer` (bf16, one 8 GB laptop GPU, ~140–175 s and 7.4 GB peak
 VRAM per page). Its block markup was stripped to plain text and scored with
 `omniocr.application.metrics` against the corrected references, beside the
-Kraken and Tesseract numbers from the table above.
+Kraken and Tesseract numbers from the table above. Those come from different
+input paths (Kraken on raw fixture bytes, Tesseract through
+`_default_image_processor()`), so this is a comparison of setups on three
+pages of one book, not a controlled engine bake-off.
 
 | Fixture | Unlimited-OCR-2 CER | Kraken CER | Tesseract CER | Unlimited-OCR-2 WER |
 |---|---|---|---|---|
@@ -310,28 +313,44 @@ source (CLAUDE.md rule 1):
 
 - **Opt-in.** `omniocr run … --unlimited-ocr-url http://host:30000/v1` adds it
   for the polytonic, ancient and Byzantine scripts on the `kraken` and
-  `ensemble` engines. `--engine tesseract` rejects the flag. The model is
-  served separately behind an OpenAI-compatible endpoint (e.g. SGLang); the
-  adapter imports no torch.
+  `ensemble` engines. The CLI rejects the flag with `--engine tesseract` or any
+  other `--script`, where it would never be called. The model is served
+  separately behind an OpenAI-compatible endpoint (e.g. SGLang); the adapter
+  imports no torch.
 - **Zero confidence.** Its line blocks lose every confidence-weighted choice
-  and reach the output mostly as aligned merge suggestions for the reviewer.
-  On scan-1 it gave a candidate on 49 of 50 lines.
+  and mostly reach the output as aligned merge suggestions for the reviewer.
+  On scan-1 it gave a candidate on 49 of 50 lines. One path does select its
+  text: `ScriptAwareReconciler`'s homoglyph rule prefers the candidate that
+  stayed in Greek script, so on a line where Kraken and Tesseract both emit
+  Latin lookalikes (typically a majuscule heading) its reading becomes the
+  line, unaudited diacritics included.
 - **Guarded by a circuit breaker, not retried.** A failure (usually a
   600 s timeout) skips the engine for one timeout's length instead of
   resubmitting the page.
 
 **End to end, 2026-11-04.** The real `UnlimitedOCREngine.extract` was then
-driven over HTTP against a minimal OpenAI-compatible server wrapping the same
-`model.infer` (SGLang itself is Linux-only). The adapter's request (prompt
-`"Multi page parsing."`, `max_tokens` 8192) and parser reproduced the scores
-above exactly, 0.0541 / 0.0801 / 0.0684 CER. Each page returned its blocks
-in 95–136 s with `finish_reason` `stop` at ~1,800–1,900 tokens, and every box
-fell inside the page.
+driven over HTTP (`scripts/check_unlimited_ocr.py`) against
+`scripts/serve_unlimited_ocr.py`, a minimal OpenAI-compatible server wrapping
+the same `model.infer` (SGLang itself is Linux-only). It ran twice:
+
+- **With the model card's n-gram guard** (`no_repeat_ngram_size=35`,
+  `ngram_window=128`), as the table above was measured: 0.0541 / 0.0801 /
+  0.0684 CER, 95–136 s per page.
+- **Without it**, as a default server decodes, since the adapter sends no
+  sampling options beyond `temperature` 0: identical text and CER, at 1,915 /
+  1,816 / 1,832 output tokens either way, 188–231 s per page on the same GPU.
+
+So on these pages the guard changes nothing, and the adapter's request
+(prompt `"Multi page parsing."`, `max_tokens` 8192) and parser reproduce the
+model's own output. Nothing came near `max_tokens`; the truncation path
+(`finish_reason` `length`, which this server derives from the token count) was
+not exercised.
 
 Limits: not yet run through SGLang, whose chat template and image
-preprocessing may differ from `model.infer`. The fixtures are 2008×2835 px,
-under the 3508 px cap, so no downscaling took place. Three pages of one
-book, as above.
+preprocessing may differ from `model.infer`; a page that makes the model
+repeat itself could behave differently without the guard. The fixtures are
+2008×2835 px, under the 3508 px cap, so no downscaling took place. Three
+pages of one book, as above.
 
 ## Reproducing
 
@@ -346,3 +365,17 @@ reproduce `tests/corpus/engine_baselines.json`.
 ```bash
 python -m omniocr.interfaces.cli run "PDFs for OCR/Πολυχρονιάδης Δεδούσης 2.0.pdf" --max-pages 1 --engine kraken --json
 ```
+
+Unlimited-OCR-2 needs a CUDA GPU (7.4 GB peak) and a separate environment
+with the model card's `torch`/`transformers` pins, which clash with Kraken's.
+Serve the downloaded model from that environment, then score from this one:
+
+```bash
+python -I scripts/serve_unlimited_ocr.py /path/to/Unlimited-OCR-2 --port 30000
+```
+
+```bash
+python scripts/check_unlimited_ocr.py http://127.0.0.1:30000/v1
+```
+
+Add `--ngram-guard` to the server for the model card's decoding settings.

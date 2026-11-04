@@ -186,3 +186,11 @@ def test_cli_rejects_unlimited_ocr_with_tesseract(tmp_path: Path) -> None:
         ["run", str(source), "--engine", "tesseract", "--unlimited-ocr-url", "http://x/v1"]
     )
     assert code == cli.EXIT_USAGE
+
+
+@pytest.mark.parametrize("script", ["modern", "mixed", "unknown", "pontian"])
+def test_cli_rejects_unlimited_ocr_for_scripts_it_never_reads(tmp_path: Path, script: str) -> None:
+    source = tmp_path / "page.png"
+    source.write_bytes(b"")
+    code = cli.main(["run", str(source), "--script", script, "--unlimited-ocr-url", "http://x/v1"])
+    assert code == cli.EXIT_USAGE

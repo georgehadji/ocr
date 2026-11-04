@@ -6,10 +6,10 @@ This repository is a Python monorepo for OmniOCR. The installable core lives in
 `packages/omniocr/src/omniocr`, organized by clean-architecture layers:
 `domain` contains immutable models and results, `application` contains pipeline
 and routing logic, `infrastructure` contains adapters, and `composition` wires
-editions together. Root-level `omniocr/` and `ocr.py` are prototype/compatibility
-entry points. Tests are in `tests/`; design and build documentation is in
-`docs/`. `Cloud Edition/`, `Desktop Edition/`, and `Server Standalone Edition/`
-contain edition-specific composition roots and UIs. Keep business logic in the
+editions together. `prototype/ocr.py` is the original Streamlit prototype, kept
+for reference. Tests are in `tests/`; design and build documentation is in
+`docs/`. `editions/desktop`, `editions/server`, and `editions/cloud` contain
+edition-specific composition roots and UIs. Keep business logic in the
 shared package, not in edition controllers.
 
 ## Build, Test, and Development Commands
@@ -20,9 +20,11 @@ Use Python 3.11 or newer. Install development dependencies with:
 python -m pip install -e ".[dev]"
 ```
 
-Run the test suite with `python -m pytest`. Run `ruff check .` for linting and
-`ruff format --check .` to verify formatting. Run `mypy packages/omniocr/src`
-for type checking. Build the package with `python -m build` after installing
+Run the test suite with `python -m pytest`. Run
+`ruff check packages tests editions scripts` for linting and
+`ruff format --check packages tests editions scripts` to verify formatting. Run
+`mypy --strict --ignore-missing-imports --python-version 3.11 packages/omniocr/src`
+for type checking. `CONTRIBUTING.md` lists every CI gate. Build the package with `python -m build` after installing
 the `build` package. The pytest configuration in `pyproject.toml` discovers
 tests from `tests/` and enables quiet output.
 
@@ -39,8 +41,7 @@ effects behind ports and adapters, and normalize final text to Unicode NFC.
 Tests use `pytest`. Add focused unit tests beside the relevant behavior in
 `tests/`, and preserve the faithfulness invariant: correction may create
 suggestions but must not silently mutate recognized source text. Add fixtures
-for new OCR engines or script varieties under `tests/` (or the planned
-`tests/corpus/`) and run `python -m pytest` before submitting changes.
+for new OCR engines or script varieties under `tests/corpus/` and run `python -m pytest` before submitting changes.
 
 ## Commit & Pull Request Guidelines
 

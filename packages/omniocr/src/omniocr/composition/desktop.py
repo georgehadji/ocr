@@ -39,6 +39,10 @@ from omniocr.infrastructure.vlm import DEFAULT_MAX_EDGE_PX as DEFAULT_VLM_MAX_ED
 from omniocr.infrastructure.vlm import DEFAULT_MODEL as DEFAULT_VLM_MODEL
 from omniocr.infrastructure.unlimited_ocr import DEFAULT_MODEL as DEFAULT_UNLIMITED_OCR_MODEL
 
+# The scripts the ensemble routes to Kraken and the opt-in voters; every other
+# script falls through to Tesseract alone.
+ENSEMBLE_SCRIPTS = (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC)
+
 # VLM and Calamari are optional extras; import failures gracefully disable them.
 try:
     from omniocr.infrastructure.calamari import CalamariEngine  # noqa: F811
@@ -191,7 +195,8 @@ def create_ensemble_pipeline(
     OpenAI-compatible endpoint joins the same scripts as a further opt-in
     voter. When ``calamari_model_glob``
     is provided, a Calamari subprocess engine is added as a voting booster.
-    Both are wrapped in ``RetryingEngine`` for transient-failure resilience.
+    The VLM and Calamari are wrapped in ``RetryingEngine`` for transient-failure
+    resilience.
     Unlimited-OCR is not retried: its failures are mostly ten-minute timeouts
     from a busy or dead GPU server, so a retry doubles the stall and resubmits
     a job the server may still be running. A circuit breaker instead skips it
@@ -201,9 +206,7 @@ def create_ensemble_pipeline(
     tesseract = RetryingEngine(TesseractEngine(tesseract_language))
     kraken = RetryingEngine(KrakenEngine(kraken_model_path))
     by_script: dict[Script, tuple[IOCREngine, ...]] = {
-        Script.ANCIENT: (kraken, tesseract),
-        Script.BYZANTINE: (kraken, tesseract),
-        Script.POLYTONIC: (kraken, tesseract),
+        script_key: (kraken, tesseract) for script_key in ENSEMBLE_SCRIPTS
     }
     default: tuple[IOCREngine, ...] = (tesseract,)
 
@@ -215,7 +218,7 @@ def create_ensemble_pipeline(
             max_edge_px=vlm_max_edge_px,
         )
         retrying_vlm = RetryingEngine(vlm)
-        for script_key in (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC):
+        for script_key in ENSEMBLE_SCRIPTS:
             by_script[script_key] = (*by_script[script_key], retrying_vlm)
 
     if unlimited_ocr_url is not None:
@@ -224,13 +227,13 @@ def create_ensemble_pipeline(
             failure_threshold=1,
             reset_timeout=UnlimitedOCREngine.timeout_s,
         )
-        for script_key in (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC):
+        for script_key in ENSEMBLE_SCRIPTS:
             by_script[script_key] = (*by_script[script_key], guarded_unlimited)
 
     if calamari_model_glob is not None:
         calamari = CalamariEngine(model_glob=calamari_model_glob)
         retrying_calamari = RetryingEngine(calamari)
-        for script_key in (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC):
+        for script_key in ENSEMBLE_SCRIPTS:
             by_script[script_key] = (*by_script[script_key], retrying_calamari)
 
     # Build engine_map so the router can resolve promoted models by engine name

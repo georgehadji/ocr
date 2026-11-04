@@ -17,44 +17,46 @@ otherwise page-level parallelism), **printed material**, **faithful
 
 ## Current state (important)
 
-- **`ocr.py`** (root) is the only fully working code — a Streamlit prototype: Tesseract
-  ensemble (`grc+ell+eng`), 2-pass PSM voting, OpenCV UMat preprocessing, DOCX/PDF export.
-- The three **Editions** are mostly **clean-architecture scaffolding** — `app_core` interfaces
-  and domain models are defined, but most engines are **stubs** (e.g. Cloud
-  `app_core/engines.py` returns `[]`). Desktop Edition has the most real code (a working
-  Tesseract strategy + MLflow exporter). Treat the Editions as the target structure to
-  complete, not finished software.
-- No automated test suite exists yet. When building out `omniocr_core`, add `pytest` (unit
-  tests for domain/post-correction, integration tests for engines against fixture pages).
+- **`packages/omniocr`** is the shared core and the working product: the `omniocr` CLI
+  (`interfaces/cli.py`: `doctor`, `run`, `eval`), real Tesseract, Kraken, Calamari, VLM and
+  Unlimited-OCR adapters in `infrastructure/`, and the composition roots in `composition/`.
+- **`editions/{desktop,server,cloud}`** are thin composition roots over that core: a
+  Streamlit review UI (`desktop/review_ui.py`), FastAPI + RQ (`server/`), and FastAPI +
+  Celery + Docker (`cloud/`). The server and cloud APIs keep their job index in-process, so
+  each runs as a single uvicorn worker.
+- **`prototype/ocr.py`** is the original Streamlit prototype (Tesseract `grc+ell+eng`, 2-pass
+  PSM voting). It is kept for reference; new work goes in `packages/omniocr`.
+- The `pytest` suite lives in `tests/` (unit tests for domain/post-correction, integration
+  tests for engines against the fixture pages in `tests/corpus/`). Run `pytest` from the repo
+  root.
 
 ## Commands
 
-Tesseract must be installed and on `PATH` (with `ell` and `grc` language data). Each edition
-has its own `requirements.txt`.
+Tesseract must be installed and on `PATH` (with `ell` and `grc` language data). Install the
+core with `pip install -e ".[dev,docx]"` plus the extras you need (`kraken`, `pdf`, `server`,
+`cloud`, `training`; see `pyproject.toml`). Run everything from the repo root.
 
-- **Root prototype**: `streamlit run ocr.py`
-- **Cloud Edition** (FastAPI + Celery + Redis + Streamlit):
-  - UI: `cd "Cloud Edition/omniocr_master_edition" && streamlit run frontend_ui/app.py`
-  - API: `cd "Cloud Edition/omniocr_master_edition" && uvicorn backend_worker.worker_api:app --host 0.0.0.0 --port 8000`
-  - Orchestration: `Cloud Edition/omniocr_master_edition/orchestration/docker-compose.yml`
-- **Desktop Trainer Edition** (fine-tuning + MLflow):
-  `cd "Desktop Edition/omniocr_trainer_edition" && streamlit run trainer_ui/app.py`
-- **Server Standalone Edition** (FastAPI + RQ + static UI):
-  - API: `cd "Server Standalone Edition/omniocr_server_edition" && uvicorn backend_api.main:app --host 0.0.0.0 --port 8000`
-  - Worker: `cd "Server Standalone Edition/omniocr_server_edition" && rq worker --url redis://localhost:6379`
+- **CLI**: `omniocr doctor` (what's missing), `omniocr run book.pdf --out book.docx`,
+  `omniocr eval --split test`
+- **Desktop** (review UI): `streamlit run editions/desktop/review_ui.py`
+- **Server**: `uvicorn editions.server.main:app --port 8000` and
+  `rq worker --url redis://localhost:6379 omniocr`
+- **Cloud**: `docker compose -f editions/cloud/docker-compose.yml up`
+- **CI gates**: see `CONTRIBUTING.md` (pytest with 80% coverage, ruff, mypy strict,
+  `scripts/check_layering.py`, `scripts/check_license_isolation.py`)
 
 ## Architecture in one screen
 
-Clean/hexagonal architecture in `app_core`; dependencies point inward
+Clean/hexagonal architecture in `packages/omniocr/src/omniocr`; dependencies point inward
 (`interfaces → infrastructure → application → domain`). One shared core, three editions that
 differ only in their **composition root** (which engines/queue/UI get wired).
 
 Pipeline: **ingest** (PyMuPDF page-streaming for large PDFs) → **preprocess** (OpenCV) →
-**layout + line segmentation** (Kraken/Paddle) → **script detect & route** → **recognition
+**layout + line segmentation** (Kraken) → **route by `--script`** → **recognition
 bank** (Tesseract + Kraken; VLM opt-in via cloud API) → **reconcile/vote** →
 **faithful post-correction** → **human review** → **export**.
 
-The five repos in `Github/` are engine sources: `tesseract` (fast baseline), `calamari`
+The five archives in `Github/` are engine sources: `tesseract` (fast baseline), `calamari`
 (opt-in voting booster — **GPLv3/TensorFlow, subprocess-isolate it**), `PaddleOCR`/`EasyOCR`
 (layout/detection), `Unlimited-OCR` (VLM — not a CPU engine; served separately and wired as an
 opt-in voter via `--unlimited-ocr-url`, see `infrastructure/unlimited_ocr.py`).
