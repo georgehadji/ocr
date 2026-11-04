@@ -7,6 +7,7 @@ never mutates the recognized source text.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 
@@ -20,6 +21,16 @@ from omniocr.domain.models import (
 from omniocr.application import confusion
 from omniocr.domain.result import Ok, Result
 from omniocr.ports.interfaces import ILexicon, IPostCorrector
+
+
+def _lexicon_form(token: str) -> str:
+    """NFC token without its attached punctuation, case kept.
+
+    The confusion table has capital letters (``Α``/``A``) that a lowercased
+    token can never match, so candidates are generated from this form; only the
+    lexicon lookup lowercases (``SetLexicon.contains`` does it itself).
+    """
+    return unicodedata.normalize("NFC", token).strip("".join(_PUNCTUATION))
 
 
 def _lexicon_key(token: str) -> str:
@@ -40,13 +51,14 @@ def _lexicon_key(token: str) -> str:
     Only the *lookup* is normalized. The suggestion still reports the original
     token, so nothing rewrites the recognized text (CLAUDE.md rule 1).
     """
-    normalized = unicodedata.normalize("NFC", token)
-    return normalized.strip("".join(_PUNCTUATION)).lower()
+    return _lexicon_form(token).lower()
 
 
 # Editorial punctuation that attaches to a word in printed Greek. Greek uses
 # ano teleia (·) and the erotimatiko (;) where English uses ; and ?.
 _PUNCTUATION: frozenset[str] = frozenset(".,;:·!?()[]{}«»\"'’‘“”—–-…")
+
+_TOKEN = re.compile(r"\S+")
 
 
 class SuggestOnlyCorrector(IPostCorrector):
@@ -130,8 +142,9 @@ class SuggestOnlyCorrector(IPostCorrector):
 
         expanded_text = line.text
         for abbr, expansion in self._abbreviations.items():
-            if abbr in line.text:
-                expanded_text = expanded_text.replace(abbr, expansion)
+            # Whole tokens only: a bare substring test proposed ``ἴδε`` -> ``ὅρα``
+            # inside ``εἴδε`` and ``στ.`` at the end of any word ending in ``στ``.
+            expanded_text = re.sub(rf"(?<!\w){re.escape(abbr)}(?!\w)", expansion, expanded_text)
         if expanded_text != line.text:
             suggestions.append(
                 Suggestion(
@@ -153,18 +166,25 @@ class SuggestOnlyCorrector(IPostCorrector):
                 Suggestion(
                     line_id=line.id,
                     source_text=line.text,
-                    suggestion_text=line.text,
+                    suggestion_text="",
                     reason="dangling_combining_mark",
-                    reversible=True,
+                    reversible=False,
                 )
             )
 
         lexicon = self._lexicons.get(line.script)
         if lexicon is not None:
-            for token in line.text.split():
-                lookup = _lexicon_key(token)
+            for match in _TOKEN.finditer(line.text):
+                token = match.group()
+                form = _lexicon_form(token)
+                lookup = form.lower()
                 if not lookup or lexicon.contains(lookup):
                     continue
+                # The proposal replaces the word, not the punctuation attached
+                # to it, so the span covers the whole token and the replacement
+                # carries the original edges back.
+                lead = token[: len(token) - len(token.lstrip("".join(_PUNCTUATION)))]
+                trail = token[len(token.rstrip("".join(_PUNCTUATION))) :]
                 # A bare "not in lexicon" flag hands the reviewer a problem
                 # with no proposal. Offer OCR-plausible readings the lexicon
                 # does recognize, best first (ENHANCEMENT_PLAN A8b), and fall
@@ -175,15 +195,17 @@ class SuggestOnlyCorrector(IPostCorrector):
                 # a bulk one. Collapsing to a single lexicon would keep the
                 # union but lose the precedence that protects regional forms.
                 layers = getattr(lexicon, "layers", None) or [lexicon]
-                proposals = confusion.suggest(lookup, list(layers))
+                proposals = confusion.suggest(form, list(layers))
                 for proposal in proposals:
                     suggestions.append(
                         Suggestion(
                             line_id=line.id,
                             source_text=token,
-                            suggestion_text=proposal,
+                            suggestion_text=f"{lead}{proposal}{trail}",
                             reason=confusion.SUGGESTION_REASON,
                             reversible=True,
+                            start=match.start(),
+                            end=match.end(),
                         )
                     )
                 if not proposals:
@@ -191,9 +213,11 @@ class SuggestOnlyCorrector(IPostCorrector):
                         Suggestion(
                             line_id=line.id,
                             source_text=token,
-                            suggestion_text=token,
+                            suggestion_text="",
                             reason=f"not_in_{lexicon.name}_lexicon",
-                            reversible=True,
+                            reversible=False,
+                            start=match.start(),
+                            end=match.end(),
                         )
                     )
 
@@ -203,9 +227,9 @@ class SuggestOnlyCorrector(IPostCorrector):
                 Suggestion(
                     line_id=line.id,
                     source_text=line.text,
-                    suggestion_text=line.text,
+                    suggestion_text="",
                     reason=issue,
-                    reversible=True,
+                    reversible=False,
                 )
             )
 

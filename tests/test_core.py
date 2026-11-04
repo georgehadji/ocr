@@ -113,7 +113,8 @@ def test_suggest_only_corrector_highlights_unknown_words_without_rewriting_sourc
     assert result.is_ok()
     assert line.text == source
     assert result.value[0].source_text == "άγνωστη"
-    assert result.value[0].suggestion_text == "άγνωστη"
+    assert result.value[0].suggestion_text == ""
+    assert not result.value[0].reversible
     assert result.value[0].reason == "not_in_pontian_lexicon"
 
 

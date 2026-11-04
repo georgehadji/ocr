@@ -60,7 +60,7 @@
 - **Exports:** `PipelineOrchestrator`, `build_document`, `SuggestOnlyCorrector`, `ConfidenceWeightedReconciler`, `ScriptRouter`, `RegressionBaseline`, `character_error_rate`, `word_error_rate`, `regression_exceeded`, plus 7 inline helper classes
 - **Internal Structure:**
   - `pipeline.py` (384 lines) — `PipelineOrchestrator` (run, run_iteratively, count_pages, export, _process_page, _boxes_overlap) + 6 inline null-object defaults (`NullPageSource`, `PassthroughImageProcessor`, `SingleLineLayoutAnalyzer`, `NullRouter`, `FirstCandidateReconciler`, `InMemoryPage`)
-  - `post_correction.py` (192 lines) — `SuggestOnlyCorrector` — 6 check types: NFC normalize, ligature expand, abbreviation expand, dangling marks, lexicon highlight, diacritic validation. All emit reversible `Suggestion` objects [VERIFIED: `suggestion_text=..., reversible=True` on all paths]
+  - `post_correction.py` (192 lines) — `SuggestOnlyCorrector` — 6 check types: NFC normalize, ligature expand, abbreviation expand, dangling marks, lexicon highlight, diacritic validation. Replacements are reversible `Suggestion`s (token ones carry a `start`/`end` span); the bare lexicon flag, dangling-mark and diacritic findings are flags (`reversible=False`, empty `suggestion_text`)
   - `metrics.py` (77 lines) — `RegressionBaseline`, `character_error_rate`, `word_error_rate`, `regression_exceeded` — Levenshtein-based, NFC-normalized
   - `reconcile.py` (13 lines) — `ConfidenceWeightedReconciler` — max-confidence selection
   - `router.py` (20 lines) — `ScriptRouter` — `by_script: Mapping[Script, Sequence[IOCREngine]]` with fallback default
@@ -212,7 +212,7 @@ graph LR
 | `RegionType` | `str Enum: 7 values` | `domain/models.py:49` | KrakenLayoutAnalyzer, exporters, review | in-memory |
 | `ModelRef` | `engine, model_name, model_hash: str, params: Tuple[str]` | `domain/models.py:65` | All engines (producers), exporters (consumers) | in-memory |
 | `EngineRun` | `engine, model_ref, model_hash, params, timestamp` | `domain/models.py:73` | All engines (producers), exporters (metadata) | in-memory |
-| `Suggestion` | `line_id, source_text, suggestion_text, reason, reversible` | `domain/models.py:82` | SuggestOnlyCorrector, GroundingGuard (producers); review UI (consumer) | `st.session_state` (UI) |
+| `Suggestion` | `line_id, source_text, suggestion_text, reason, reversible, start, end` | `domain/models.py:82` | SuggestOnlyCorrector, GroundingGuard (producers); review UI (consumer) | `st.session_state` (UI) |
 | `OCRBlock` | `id, text, confidence, bbox, provenance` | `domain/models.py:109` | All engines (producers); pipeline, grounding, exporters (consumers) | in-memory / checkpoint JSON |
 | `OCRLine` | `id, text, confidence, bbox, script, region_type, reading_order, blocks, provenance` | `domain/models.py:118` | KrakenLayoutAnalyzer, pipeline, reconciler, corrector (producers); exporters, review (consumers) | in-memory / checkpoint JSON |
 | `DocumentPage` | `number, width, height, lines, suggestions, failures` | `domain/models.py:137` | Pipeline (producer); exporters, review, job stores (consumers) | checkpoint JSON → SQLite / Redis / in-memory |

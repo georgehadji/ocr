@@ -23,7 +23,13 @@ from PIL import Image
 
 from omniocr.application.metrics import character_error_rate
 from omniocr.composition import create_ensemble_pipeline
-from omniocr.domain.models import DocumentPage, DocumentStructure, Script, TenantContext
+from omniocr.domain.models import (
+    DocumentPage,
+    DocumentStructure,
+    Script,
+    TenantContext,
+    apply_suggestions,
+)
 from omniocr.domain.result import Err
 from omniocr.infrastructure.config import Settings
 from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
@@ -407,10 +413,12 @@ if st.session_state.review_document is not None:
         accepted = 0
         for page in doc.pages:
             for line in page.lines:
-                for s in line.suggestions:
-                    if s.reversible and s.suggestion_text:
-                        st.session_state.ground_truth_lines[s.line_id] = s.suggestion_text
-                        accepted += 1
+                applicable = [s for s in line.suggestions if s.reversible]
+                current = _final_text(line)
+                updated = apply_suggestions(current, applicable)
+                if updated != current:
+                    st.session_state.ground_truth_lines[line.line_id] = updated
+                    accepted += len(applicable)
         st.sidebar.success(f"Accepted {accepted} suggestions")
         st.rerun()
 
@@ -694,12 +702,16 @@ if st.session_state.review_document is not None:
                         else:
                             st.session_state.edited_lines.pop(line.line_id, None)
                         st.rerun()
-                    for s in line.suggestions:
-                        if st.button(
-                            f"💡 {s.reason}: {s.suggestion_text[:30] if s.suggestion_text else 'flag'}",
-                            key=f"ems_{line.line_id}_{s.reason}",
+                    for index, s in enumerate(line.suggestions):
+                        if not s.reversible:
+                            st.caption(f"⚑ {s.reason}: {s.source_text[:30]}")
+                        elif st.button(
+                            f"💡 {s.reason}: {s.suggestion_text[:30]}",
+                            key=f"ems_{line.line_id}_{index}",
                         ):
-                            st.session_state.ground_truth_lines[s.line_id] = s.suggestion_text
+                            st.session_state.ground_truth_lines[line.line_id] = apply_suggestions(
+                                display, [s]
+                            )
                             st.rerun()
                     st.caption(f"{conf:.0f}% · {line.script} · {line.region_type}")
                 else:
@@ -738,18 +750,17 @@ if st.session_state.review_document is not None:
                                 st.session_state.edited_lines.pop(line.line_id, None)
                             st.rerun()
 
-                        for s in line.suggestions:
-                            akey = f"a_{s.line_id}_{s.reason}"
-                            if s.suggestion_text:
+                        for index, s in enumerate(line.suggestions):
+                            akey = f"a_{line.line_id}_{index}"
+                            if s.reversible:
                                 st.write(f"**{s.reason}**: {s.suggestion_text}")
-                            else:
-                                st.write(f"**{s.reason}**: flag only")
-                            if s.reversible and s.suggestion_text:
                                 if st.button("Accept", key=akey):
-                                    st.session_state.ground_truth_lines[s.line_id] = (
-                                        s.suggestion_text
+                                    st.session_state.ground_truth_lines[line.line_id] = (
+                                        apply_suggestions(display, [s])
                                     )
                                     st.rerun()
+                            else:
+                                st.write(f"**{s.reason}**: flag only ({s.source_text[:30]})")
 
                         with st.popover("⌨ Insert polytonic"):
                             selected = st.selectbox(

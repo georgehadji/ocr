@@ -29,6 +29,8 @@ from omniocr.domain.models import (
     Suggestion,
     TenantContext,
     UnreadablePage,
+    apply_suggestion,
+    apply_suggestions,
     page_scoped_id,
 )
 from omniocr.domain.result import Err, Ok, Result
@@ -81,5 +83,7 @@ __all__ = [
     "TrainingRun",
     "TrainingSample",
     "UnreadablePage",
+    "apply_suggestion",
+    "apply_suggestions",
     "page_scoped_id",
 ]
