@@ -255,13 +255,22 @@ One shared core (`packages/omniocr`); editions differ only in their composition 
 # Desktop — review UI with polytonic keyboard and suggestion accept/reject
 streamlit run editions/desktop/review_ui.py
 
-# Server — API plus worker
+# Server — API plus worker (any number of uvicorn workers; state lives in Redis)
+export OMNIOCR_API_KEYS="my-secret-key:my-team"   # key:tenant,key:tenant
 uvicorn editions.server.main:app --port 8000
 rq worker --url redis://localhost:6379 omniocr
 
 # Cloud
+export REDIS_PASSWORD=... OMNIOCR_API_KEYS="my-secret-key:my-team"
 docker compose -f editions/cloud/docker-compose.yml up
 ```
+
+Both APIs take `Authorization: Bearer <key>`; without a configured key every
+request is refused. Submit with `POST /ocr/submit`, poll `GET /ocr/status/{id}`,
+download with `GET /ocr/result/{id}`. A tenant only ever sees its own jobs.
+Other settings: `OMNIOCR_UPLOAD_DIR`, `OMNIOCR_RESULT_DIR`,
+`OMNIOCR_JOB_TIMEOUT_S` (default 6 h), `OMNIOCR_RESULT_TTL_S` (default 7 days),
+`OMNIOCR_CORS_ORIGINS` and `OMNIOCR_ALLOWED_HOSTS` (default `localhost` only).
 
 ---
 
