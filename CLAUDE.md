@@ -56,7 +56,8 @@ bank** (Tesseract + Kraken; VLM opt-in via cloud API) → **reconcile/vote** →
 
 The five repos in `Github/` are engine sources: `tesseract` (fast baseline), `calamari`
 (opt-in voting booster — **GPLv3/TensorFlow, subprocess-isolate it**), `PaddleOCR`/`EasyOCR`
-(layout/detection), `Unlimited-OCR` (VLM — reference for a future GPU edition; not a CPU engine).
+(layout/detection), `Unlimited-OCR` (VLM — not a CPU engine; served separately and wired as an
+opt-in voter via `--unlimited-ocr-url`, see `infrastructure/unlimited_ocr.py`).
 Kraken — the default recognizer — comes from PyPI, not a repo here.
 
 ## Rules specific to this codebase
@@ -81,6 +82,8 @@ Kraken — the default recognizer — comes from PyPI, not a repo here.
 6. **Offload blocking OCR** off the request loop (`asyncio.to_thread` / executors / the
    edition's Celery or RQ queue).
 7. **Strict typing** — avoid `Any`/`cast` suppression; use explicit type guards.
+8. **When the documentation and existing code conflict, follow the code's conventions, and in
+   your final reply, list all the inconsistencies you found.**
 
 ## Python conventions
 

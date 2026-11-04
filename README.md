@@ -138,6 +138,24 @@ omniocr run book.pdf --max-pages 5 --json
 | `--workers N` | `1` | Process N pages concurrently |
 | `--max-pages N` | all | Stop after N pages |
 | `--json` | off | One JSON document on stdout |
+| `--unlimited-ocr-url URL` | off | Add Unlimited-OCR-2 at this OpenAI-compatible endpoint as an extra voter (`kraken`/`ensemble` only) |
+
+### Optional: Unlimited-OCR-2 as an extra voter
+
+[`baidu/Unlimited-OCR-2`](https://huggingface.co/baidu/Unlimited-OCR-2) is a document-OCR
+vision model. On the three scan fixtures it had the best mean CER (0.068 against 0.097 for
+Kraken and 0.108 for Tesseract), but it can swap diacritics in ways that change meaning, so
+it only votes; Kraken and Tesseract stay the source of truth. Serve it yourself behind an
+OpenAI-compatible endpoint (SGLang on Linux with a GPU; nothing in this package imports
+torch for it) and pass the URL:
+
+```bash
+omniocr run book.pdf --engine ensemble --unlimited-ocr-url http://localhost:30000/v1
+```
+
+It joins polytonic, ancient and Byzantine pages. Expect minutes per page on a laptop GPU;
+if the server fails or times out (600 s), it is skipped for one timeout's length rather than
+retried. See [docs/ENGINE_ACCURACY.md](docs/ENGINE_ACCURACY.md).
 
 ### Contract for unattended callers
 
@@ -194,7 +212,7 @@ LAYOUT         Kraken pageseg, falling back to Tesseract when it returns zero li
      ↓
 ROUTE          Script → engine selection
      ↓
-RECOGNIZE      Tesseract · Kraken · Calamari (opt-in) · VLM (opt-in)
+RECOGNIZE      Tesseract · Kraken · Calamari (opt-in) · VLM (opt-in) · Unlimited-OCR-2 (opt-in)
      ↓
 RECONCILE      Script-aware / confidence-weighted vote
      ↓
