@@ -11,7 +11,6 @@ slow or destabilise inference.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 
 from omniocr.application.promotion import BeatsParentOnHeldOut, PromotionPolicy
 from omniocr.application.training_orchestrator import TrainingOrchestrator
@@ -23,6 +22,7 @@ from omniocr.infrastructure.alto_training import TrainingDataExporter
 from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
 from omniocr.infrastructure.corpus_repository import FileCorpusRepository
 from omniocr.infrastructure.ketos_trainer import KetosTrainer
+from omniocr.infrastructure.kraken import KrakenEngine
 from omniocr.infrastructure.line_cropper import PilLineCropper
 from omniocr.infrastructure.mlflow_registry import (
     InMemoryModelRegistry,
@@ -46,21 +46,23 @@ class _CorpusEvaluator(IEvaluator):
     def __init__(self, corpus: ICorpusRepository) -> None:
         self._corpus = corpus
 
-    def evaluate(self, engine: object, split: SplitName) -> Result[EvaluationReport, TrainingError]:
+    def evaluate(
+        self, engine: IOCREngine, split: SplitName
+    ) -> Result[EvaluationReport, TrainingError]:
         from omniocr.application.evaluation import evaluate as eval_fn
 
         pages = self._corpus.pages(split)
         if not pages:
             return Ok(
                 EvaluationReport(
-                    model_hash=getattr(engine, "name", "unknown"),
+                    model_hash=engine.name,
                     per_script_cer={},
                     per_script_wer={},
                     sample_count=0,
                     evaluated_on=split.value,
                 )
             )
-        return eval_fn(cast(IOCREngine, engine), pages, split)
+        return eval_fn(engine, pages, split)
 
 
 def create_training_pipeline(
@@ -98,27 +100,11 @@ def create_training_pipeline(
     # Training
     trainer: ITrainer = KetosTrainer()
 
-    # Evaluation
+    # Evaluation. Without a corpus there is no evaluator and the orchestrator
+    # refuses to train: an unmeasured candidate can never be promoted.
+    evaluator: IEvaluator | None = None
     if corpus_root is not None:
-        corpus = FileCorpusRepository(corpus_root)
-        evaluator: IEvaluator = _CorpusEvaluator(corpus)
-    else:
-
-        class _NoOpEvaluator(IEvaluator):
-            def evaluate(
-                self, engine: object, split: SplitName
-            ) -> Result[EvaluationReport, TrainingError]:
-                return Ok(
-                    EvaluationReport(
-                        model_hash=getattr(engine, "name", "unknown"),
-                        per_script_cer={},
-                        per_script_wer={},
-                        sample_count=0,
-                        evaluated_on=split.value,
-                    )
-                )
-
-        evaluator = _NoOpEvaluator()
+        evaluator = _CorpusEvaluator(FileCorpusRepository(corpus_root))
 
     # Promotion policy
     promotion_policy: PromotionPolicy = BeatsParentOnHeldOut(
@@ -143,6 +129,7 @@ def create_training_pipeline(
         evaluator=evaluator,
         promotion_policy=promotion_policy,
         model_registry=model_registry,
+        engine_factory=lambda path: KrakenEngine(path),
     )
 
 

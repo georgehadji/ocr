@@ -10,34 +10,37 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from collections.abc import Callable
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Mapping
 
 from omniocr.application.ground_truth import (
     SampleSpecification,
     assemble_training_samples,
 )
 from omniocr.application.promotion import PromotionPolicy
-from omniocr.domain.errors import EngineError, TrainingError
-from omniocr.domain.models import ModelRef, OCRBlock, TenantContext
+from omniocr.domain.errors import TrainingError
+from omniocr.domain.models import ModelRef
 from omniocr.domain.result import Err, Ok, Result
-from omniocr.domain.training import (
-    ModelCandidate,
-    PromotedModel,
-)
+from omniocr.domain.training import PromotedModel
 from omniocr.ports.interfaces import (
     ICorrectionStore,
     IEventBus,
     IEvaluator,
     ILineCropper,
     IModelRegistry,
+    IOCREngine,
     ITrainer,
     ITrainingDataExporter,
-    RawPage,
 )
 from omniocr.domain.corpus import SplitName
 
 _LOG = logging.getLogger("omniocr.training")
+
+# Builds a recognition engine running the model at a path. The composition root
+# supplies it, so the orchestrator never names an engine: the candidate and its
+# parent are evaluated by the same real engine, only the weights differ.
+CheckpointEngineFactory = Callable[[Path], IOCREngine]
 
 
 class TrainingOrchestrator:
@@ -55,9 +58,10 @@ class TrainingOrchestrator:
         cropper: ILineCropper,
         exporter: ITrainingDataExporter,
         trainer: ITrainer,
-        evaluator: IEvaluator,
+        evaluator: IEvaluator | None,
         promotion_policy: PromotionPolicy,
         model_registry: IModelRegistry,
+        engine_factory: CheckpointEngineFactory,
         event_bus: IEventBus | None = None,
     ) -> None:
         self._correction_store = correction_store
@@ -65,6 +69,7 @@ class TrainingOrchestrator:
         self._exporter = exporter
         self._trainer = trainer
         self._evaluator = evaluator
+        self._engine_factory = engine_factory
         self._promotion_policy = promotion_policy
         self._model_registry = model_registry
         self._event_bus = event_bus
@@ -80,7 +85,9 @@ class TrainingOrchestrator:
         """Run the full training pipeline.
 
         Args:
-            parent_model: The base model to fine-tune from.
+            parent_model: The base model to fine-tune from. Its ``model_name``
+                is the path of its weights; the parent is evaluated through
+                the same engine factory as the candidate.
             page_images: Map of page number → raw image bytes for cropping.
             output_dir: Directory for intermediate and output artifacts.
             hyperparameters: Training hyperparameters passed to the trainer.
@@ -91,6 +98,16 @@ class TrainingOrchestrator:
             parent, ``None`` if the candidate was refused promotion (with a
             logged reason), or an error.
         """
+        # No held-out corpus means no evaluation, and a candidate that cannot
+        # be evaluated can never be promoted: refuse before spending the
+        # training run.
+        if self._evaluator is None:
+            return Err(
+                TrainingError(
+                    "no evaluation corpus is configured: a candidate could never be judged"
+                )
+            )
+
         run_id = f"train-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
         params = dict(hyperparameters or {})
 
@@ -138,14 +155,14 @@ class TrainingOrchestrator:
 
         # Stage 5 & 6: Evaluate candidate and parent
         candidate_eval = self._evaluator.evaluate(
-            _CandidateEngine(candidate),
+            self._engine_factory(candidate.path),
             SplitName.TEST,
         )
         if isinstance(candidate_eval, Err):
             return Err(candidate_eval.error)
 
         parent_eval = self._evaluator.evaluate(
-            _ParentEngine(parent_model),
+            self._engine_factory(Path(parent_model.model_name)),
             SplitName.TEST,
         )
         if isinstance(parent_eval, Err):
@@ -207,32 +224,4 @@ class TrainingOrchestrator:
         return Ok(promoted)
 
 
-class _CandidateEngine:
-    """Minimal IOCREngine-like wrapper for a ModelCandidate used in evaluation."""
-
-    def __init__(self, candidate: ModelCandidate) -> None:
-        self.candidate = candidate
-        self.name = f"kraken:{candidate.path}"
-
-    def extract(
-        self, page: RawPage, context: TenantContext
-    ) -> Result[Sequence[OCRBlock], EngineError]:
-        """Placeholder — evaluation uses the real engine, not this wrapper."""
-        raise NotImplementedError("_CandidateEngine is an evaluation placeholder")
-
-
-class _ParentEngine:
-    """Minimal IOCREngine-like wrapper for a parent ModelRef used in evaluation."""
-
-    def __init__(self, parent: ModelRef) -> None:
-        self.parent = parent
-        self.name = f"kraken:{parent.model_name}"
-
-    def extract(
-        self, page: RawPage, context: TenantContext
-    ) -> Result[Sequence[OCRBlock], EngineError]:
-        """Placeholder — evaluation uses the real engine, not this wrapper."""
-        raise NotImplementedError("_ParentEngine is an evaluation placeholder")
-
-
-__all__ = ["TrainingOrchestrator"]
+__all__ = ["CheckpointEngineFactory", "TrainingOrchestrator"]

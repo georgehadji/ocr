@@ -17,38 +17,10 @@ import argparse
 import sys
 from pathlib import Path
 
-from omniocr.application.promotion import BeatsParentOnHeldOut
-from omniocr.application.training_orchestrator import TrainingOrchestrator
-from omniocr.domain.corpus import SplitName
-from omniocr.domain.errors import TrainingError
+from omniocr.composition import create_training_pipeline
 from omniocr.domain.models import ModelRef
-from omniocr.domain.result import Err, Ok, Result
-from omniocr.domain.training import EvaluationReport
-from omniocr.infrastructure.alto_training import TrainingDataExporter
-from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
-from omniocr.infrastructure.ketos_trainer import KetosTrainer
-from omniocr.infrastructure.line_cropper import PilLineCropper
-from omniocr.infrastructure.mlflow_registry import MlflowModelRegistry
+from omniocr.domain.result import Err
 from omniocr.infrastructure.models import sha256_file
-from omniocr.ports.interfaces import IEvaluator
-
-
-class _CliEvaluator(IEvaluator):
-    """Minimal evaluator for CLI use — records model hash without corpus eval."""
-
-    def __init__(self, base_model: Path) -> None:
-        self._model_hash = sha256_file(base_model)
-
-    def evaluate(self, engine: object, split: SplitName) -> Result[EvaluationReport, TrainingError]:
-        return Ok(
-            EvaluationReport(
-                model_hash=self._model_hash,
-                per_script_cer={},
-                per_script_wer={},
-                sample_count=0,
-                evaluated_on=split.value,
-            )
-        )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -66,6 +38,17 @@ def _parse_args() -> argparse.Namespace:
         required=True,
         type=Path,
         help="Path to the pretrained Kraken .mlmodel file",
+    )
+    parser.add_argument(
+        "--corpus",
+        required=True,
+        type=Path,
+        help="Evaluation corpus root holding a test/ split of page images + .txt ground truth",
+    )
+    parser.add_argument(
+        "--mlflow-uri",
+        default="file:./mlruns",
+        help="MLflow tracking URI for the model registry",
     )
     parser.add_argument(
         "--output-dir",
@@ -115,26 +98,11 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # Wire the training pipeline
-    correction_store = SqliteCorrectionStore(args.corrections_db)
-    cropper = PilLineCropper(padding=2)
-    exporter = TrainingDataExporter()
-    trainer = KetosTrainer()
-    evaluator = _CliEvaluator(args.base_model)
-
-    promotion_policy = BeatsParentOnHeldOut(
+    orchestrator = create_training_pipeline(
+        corrections_db=args.corrections_db,
+        corpus_root=args.corpus,
+        mlflow_tracking_uri=args.mlflow_uri,
         min_improvement_pct=args.min_improvement,
-    )
-
-    model_registry = MlflowModelRegistry()
-
-    orchestrator = TrainingOrchestrator(
-        correction_store=correction_store,
-        cropper=cropper,
-        exporter=exporter,
-        trainer=trainer,
-        evaluator=evaluator,
-        promotion_policy=promotion_policy,
-        model_registry=model_registry,
     )
 
     # Build parent model ref

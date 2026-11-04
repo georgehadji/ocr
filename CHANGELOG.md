@@ -9,6 +9,22 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Fixed — evaluation and training (audit remediation PR4)
+- Evaluation dropped every page where the model produced nothing from the mean,
+  so a model that read 1 page of 10 scored a perfect CER of 0. An empty output
+  now counts as CER 1.0 (that case scores 0.9).
+- `TrainingOrchestrator` evaluated placeholder engines whose `extract()` raised
+  `NotImplementedError`, so no candidate could ever be judged. It now takes an
+  `engine_factory` (`Callable[[Path], IOCREngine]`, wired to `KrakenEngine` by
+  `create_training_pipeline`) and evaluates the candidate and its parent
+  (`parent_model.model_name` is its weights path) with the same real engine.
+- Without an evaluation corpus training now refuses to start with an `Err`,
+  instead of training against a no-op evaluator whose zero-sample report could
+  never promote. `scripts/train_kraken.py` goes through `create_training_pipeline`
+  and takes a required `--corpus` (and `--mlflow-uri`).
+- `SampleSpecification.min_line_height` is enforced (a 3 px line is skipped).
+  `min_confidence` is removed: a `Correction` carries no confidence to filter on.
+
 ### Fixed — suggestions apply to the right text (audit remediation PR3)
 - A token suggestion used to replace the **whole line** when accepted: accepting
   `λέγει,` → `λέγη` on `Ὁ θεὸς λέγει,` left the line as `λέγη`. `Suggestion` now

@@ -3,7 +3,8 @@
 Fixes D9: the assembler maps each ``GroundTruthLine`` through ``ILineCropper``
 to a **line-level image**, never a page. ``SampleSpecification`` composes
 filters (minimum height, non-empty text, confidence floor, script match) as
-a Specification so rules combine without conditional sprawl.
+a Specification so rules combine without conditional sprawl. (There is no
+confidence floor: a ``Correction`` is a human affirmation and carries none.)
 
 The function is pure apart from the injected cropper — given the same
 corrections it yields the same manifest, making training runs reproducible.
@@ -33,10 +34,11 @@ class SampleSpecification:
     min_line_height: int = 8
     require_non_empty: bool = True
     allowed_scripts: tuple[Script, ...] = ()
-    min_confidence: float = 0.0
 
     def is_satisfied_by(self, correction: Correction) -> bool:
         """Check whether a correction meets all specification criteria."""
+        if correction.bbox.h < self.min_line_height:
+            return False
         if self.require_non_empty and not correction.corrected_text.strip():
             return False
         if self.allowed_scripts and correction.script not in self.allowed_scripts:

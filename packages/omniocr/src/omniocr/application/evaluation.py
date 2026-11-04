@@ -91,10 +91,12 @@ def evaluate(
     for script, texts in script_texts.items():
         if not texts:
             continue
-        cers = [character_error_rate(ref, hyp) for ref, hyp in texts if hyp]
-        wers = [word_error_rate(ref, hyp) for ref, hyp in texts if hyp]
-        per_script_cer[script] = sum(cers) / len(cers) if cers else 1.0
-        per_script_wer[script] = sum(wers) / len(wers) if wers else 1.0
+        # An empty hypothesis is a miss, not a missing sample: dropping it from
+        # the mean let a model that read 1 page of 10 score a perfect CER.
+        cers = [character_error_rate(ref, hyp) for ref, hyp in texts]
+        wers = [word_error_rate(ref, hyp) for ref, hyp in texts]
+        per_script_cer[script] = sum(cers) / len(cers)
+        per_script_wer[script] = sum(wers) / len(wers)
 
     return Ok(
         EvaluationReport(
