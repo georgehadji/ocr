@@ -570,6 +570,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # The Tesseract root has no voting ensemble to add it to.
         print("--unlimited-ocr-url needs --engine kraken or ensemble", file=sys.stderr)
         return EXIT_USAGE
+    if getattr(args, "unlimited_ocr_url", None):
+        from omniocr.composition.desktop import ENSEMBLE_SCRIPTS
+
+        if Script(args.script) not in ENSEMBLE_SCRIPTS:
+            # Other scripts route to Tesseract alone; the server would never be called.
+            names = ", ".join(script.value for script in ENSEMBLE_SCRIPTS)
+            print(f"--unlimited-ocr-url needs --script {names}", file=sys.stderr)
+            return EXIT_USAGE
 
     if args.out is None:
         # No --out: land in Outputs/ under the current directory, named after
