@@ -566,6 +566,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"input not found: {source}", file=sys.stderr)
         return EXIT_USAGE
 
+    if args.engine == "tesseract" and getattr(args, "unlimited_ocr_url", None):
+        # The Tesseract root has no voting ensemble to add it to.
+        print("--unlimited-ocr-url needs --engine kraken or ensemble", file=sys.stderr)
+        return EXIT_USAGE
+
     if args.out is None:
         # No --out: land in Outputs/ under the current directory, named after
         # the input, instead of forcing every caller to compute a path.
