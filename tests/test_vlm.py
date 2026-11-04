@@ -4,7 +4,16 @@ from __future__ import annotations
 
 import pytest
 
+from omniocr.domain.models import TenantContext
+from omniocr.domain.result import Err
+from omniocr.infrastructure.ingest import ImagePage
 from omniocr.infrastructure.vlm import VLMEngine
+
+_CONTEXT = TenantContext(organization_id="o", user_id="u", subscription_tier="desktop")
+
+
+def _page() -> ImagePage:
+    return ImagePage(number=1, content=b"not an image", width=400, height=100)
 
 
 def test_default_api_url_is_accepted() -> None:
@@ -65,17 +74,24 @@ def test_vlm_parse_response_handles_no_content() -> None:
     assert len(no_choices) == 0
 
 
-def test_vlm_parse_response_unstructured_fallback() -> None:
-    """Text without structured coordinates uses full-page bbox as fallback."""
+def test_vlm_plain_text_reply_is_an_error_not_full_page_blocks() -> None:
+    """A reply without `x1,y1,x2,y2|text` lines must not become located text."""
     engine = VLMEngine(api_key="test-key")
     data = _api_response("Just some unstructured text here")
-    blocks = engine._parse_response(data, 400, 100)
 
-    assert len(blocks) > 0
-    for block in blocks:
-        assert block.bbox.x == 0
-        assert block.bbox.y == 0
-        assert block.bbox.w == 400
+    with pytest.raises(ValueError, match="no 'x1,y1,x2,y2\\|text' lines"):
+        engine._parse_response(data, 400, 100)
+
+    engine._call_api = lambda image_bytes: data  # type: ignore[method-assign]
+    result = engine.extract(_page(), _CONTEXT)
+    assert isinstance(result, Err)
+    assert "VLM extraction failed" in str(result.error)
+
+
+def test_vlm_blank_reply_is_an_empty_page_not_an_error() -> None:
+    engine = VLMEngine(api_key="test-key")
+
+    assert engine._parse_response(_api_response("   \n"), 400, 100) == []
 
 
 def test_vlm_parse_response_skips_malformed_lines() -> None:
@@ -86,16 +102,6 @@ def test_vlm_parse_response_skips_malformed_lines() -> None:
 
     assert len(blocks) == 1
     assert blocks[0].text == "valid"
-
-
-def test_vlm_extract_guarded_without_engine_blocks_keeps_all() -> None:
-    """extract_guarded with no engine blocks returns all VLM blocks."""
-    engine = VLMEngine(api_key="test-key")
-    # parse_response doesn't need API access — test directly
-    data = _api_response("10,10,210,30|text")
-    blocks = engine._parse_response(data, 400, 100)
-
-    assert len(blocks) >= 1
 
 
 def test_vlm_repr_masks_api_key() -> None:

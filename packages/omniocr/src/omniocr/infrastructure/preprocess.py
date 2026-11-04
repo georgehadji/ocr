@@ -270,10 +270,10 @@ class DespeckleProcessor:
             binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
             count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
 
+            small = stats[:, cv2.CC_STAT_AREA] < self._min_area
+            small[0] = False  # label 0 is the background
             cleaned = image.copy()
-            for label in range(1, count):  # 0 is the background
-                if stats[label, cv2.CC_STAT_AREA] < self._min_area:
-                    cleaned[labels == label] = 255
+            cleaned[small[labels]] = 255
 
             encoded, content = cv2.imencode(".png", cleaned)
             if not encoded:

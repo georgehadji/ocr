@@ -201,6 +201,12 @@ class KrakenEngine(IOCREngine):
 
             image = _open_bilevel(page.content)
             segmentation = pageseg.segment(image)
+            # An empty segmentation recognizes to an empty page: Ok(()) would
+            # read as a healthy blank, not as the failure it is. Err lets the
+            # pipeline log engine_failed and report the page if the other
+            # engines found nothing either.
+            if not getattr(segmentation, "lines", segmentation):
+                return Err(EngineError("kraken segmentation found no lines"))
             return Ok(self._recognize(image, segmentation, page))
         except ImportError:
             return Err(
