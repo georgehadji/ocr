@@ -9,9 +9,15 @@ block — such text is stored as a suggestion, never accepted as source.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
-from omniocr.domain.models import BBox, OCRBlock, Suggestion
+from omniocr.domain.errors import EngineError
+from omniocr.domain.models import BBox, OCRBlock, Suggestion, TenantContext
+from omniocr.domain.result import Err, Ok, Result
+from omniocr.ports.interfaces import IOCREngine, RawPage
+
+_LOG = logging.getLogger("omniocr.grounding")
 
 
 class GroundingGuard:
@@ -64,4 +70,53 @@ class GroundingGuard:
         return tuple(grounded), tuple(suggestions)
 
 
-__all__ = ["GroundingGuard"]
+class GroundedEngine(IOCREngine):
+    """Keep only the blocks of ``engine`` that a box-grounded ``reference`` corroborates.
+
+    The VLM and Unlimited-OCR place text by what the model says, not by what
+    is on the page. This decorator is where "never the unaudited source"
+    becomes true: a block over a region the reference engine read as empty is
+    dropped before the pipeline can assign it to a line.
+
+    If the reference engine fails there is nothing to ground against, so the
+    result is an ``Err``, never the ungrounded blocks.
+
+    ponytail: the reference engine runs a second time per page. Reuse its
+    result from the pipeline if Tesseract time ever shows up in a profile.
+    """
+
+    def __init__(
+        self,
+        engine: IOCREngine,
+        reference: IOCREngine,
+        guard: GroundingGuard | None = None,
+    ) -> None:
+        self.engine = engine
+        self.name = engine.name
+        self._reference = reference
+        self._guard = guard or GroundingGuard()
+
+    def extract(
+        self, page: RawPage, context: TenantContext
+    ) -> Result[Sequence[OCRBlock], EngineError]:
+        result = self.engine.extract(page, context)
+        if isinstance(result, Err) or not result.value:
+            return result
+        reference = self._reference.extract(page, context)
+        if isinstance(reference, Err):
+            return Err(
+                EngineError(
+                    f"{self.name} output cannot be grounded: "
+                    f"{self._reference.name} failed: {reference.error}"
+                )
+            )
+        grounded, ungrounded = self._guard.filter(result.value, reference.value)
+        if ungrounded:
+            _LOG.warning(
+                "ungrounded_blocks_dropped",
+                extra={"engine": self.name, "page": page.number, "dropped": len(ungrounded)},
+            )
+        return Ok(grounded)
+
+
+__all__ = ["GroundedEngine", "GroundingGuard"]

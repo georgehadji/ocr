@@ -16,6 +16,8 @@ from omniocr.infrastructure.preprocess import (
     OtsuProcessor,
     SauvolaProcessor,
 )
+from omniocr.infrastructure.grounding import GroundedEngine
+from omniocr.infrastructure.model_manifest import MANIFEST_PATH, ModelManifest
 from omniocr.infrastructure.resilience import CircuitBreakerEngine, RetryingEngine
 from omniocr.application.reconcile import (
     AlignedReconciler,
@@ -57,6 +59,22 @@ try:
     _VLM_AVAILABLE = True
 except ImportError:
     _VLM_AVAILABLE = False
+
+
+def _verify_against_manifest(model_path: Path) -> None:
+    """Refuse a Kraken model whose bytes differ from its pinned manifest hash.
+
+    A model the manifest does not list (a fine-tuned checkpoint, a user's own
+    ``--model``) is unverifiable, not wrong, so it passes. Only a listed model
+    that no longer matches is refused: that is a corrupt or swapped artifact
+    that would silently change accuracy by the 7x the manifest exists to pin.
+    """
+    manifest = ModelManifest(MANIFEST_PATH)
+    entry = manifest.get(model_path.name)
+    if entry is not None and model_path.is_file() and not manifest.verify(entry.name, model_path):
+        raise ValueError(
+            f"Kraken model {model_path} does not match the SHA-256 pinned in {MANIFEST_PATH}"
+        )
 
 
 def _variant_processors(count: int) -> tuple[tuple[str, IImageProcessor], ...]:
@@ -200,6 +218,7 @@ def create_ensemble_pipeline(
     timeout per window rather than two per page.
     """
     tesseract = RetryingEngine(TesseractEngine(tesseract_language))
+    _verify_against_manifest(Path(kraken_model_path))
     kraken = RetryingEngine(KrakenEngine(kraken_model_path))
     by_script: dict[Script, tuple[IOCREngine, ...]] = {
         script_key: (kraken, tesseract) for script_key in ENSEMBLE_SCRIPTS
@@ -213,15 +232,18 @@ def create_ensemble_pipeline(
             model=vlm_model,
             max_edge_px=vlm_max_edge_px,
         )
-        retrying_vlm = RetryingEngine(vlm)
+        retrying_vlm = GroundedEngine(RetryingEngine(vlm), tesseract)
         for script_key in ENSEMBLE_SCRIPTS:
             by_script[script_key] = (*by_script[script_key], retrying_vlm)
 
     if unlimited_ocr_url is not None:
-        guarded_unlimited = CircuitBreakerEngine(
-            UnlimitedOCREngine(api_url=unlimited_ocr_url, model=unlimited_ocr_model),
-            failure_threshold=1,
-            reset_timeout=UnlimitedOCREngine.timeout_s,
+        guarded_unlimited = GroundedEngine(
+            CircuitBreakerEngine(
+                UnlimitedOCREngine(api_url=unlimited_ocr_url, model=unlimited_ocr_model),
+                failure_threshold=1,
+                reset_timeout=UnlimitedOCREngine.timeout_s,
+            ),
+            tesseract,
         )
         for script_key in ENSEMBLE_SCRIPTS:
             by_script[script_key] = (*by_script[script_key], guarded_unlimited)

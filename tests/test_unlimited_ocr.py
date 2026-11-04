@@ -15,6 +15,7 @@ import pytest
 from omniocr.composition.desktop import create_ensemble_pipeline
 from omniocr.domain.models import Script, TenantContext
 from omniocr.domain.result import Err
+from omniocr.infrastructure.grounding import GroundedEngine
 from omniocr.infrastructure.resilience import CircuitBreakerEngine
 from omniocr.infrastructure.unlimited_ocr import DEFAULT_MAX_EDGE_PX, UnlimitedOCREngine
 from omniocr.interfaces import cli
@@ -175,8 +176,9 @@ def test_ensemble_guards_unlimited_ocr_with_a_breaker_not_retries() -> None:
     )
     by_script = pipeline._router._by_script  # type: ignore[attr-defined]
     [engine] = [e for e in by_script[Script.POLYTONIC] if e.name == "unlimited_ocr"]
-    assert isinstance(engine, CircuitBreakerEngine)
-    assert isinstance(engine.engine, UnlimitedOCREngine)
+    assert isinstance(engine, GroundedEngine)
+    assert isinstance(engine.engine, CircuitBreakerEngine)
+    assert isinstance(engine.engine.engine, UnlimitedOCREngine)
 
 
 def test_cli_rejects_unlimited_ocr_with_tesseract(tmp_path: Path) -> None:

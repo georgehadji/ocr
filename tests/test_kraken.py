@@ -258,3 +258,35 @@ class TestEngineBoundsMatchTheAnalyzer:
         boxes = {(b.bbox.x, b.bbox.y, b.bbox.w, b.bbox.h) for b in blocks}
         assert len(boxes) == 2, "each line keeps its own geometry"
         assert all(b.bbox.w < 1339 for b in blocks), "no block claims the full page width"
+
+
+class TestEmptySegmentation:
+    """Zero segmented lines is an engine failure, not a blank page."""
+
+    @staticmethod
+    def _png() -> bytes:
+        import io
+
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.new("L", (40, 40), 255).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def test_no_segmented_lines_is_an_err(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import sys
+
+        from omniocr.domain.models import TenantContext
+        from omniocr.domain.result import Err
+        from omniocr.infrastructure.ingest import ImagePage
+
+        pageseg = SimpleNamespace(segment=lambda image: SimpleNamespace(lines=[]))
+        monkeypatch.setitem(sys.modules, "kraken", SimpleNamespace(pageseg=pageseg))
+        monkeypatch.setitem(sys.modules, "kraken.pageseg", pageseg)
+        engine = KrakenEngine("missing-greek.mlmodel")
+        context = TenantContext(organization_id="o", user_id="u", subscription_tier="desktop")
+
+        result = engine.extract(ImagePage(1, self._png(), 40, 40), context)
+
+        assert isinstance(result, Err)
+        assert "no lines" in str(result.error)

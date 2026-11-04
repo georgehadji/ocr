@@ -9,6 +9,22 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Fixed — engines and preprocessing (audit remediation PR5)
+
+- **[14]** Despeckle builds one mask from the component areas instead of a
+  full-image comparison per component; output is byte-identical.
+- **[15]** VLM output is grounded in the pipeline. `GroundedEngine` wraps
+  `VLMEngine` and `UnlimitedOCREngine` and drops blocks that Tesseract does not
+  corroborate; if Tesseract fails the engine returns `Err`, never ungrounded
+  blocks. A VLM reply with no `x1,y1,x2,y2|text` line is now an `Err` instead of
+  full-page-box words. `VLMEngine.extract_guarded` and the `grounding_guard`
+  constructor argument are removed (nothing called them).
+- **[16]** Kraken returns `Err("kraken segmentation found no lines")` when
+  segmentation finds nothing, instead of an empty `Ok`.
+- `ModelManifest.verify` now runs when the ensemble root builds the Kraken
+  engine; a listed model whose SHA-256 differs is refused (`ValueError`, exit 3).
+  Models the manifest does not list are allowed.
+
 ### Fixed — evaluation and training (audit remediation PR4)
 - Evaluation dropped every page where the model produced nothing from the mean,
   so a model that read 1 page of 10 scored a perfect CER of 0. An empty output

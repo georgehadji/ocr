@@ -127,6 +127,28 @@ class TestDespeckle:
         cleaned = _decode(result.value)
         assert cleaned[50, 100] == 0, f"a {size}x{size} diacritic was destroyed"
 
+    def test_matches_the_per_component_loop_on_many_specks(self) -> None:
+        """The vectorized mask must equal the loop it replaced, byte for byte."""
+        rng = np.random.default_rng(0)
+        page = np.full((400, 400), 255, dtype=np.uint8)
+        page[200:220, 40:360] = 0  # a text-sized bar
+        page[50:58, 100:108] = 0  # a tonos-sized mark
+        for y, x in rng.integers(0, 400, size=(2000, 2)):
+            page[y, x] = 0
+
+        min_area = 6
+        binary = cv2.threshold(page, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+        expected = page.copy()
+        for label in range(1, count):
+            if stats[label, cv2.CC_STAT_AREA] < min_area:
+                expected[labels == label] = 255
+
+        result = DespeckleProcessor(min_area=min_area).process(_page(page), CONTEXT)
+        assert isinstance(result, Ok)
+        assert np.array_equal(_decode(result.value), expected)
+        assert not np.array_equal(expected, page), "the page must actually contain specks"
+
     def test_rejects_nonsense_configuration(self) -> None:
         with pytest.raises(ValueError):
             DespeckleProcessor(min_area=0)

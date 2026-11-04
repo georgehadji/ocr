@@ -26,7 +26,6 @@ from omniocr.domain.models import (
     TenantContext,
 )
 from omniocr.domain.result import Err, Ok, Result
-from omniocr.infrastructure.grounding import GroundingGuard
 from omniocr.ports.interfaces import IOCREngine, RawPage
 
 # Single source of truth for the defaults. Composition roots must reference
@@ -52,8 +51,8 @@ class VLMEngine(IOCREngine):
     Requires an explicit ``api_key`` at construction time.
     The caller must check ``Settings.enable_vlm`` before wiring this adapter.
 
-    Results are grounding-guarded: blocks whose bounding boxes do not overlap
-    with a verifiable engine are returned as suggestions, never as source text.
+    Grounding is not done here: composition wraps this engine in
+    ``GroundedEngine``, which drops blocks no box-grounded engine corroborates.
 
     For OpenRouter thinking/reasoning models (e.g., DeepSeek R1), append
     ``:thinking`` to the model name:
@@ -72,7 +71,6 @@ class VLMEngine(IOCREngine):
         api_key: str,
         api_url: str = DEFAULT_API_URL,
         model: str = DEFAULT_MODEL,
-        grounding_guard: GroundingGuard | None = None,
         site_url: str = "",
         site_name: str = "OmniOCR",
         prompt: str = (
@@ -92,7 +90,6 @@ class VLMEngine(IOCREngine):
         self._api_key = api_key
         self._api_url = api_url.rstrip("/")
         self._model = model
-        self._grounding_guard = grounding_guard or GroundingGuard()
         self._site_url = site_url
         self._site_name = site_name
         self._prompt = prompt
@@ -114,24 +111,6 @@ class VLMEngine(IOCREngine):
             return Ok(tuple(blocks))
         except Exception as exc:
             return Err(EngineError(f"VLM extraction failed: {exc}"))
-
-    def extract_guarded(
-        self,
-        page: RawPage,
-        context: TenantContext,
-        engine_blocks: Sequence[OCRBlock],
-    ) -> tuple[Sequence[OCRBlock], Sequence[OCRBlock]]:
-        """Extract and grounding-guard VLM blocks against engine output.
-
-        Returns (grounded_blocks, ungrounded_blocks) — the caller should
-        only use grounded blocks as candidate text.
-        """
-        result = self.extract(page, context)
-        if not isinstance(result, Ok):
-            return (), ()
-        vlm_blocks = list(result.value)
-        grounded, _ = self._grounding_guard.filter(vlm_blocks, engine_blocks)
-        return grounded, tuple(b for b in vlm_blocks if b not in grounded)
 
     def _downscale(self, image_bytes: bytes) -> tuple[bytes, float]:
         """Shrink the page so the longest edge is at most ``max_edge_px``.
@@ -311,19 +290,12 @@ class VLMEngine(IOCREngine):
                 )
             )
 
-        if not blocks:
-            # No parseable structure — attempt an unstructured fallback.
-            for index, word in enumerate(text.strip().split()):
-                if len(word) > 1:
-                    blocks.append(
-                        OCRBlock(
-                            id=f"vlm-w{index}",
-                            text=word.strip(".,;:!?"),
-                            confidence=Confidence(0.0),
-                            bbox=BBox(0, 0, page_width, page_height),
-                            provenance=run,
-                        )
-                    )
+        if not blocks and text.strip():
+            # Text with no `x1,y1,x2,y2|text` line is a chat-style reply, not a
+            # transcription. Giving its words a full-page box (as this once
+            # did) made them overlap every engine box, so grounding passed
+            # text the model never located. extract() turns this into an Err.
+            raise ValueError("VLM output has no 'x1,y1,x2,y2|text' lines")
 
         return blocks
 
