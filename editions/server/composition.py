@@ -32,6 +32,7 @@ def create_server_pipeline(
         script=Script.POLYTONIC,
         job_store=SQLiteJobStore("omniocr_jobs.db"),
         vlm_api_key=cfg.vlm_api_key if cfg.enable_vlm else None,
+        unlimited_ocr_url=cfg.unlimited_ocr_url if cfg.enable_vlm else None,
     )
 
 

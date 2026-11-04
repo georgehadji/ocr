@@ -58,4 +58,5 @@ def create_cloud_pipeline(
         script=Script.POLYTONIC,
         job_store=_cloud_job_store(cfg),
         vlm_api_key=cfg.vlm_api_key if cfg.enable_vlm else None,
+        unlimited_ocr_url=cfg.unlimited_ocr_url if cfg.enable_vlm else None,
     )

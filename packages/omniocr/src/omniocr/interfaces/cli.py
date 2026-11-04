@@ -422,6 +422,7 @@ def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> Any:
         workers=args.workers,
         variants=getattr(args, "variants", 1),
         text_layer=not getattr(args, "no_text_layer", False),
+        unlimited_ocr_url=getattr(args, "unlimited_ocr_url", None),
     )
 
 
@@ -757,6 +758,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "recognize every PDF page even where it carries a usable embedded "
             "text layer (default: use the layer when it covers the page)"
+        ),
+    )
+    run.add_argument(
+        "--unlimited-ocr-url",
+        metavar="URL",
+        help=(
+            "add Unlimited-OCR-2 served at this OpenAI-compatible endpoint as an "
+            "extra voter (kraken/ensemble engines only)"
         ),
     )
     run.add_argument("--org", default="cli", help="tenant organization id for provenance")

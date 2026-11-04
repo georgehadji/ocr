@@ -277,6 +277,7 @@ if uploaded_file is not None and st.session_state.review_document is None:
                 script=Script.POLYTONIC,
                 exporter=MarkdownExporter(),
                 vlm_api_key=vlm_key,
+                unlimited_ocr_url=cfg.unlimited_ocr_url if cfg.enable_vlm else None,
             )
         except ImportError as exc:
             st.error(f"Missing dependency: {exc}. Install: pip install -e '.[pdf,kraken,opencv]'")

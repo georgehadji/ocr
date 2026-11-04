@@ -36,6 +36,9 @@ class Settings:
     tesseract_language: str = _DEFAULT_TESSERACT_LANGUAGE
     kraken_model_path: str = _DEFAULT_KRAKEN_MODEL_PATH
     vlm_api_key: str | None = field(default=None, repr=False)
+    # OpenAI-compatible endpoint serving Unlimited-OCR-2. Gated by
+    # ``enable_vlm`` like the key above: it is a VLM, so it stays opt-in.
+    unlimited_ocr_url: str | None = None
 
     def __post_init__(self) -> None:
         if not self.app_name.strip():
@@ -63,6 +66,7 @@ class Settings:
             ),
             kraken_model_path=values.get("OMNIOCR_KRAKEN_MODEL_PATH", _DEFAULT_KRAKEN_MODEL_PATH),
             vlm_api_key=values.get("OMNIOCR_VLM_API_KEY"),
+            unlimited_ocr_url=values.get("OMNIOCR_UNLIMITED_OCR_URL"),
         )
 
 
