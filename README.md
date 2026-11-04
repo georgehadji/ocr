@@ -129,15 +129,19 @@ omniocr run book.pdf --max-pages 5 --json
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--engine` | `ensemble` | `tesseract` (fast) · `kraken` · `ensemble` |
+| `--engine` | `ensemble` | `tesseract` (fast) · `kraken` · `ensemble` (`kraken` and `ensemble` build the same Kraken + Tesseract pipeline) |
 | `--script` | `polytonic` | `modern` `polytonic` `ancient` `byzantine` `pontian` `mixed` `unknown` |
 | `--format` | from `--out` | `txt` `md` `docx` `pdf` `alto` `page` |
-| `--lang` | `grc` | Tesseract language pack |
+| `--lang` | `grc+ell+eng` | Tesseract language pack |
 | `--model` | manifest default | Kraken `.mlmodel` path |
+| `--model-select` | `default` | `default` trusts `models/manifest.json`; `bakeoff` probes every bundled model on the first page and keeps the best. Ignored with `--model` |
+| `--variants N` | `1` | Recognize each page from N differently binarized images and offer the word-level merge for review; each variant multiplies recognition time |
+| `--no-text-layer` | off | Recognize every PDF page, even where it has a usable embedded text layer |
 | `--structure` | off | Reconstruct paragraphs, join hyphens, mark running heads |
 | `--workers N` | `1` | Process N pages concurrently |
 | `--max-pages N` | all | Stop after N pages |
 | `--json` | off | One JSON document on stdout |
+| `--org` / `--user` | `cli` | Tenant organization and user ids recorded for provenance |
 | `--unlimited-ocr-url URL` | off | Add Unlimited-OCR-2 at this OpenAI-compatible endpoint as an extra voter (`kraken`/`ensemble`, `polytonic`/`ancient`/`byzantine` only) |
 
 ### Optional: Unlimited-OCR-2 as an extra voter

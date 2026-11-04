@@ -24,8 +24,9 @@ otherwise page-level parallelism), **printed material**, **faithful
   `app_core/engines.py` returns `[]`). Desktop Edition has the most real code (a working
   Tesseract strategy + MLflow exporter). Treat the Editions as the target structure to
   complete, not finished software.
-- No automated test suite exists yet. When building out `omniocr_core`, add `pytest` (unit
-  tests for domain/post-correction, integration tests for engines against fixture pages).
+- The `pytest` suite lives in `tests/` (unit tests for domain/post-correction, integration
+  tests for engines against the fixture pages in `tests/corpus/`). Run `pytest` from the repo
+  root.
 
 ## Commands
 
