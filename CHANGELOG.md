@@ -28,6 +28,34 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 - Docs and docstrings aligned with the code (layout fallback, composition package, cloud/server
   worker claims, test pointer, lexicon comment).
 
+### Fixed — desktop review UI (audit remediation PR8)
+
+- **[9]** Edit mode no longer raises `NameError` (`bar` and `badge` were bound
+  only in view mode): the per-line block is split into `_render_line_view` and
+  `_render_line_edit`. OCR text is HTML-escaped once, in `line_view_html`, so
+  `καὶ <τὸν> λόγον` stays visible; the engine-comparison pane is escaped too.
+- Editing a line that already had an accepted suggestion is no longer silently
+  lost. Accepted text outranks edited text, but typed edits and glyph inserts
+  always wrote to `edited_lines`, so they were shadowed and the text box snapped
+  back. `_commit_edit` now writes to the accepted store for an accepted line,
+  and typing the OCR text back clears both stores.
+- **[S4]** Image uploads no longer go to PyMuPDF as a PDF. `page_images` renders
+  PDFs, and reads PNG/JPEG/TIFF with the ingest frame handling, so a multi-page
+  TIFF gives one image per page.
+- "Undo last action" reverses the true last write (`UndoLog`), even when a key
+  was set twice, and works across accepted and edited lines. It also clears the
+  text box's remembered text, which used to write the undone edit straight back;
+  "Clear all corrections" had the same problem.
+- `persist_reviewed_lines` writes its rows through `ICorrectionStore.append_many`,
+  one transaction: a failure partway saves nothing, so a retry does not duplicate
+  rows.
+- The reading-order overlay scales the boxes to the page image (they are in
+  300 dpi pixels; the pane image is 150 dpi), and the searchable-PDF button
+  reports an image upload or missing Greek font as an error via
+  `SearchablePdfExporter.create`.
+- New `desktop` extra (`streamlit`); CI installs it and runs the UI through
+  Streamlit's `AppTest` (`tests/test_review_ui.py`).
+
 ### Fixed — server and cloud editions (audit remediation PR7)
 
 - **[6], [7]** Job state comes from the queue (`IJobQueue`: `RqJobQueue`,
