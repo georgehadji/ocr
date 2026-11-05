@@ -18,6 +18,12 @@ by their SHA-256 hashes in `manifest.json`.
 The shared core exposes `sha256_file()` and `verify_model_hash()` for adapters
 and CI to validate artifacts before recognition.
 
+## Getting the files
+
+The `.mlmodel` files are stored in Git LFS. After cloning, run `git lfs pull` (or
+`git lfs pull --include="models/<name>.mlmodel"` for one). Without it each file is a
+~130-byte pointer, and the ensemble refuses to start with a message saying so.
+
 ## Adding a model
 
 1. Place the artifact file here.

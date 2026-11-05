@@ -272,9 +272,10 @@ export OMNIOCR_API_KEYS="my-secret-key:my-team"   # key:tenant,key:tenant
 uvicorn editions.server.main:app --port 8000
 rq worker --url redis://localhost:6379 omniocr
 
-# Cloud
+# Server or Cloud as containers (Redis is not published to the host)
 export REDIS_PASSWORD=... OMNIOCR_API_KEYS="my-secret-key:my-team"
-docker compose -f editions/cloud/docker-compose.yml up
+docker compose -f editions/server/docker-compose.yml up   # FastAPI + RQ
+docker compose -f editions/cloud/docker-compose.yml up    # FastAPI + Celery
 ```
 
 Both APIs take `Authorization: Bearer <key>`; without a configured key every

@@ -11,9 +11,13 @@ import pytest
 
 def test_cloud_composition_root_imports() -> None:
     """The cloud composition root module imports and constructs cleanly."""
+    from omniocr.infrastructure.config import Settings
+
     from editions.cloud.composition import create_cloud_pipeline
 
-    pipeline = create_cloud_pipeline()
+    # A model name the manifest does not list: the checked-in models are Git LFS
+    # pointers on a checkout without LFS, and the manifest hash check refuses those.
+    pipeline = create_cloud_pipeline(Settings(kraken_model_path="not-a-real-model.mlmodel"))
     assert pipeline is not None
 
 

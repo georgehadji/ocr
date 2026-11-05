@@ -12,10 +12,6 @@ WORKDIR /app
 COPY . .
 RUN pip install --no-cache-dir ".[cloud,pdf,kraken,opencv,tesseract]"
 
-# Settings defaults the model path to "", which Kraken reads as /app and cannot load.
-# This is the default declared in models/manifest.json.
-ENV OMNIOCR_KRAKEN_MODEL_PATH=/app/models/greek-german_serifs_bsb10234118.mlmodel
-
 # Uploads and results live on a volume shared with the worker.
 RUN useradd --create-home --uid 10001 omniocr \
     && mkdir -p /data/uploads /data/results \

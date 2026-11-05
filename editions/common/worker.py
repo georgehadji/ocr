@@ -31,14 +31,22 @@ def run_job(
 ) -> None:
     """Recognize ``upload``, write the export to ``out`` atomically, delete the upload.
 
-    A failed run raises, so the queue records the job as failed; ``out`` is
-    only ever created whole.
+    A failed run, or one where every page failed, raises, so the queue records
+    the job as failed; ``out`` is only ever created whole.
     """
     partial = out.with_name(out.name + ".part")
     try:
         result = pipeline.run(upload.read_bytes(), context)
         if isinstance(result, Err):
             raise RuntimeError(str(result.error))
+        # A page that fails is kept in the document with its failure, so a run
+        # where every page failed still "succeeds" with nothing in it. Serving
+        # that as done would hand the client an empty result.
+        pages = result.value.pages
+        if pages and all(page.failures for page in pages):
+            raise RuntimeError(
+                f"every page failed ({len(pages)}); first: {pages[0].failures[0].message}"
+            )
         exported = pipeline.export(result.value, context)
         if isinstance(exported, Err):
             raise RuntimeError(str(exported.error))

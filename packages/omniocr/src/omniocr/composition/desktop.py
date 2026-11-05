@@ -17,7 +17,12 @@ from omniocr.infrastructure.preprocess import (
     SauvolaProcessor,
 )
 from omniocr.infrastructure.grounding import GroundedEngine
-from omniocr.infrastructure.model_manifest import MANIFEST_PATH, ModelManifest
+from omniocr.infrastructure.model_manifest import (
+    MANIFEST_PATH,
+    ModelManifest,
+    is_lfs_pointer,
+    resolve_kraken_model,
+)
 from omniocr.infrastructure.resilience import CircuitBreakerEngine, RetryingEngine
 from omniocr.application.reconcile import (
     AlignedReconciler,
@@ -69,6 +74,11 @@ def _verify_against_manifest(model_path: Path) -> None:
     that no longer matches is refused: that is a corrupt or swapped artifact
     that would silently change accuracy by the 7x the manifest exists to pin.
     """
+    if is_lfs_pointer(model_path):
+        raise ValueError(
+            f"Kraken model {model_path} is a Git LFS pointer, not the model: run `git lfs pull`"
+            " (see models/README.md)"
+        )
     manifest = ModelManifest(MANIFEST_PATH)
     entry = manifest.get(model_path.name)
     if entry is not None and model_path.is_file() and not manifest.verify(entry.name, model_path):
@@ -200,8 +210,8 @@ def create_ensemble_pipeline(
 
     Kraken and Tesseract (each in a ``RetryingEngine``) recognize polytonic,
     ancient and Byzantine pages; every other script goes to Tesseract alone.
-    Kraken's model is checked against the pinned manifest hash first, and the
-    layout analyzer falls back to Tesseract when Kraken finds no lines.
+    Kraken's model is checked against the pinned manifest hash first (an empty
+    ``kraken_model_path`` means the manifest default), and the layout analyzer falls back to Tesseract when Kraken finds no lines.
 
     When ``vlm_api_key`` is provided, a VLM engine is added as an opt-in
     second opinion for those scripts. The VLM endpoint and model
@@ -225,6 +235,7 @@ def create_ensemble_pipeline(
     timeout per window rather than two per page.
     """
     tesseract = RetryingEngine(TesseractEngine(tesseract_language))
+    kraken_model_path = kraken_model_path or resolve_kraken_model()
     _verify_against_manifest(Path(kraken_model_path))
     kraken = RetryingEngine(KrakenEngine(kraken_model_path))
     by_script: dict[Script, tuple[IOCREngine, ...]] = {

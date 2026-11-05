@@ -41,6 +41,7 @@ core with `pip install -e ".[dev,docx]"` plus the extras you need (`kraken`, `pd
 - **Desktop** (review UI): `streamlit run editions/desktop/review_ui.py`
 - **Server**: `uvicorn editions.server.main:app --port 8000` and
   `rq worker --url redis://localhost:6379 omniocr`
+  or `docker compose -f editions/server/docker-compose.yml up`
 - **Cloud**: `docker compose -f editions/cloud/docker-compose.yml up`
 - **CI gates**: see `CONTRIBUTING.md` (pytest with 80% coverage, ruff, mypy strict,
   `scripts/check_layering.py`, `scripts/check_license_isolation.py`)

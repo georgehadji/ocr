@@ -8,6 +8,7 @@ Closes the licensing requirement by making provenance mandatory.
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
@@ -132,3 +133,54 @@ class ModelManifest:
 
 
 __all__ = ["ManifestEntry", "ModelManifest"]
+
+
+_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/"
+
+
+def is_lfs_pointer(path: Path) -> bool:
+    """True when ``path`` is a Git LFS pointer file standing in for the real artifact.
+
+    A checkout without ``git lfs pull`` leaves a ~130-byte text stub where each
+    model should be. Kraken cannot load it, and the hash check alone reports only
+    a mismatch, which does not say why.
+    """
+    try:
+        with path.open("rb") as stream:
+            return stream.read(len(_LFS_POINTER_PREFIX)) == _LFS_POINTER_PREFIX
+    except OSError:
+        return False
+
+
+def resolve_kraken_model(explicit: str | None = None, models_dir: Path = MODELS_DIR) -> str:
+    """Choose the Kraken model: explicit, else the manifest default.
+
+    Selection used to be ``sorted(glob("*.mlmodel"))[0]`` — alphabetical, so
+    the choice was decided by a filename. That is not a detail. Measured on
+    page 31 of the target document, the three bundled models score 0.038,
+    0.147 and 0.264 CER, and the alphabetically first one is the 0.264 —
+    4.7x worse than Tesseract on the same page, while the best is 1.5x
+    better. The manifest now says which one to use and why.
+
+    Lives here, not in the CLI, so the server, cloud and desktop editions get
+    the same choice: they passed an empty path, which Kraken read as the
+    working directory.
+    """
+    if explicit is not None:
+        return explicit
+    candidates = sorted(models_dir.glob("*.mlmodel"))
+    if not candidates:
+        raise FileNotFoundError(
+            f"no Kraken model found in {models_dir}/ — pass --model or see models/README.md"
+        )
+    preferred = ModelManifest(models_dir / MANIFEST_FILENAME).default_for("kraken")
+    if preferred is not None:
+        chosen = models_dir / preferred.name
+        if chosen.is_file():
+            return str(chosen)
+        print(
+            f"manifest default {preferred.name} is missing from {models_dir}/ — "
+            f"falling back to {candidates[0].name}",
+            file=sys.stderr,
+        )
+    return str(candidates[0])
