@@ -18,3 +18,4 @@ implementation_audit_report.md
 
 # Models promoted by training: local artifacts, not source
 /models/promoted/
+/mlruns/
