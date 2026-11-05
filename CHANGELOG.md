@@ -9,6 +9,13 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Fixed — failed pages are visible in every export
+
+PR #32 added a note for a page that could not be read, but only to Markdown. DOCX, plain text
+and searchable PDF still showed an empty page that looked blank. DOCX and TXT now carry
+`[Page N could not be read: <reason>]` (italic in DOCX); the searchable PDF gets a visible text
+annotation on that page, so its source image is left untouched. ALTO and PAGE-XML are unchanged.
+
 ### Fixed — server and cloud images, job status, model default
 
 A live run of the cloud stack found the image could not OCR a page (PR #30 fixed its
