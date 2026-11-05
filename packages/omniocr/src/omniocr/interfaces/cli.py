@@ -54,6 +54,9 @@ EXIT_FAILURE = 1  # pipeline or export failed
 EXIT_USAGE = 2  # argparse default for bad arguments
 EXIT_ENVIRONMENT = 3  # a required engine/model/dependency is missing
 
+# ``PageFailure.error_type`` the pipeline gives a page that produced no lines.
+_EMPTY_PAGE = "EmptyPage"
+
 # Re-exported from the module that owns the layout, not redefined here.
 _MODELS_DIR = MODELS_DIR
 _OUTPUT_DIR = Path("Outputs")  # default destination when --out is omitted
@@ -653,10 +656,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     line_count = sum(len(page.lines) for page in pages)
     suggestion_count = sum(len(page.suggestions) for page in pages)
+    # A page with no text is usually a blank page, which a book is full of, so
+    # it must not fail the run on its own. It is still listed (JSON and stderr),
+    # and a run that read nothing at all fails: that is a wrong model or script,
+    # not a book.
+    empty_pages = [f["page"] for f in failures if f["type"] == _EMPTY_PAGE]
+    real_failures = [f for f in failures if f["type"] != _EMPTY_PAGE]
+    ok = not real_failures and len(empty_pages) < len(pages)
     if args.json:
         _emit_json(
             {
-                "ok": not failures,
+                "ok": ok,
                 "input": str(source),
                 "output": str(out),
                 "format": fmt,
@@ -665,16 +675,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 "pages": len(pages),
                 "lines": line_count,
                 "suggestions": suggestion_count,
-                "failures": failures,
+                "failures": real_failures,
+                "empty_pages": empty_pages,
             }
         )
     else:
         print(
             f"wrote {out} ({len(pages)} pages, {line_count} lines, {suggestion_count} suggestions)"
         )
+    if empty_pages and not args.json:
+        print(f"{len(empty_pages)} pages had no text: {empty_pages}", file=sys.stderr)
 
     # Partial output is still written, but a caller must be able to detect it.
-    return EXIT_OK if not failures else EXIT_FAILURE
+    return EXIT_OK if ok else EXIT_FAILURE
 
 
 # --------------------------------------------------------------------------

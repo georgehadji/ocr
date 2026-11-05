@@ -473,6 +473,59 @@ def test_run_reports_page_failures_and_exits_nonzero(tmp_path, capsys, monkeypat
     assert payload["failures"] == [{"page": 2, "type": "EngineError", "message": "boom"}]
 
 
+def _run_with_pages(tmp_path, capsys, monkeypatch, pages):
+    from omniocr.domain.result import Ok
+
+    source = tmp_path / "in.pdf"
+    source.write_bytes(b"fake-pdf")
+    stub = _StubOrchestrator(pages, Ok(b"ok"))
+    monkeypatch.setattr(cli, "_build_pipeline", lambda args, exporter: stub)
+    monkeypatch.setattr(cli, "_build_exporter", lambda fmt, payload: object())
+    code = cli.main(["run", str(source), "--out", str(tmp_path / "out.txt"), "--json"])
+    return code, json.loads(capsys.readouterr().out)
+
+
+def _empty(number):
+    from omniocr.domain.models import PageFailure
+
+    return _page(number, failures=(PageFailure(error_type="EmptyPage", message="no lines"),))
+
+
+def test_run_exits_ok_when_only_some_pages_are_blank(tmp_path, capsys, monkeypatch) -> None:
+    """A book has blank pages; they are listed but do not fail the run."""
+    pages = [_empty(1), _page(2, lines=(_line("l1", "ok"),)), _empty(3)]
+
+    code, payload = _run_with_pages(tmp_path, capsys, monkeypatch, pages)
+
+    assert code == cli.EXIT_OK
+    assert payload["ok"] is True
+    assert payload["failures"] == []
+    assert payload["empty_pages"] == [1, 3]
+
+
+def test_run_exits_failure_when_every_page_is_blank(tmp_path, capsys, monkeypatch) -> None:
+    """Nothing read at all means a wrong model or script, not a book."""
+    code, payload = _run_with_pages(tmp_path, capsys, monkeypatch, [_empty(1), _empty(2)])
+
+    assert code == cli.EXIT_FAILURE
+    assert payload["ok"] is False
+
+
+def test_run_exits_failure_when_a_page_fails_beside_blank_ones(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    from omniocr.domain.models import PageFailure
+
+    broken = _page(3, failures=(PageFailure(error_type="EngineError", message="boom"),))
+    pages = [_page(1, lines=(_line("l1", "ok"),)), _empty(2), broken]
+
+    code, payload = _run_with_pages(tmp_path, capsys, monkeypatch, pages)
+
+    assert code == cli.EXIT_FAILURE
+    assert [f["page"] for f in payload["failures"]] == [3]
+    assert payload["empty_pages"] == [2]
+
+
 def test_run_export_failure_exits_failure(tmp_path, capsys, monkeypatch) -> None:
     from omniocr.domain.errors import ExportError
     from omniocr.domain.result import Err
