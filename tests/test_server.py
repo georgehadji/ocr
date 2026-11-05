@@ -1,8 +1,8 @@
 """Tests for the server Edition composition root and API.
 
 FastAPI integration tests require ``fastapi``, ``httpx``, and ``uvicorn``.
-The composition root import is tested here; full API tests are in
-``test_server_api.py`` (requires server extras).
+The composition root import is tested here; the shared API is tested in
+``test_edition_api.py`` (requires the server extras).
 """
 
 from __future__ import annotations

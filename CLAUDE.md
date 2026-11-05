@@ -22,8 +22,8 @@ otherwise page-level parallelism), **printed material**, **faithful
   Unlimited-OCR adapters in `infrastructure/`, and the composition roots in `composition/`.
 - **`editions/{desktop,server,cloud}`** are thin composition roots over that core: a
   Streamlit review UI (`desktop/review_ui.py`), FastAPI + RQ (`server/`), and FastAPI +
-  Celery + Docker (`cloud/`). The server and cloud APIs keep their job index in-process, so
-  each runs as a single uvicorn worker.
+  Celery + Docker (`cloud/`). Job state lives in Redis (server) or the Celery result
+  backend (cloud), so either API can run with any number of uvicorn workers.
 - **`prototype/ocr.py`** is the original Streamlit prototype (Tesseract `grc+ell+eng`, 2-pass
   PSM voting). It is kept for reference; new work goes in `packages/omniocr`.
 - The `pytest` suite lives in `tests/` (unit tests for domain/post-correction, integration
@@ -57,9 +57,11 @@ bank** (Tesseract + Kraken; VLM opt-in via cloud API) → **reconcile/vote** →
 **faithful post-correction** → **human review** → **export**.
 
 The five archives in `Github/` are engine sources: `tesseract` (fast baseline), `calamari`
-(opt-in voting booster — **GPLv3/TensorFlow, subprocess-isolate it**), `PaddleOCR`/`EasyOCR`
+(opt-in voting booster via `--calamari-model` — **GPLv3/TensorFlow, subprocess-isolate it**;
+it reads lines, so it is handed the pipeline's own line segmenter), `PaddleOCR`/`EasyOCR`
 (layout/detection), `Unlimited-OCR` (VLM — not a CPU engine; served separately and wired as an
-opt-in voter via `--unlimited-ocr-url`, see `infrastructure/unlimited_ocr.py`).
+opt-in voter via `--unlimited-ocr-url`, see `infrastructure/unlimited_ocr.py`). Both VLM
+voters are wrapped in `GroundedEngine`, which drops blocks over regions Tesseract read as empty.
 Kraken — the default recognizer — comes from PyPI, not a repo here.
 
 ## Rules specific to this codebase

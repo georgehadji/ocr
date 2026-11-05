@@ -91,10 +91,6 @@ class IEventBus(Protocol):
     def publish(self, event: object) -> None: ...
 
 
-class EngineFamily(str):
-    pass
-
-
 class ILineCropper(Protocol):
     """Crop a page image to a line-level region by bounding box."""
 

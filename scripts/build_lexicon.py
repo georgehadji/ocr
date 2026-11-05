@@ -176,8 +176,8 @@ def collect(source: Source, payload: bytes) -> set[str]:
     }
     # Store ONLY the accent-stripped form.
     #
-    # Not an orthographic change: both spellings are stored, and the lexicon
-    # only ever answers yes/no. It is what makes the list usable at all on
+    # Not an orthographic change: the lexicon only ever answers yes/no, and
+    # `contains` monotonizes the query too. It is what makes the list usable at all on
     # this project's material. Measured 2026-09-09 without it, an exact-match
     # lexicon flagged 309 of 456 tokens on a *human-transcribed* page - 68% of
     # definitionally correct text - because the target books are modern Greek

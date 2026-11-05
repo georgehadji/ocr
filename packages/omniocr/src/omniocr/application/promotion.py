@@ -124,19 +124,7 @@ def _mean_cer(report: EvaluationReport) -> float:
     return sum(report.per_script_cer.values()) / len(report.per_script_cer)
 
 
-def refuse_unless_test_split(
-    candidate_report: EvaluationReport,
-) -> Result[None, PromotionRefused]:
-    """Refuse promotion unless evaluated on the TEST split."""
-    if candidate_report.evaluated_on != "test":
-        return Err(
-            PromotionRefused(f"evaluated on '{candidate_report.evaluated_on}', expected 'test'")
-        )
-    return Ok(None)
-
-
 __all__ = [
     "BeatsParentOnHeldOut",
     "PromotionPolicy",
-    "refuse_unless_test_split",
 ]

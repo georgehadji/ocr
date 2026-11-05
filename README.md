@@ -145,6 +145,18 @@ omniocr run book.pdf --max-pages 5 --json
 | `--org` / `--user` | `cli` | Tenant organization and user ids recorded for provenance |
 | `--unlimited-ocr-url URL` | off | Add Unlimited-OCR-2 at this OpenAI-compatible endpoint as an extra voter (`kraken`/`ensemble`, `polytonic`/`ancient`/`byzantine` only) |
 
+### Optional: Calamari as an extra voter
+
+`--calamari-model CHECKPOINT` adds Calamari 2.x (GPLv3, run as a separate
+`calamari-predict` process, never imported) as a voter on polytonic, ancient and Byzantine
+pages. Calamari reads single lines, so it is given the pipeline's own line segmentation.
+`CHECKPOINT` is a glob such as `models/calamari/*.ckpt.json`; several checkpoints are voted
+inside Calamari. No Greek-polytonic Calamari model ships here, and the one tested
+(Catena Lipsiensis early print) misreads the Didot-style fixtures, so treat this as a
+mechanism, not an accuracy gain. Calamari migrates old checkpoints in place on first load
+(`*.h5` becomes `*.h5_v3`), so point it at a copy. It needs its own environment: it installed with
+Python 3.10 and TensorFlow 2.15, while Python 3.12 with TensorFlow 2.21 failed to resolve.
+
 ### Optional: Unlimited-OCR-2 as an extra voter
 
 [`baidu/Unlimited-OCR-2`](https://huggingface.co/baidu/Unlimited-OCR-2) is a document-OCR

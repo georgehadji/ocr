@@ -432,6 +432,7 @@ def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> PipelineOr
         variants=getattr(args, "variants", 1),
         text_layer=not getattr(args, "no_text_layer", False),
         unlimited_ocr_url=getattr(args, "unlimited_ocr_url", None),
+        calamari_model_glob=getattr(args, "calamari_model", None),
     )
 
 
@@ -575,17 +576,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"input not found: {source}", file=sys.stderr)
         return EXIT_USAGE
 
-    if args.engine == "tesseract" and getattr(args, "unlimited_ocr_url", None):
-        # The Tesseract root has no voting ensemble to add it to.
-        print("--unlimited-ocr-url needs --engine kraken or ensemble", file=sys.stderr)
-        return EXIT_USAGE
-    if getattr(args, "unlimited_ocr_url", None):
+    for flag, attr in (
+        ("--unlimited-ocr-url", "unlimited_ocr_url"),
+        ("--calamari-model", "calamari_model"),
+    ):
+        if not getattr(args, attr, None):
+            continue
+        if args.engine == "tesseract":
+            # The Tesseract root has no voting ensemble to add it to.
+            print(f"{flag} needs --engine kraken or ensemble", file=sys.stderr)
+            return EXIT_USAGE
         from omniocr.composition.desktop import ENSEMBLE_SCRIPTS
 
         if Script(args.script) not in ENSEMBLE_SCRIPTS:
-            # Other scripts route to Tesseract alone; the server would never be called.
+            # Other scripts route to Tesseract alone; the voter would never be called.
             names = ", ".join(script.value for script in ENSEMBLE_SCRIPTS)
-            print(f"--unlimited-ocr-url needs --script {names}", file=sys.stderr)
+            print(f"{flag} needs --script {names}", file=sys.stderr)
             return EXIT_USAGE
 
     if args.drop_running_heads:
@@ -816,6 +822,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "add Unlimited-OCR-2 served at this OpenAI-compatible endpoint as an "
             "extra voter (kraken/ensemble engines only)"
+        ),
+    )
+    run.add_argument(
+        "--calamari-model",
+        metavar="CHECKPOINT",
+        help=(
+            "add Calamari (GPLv3, run as a separate calamari-predict process) as an "
+            "extra voter using this checkpoint (kraken/ensemble engines only)"
         ),
     )
     run.add_argument("--org", default="cli", help="tenant organization id for provenance")
