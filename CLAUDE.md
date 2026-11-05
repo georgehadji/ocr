@@ -33,8 +33,8 @@ otherwise page-level parallelism), **printed material**, **faithful
 ## Commands
 
 Tesseract must be installed and on `PATH` (with `ell` and `grc` language data). Install the
-core with `pip install -e ".[dev,docx]"` plus the extras you need (`kraken`, `pdf`, `server`,
-`cloud`, `training`; see `pyproject.toml`). Run everything from the repo root.
+core with `pip install -e ".[dev,docx]"` plus the extras you need (`tesseract`, `kraken`, `opencv`, `pdf`,
+`desktop` for the review UI, `server`, `cloud`, `training`; see `pyproject.toml`). Run everything from the repo root.
 
 - **CLI**: `omniocr doctor` (what's missing), `omniocr run book.pdf --out book.docx`,
   `omniocr eval --split test`

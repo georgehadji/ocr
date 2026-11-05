@@ -32,6 +32,13 @@ dependencies). This follows up on what that run left open:
   `models/*.mlmodel`, the image jobs `git lfs pull` the manifest default and verify its pinned
   hash inside the built image, and a pointer file is refused with a message saying to run
   `git lfs pull`.
+- **Failed pages are visible in Markdown.** A page that failed was exported as an empty
+  `## Page N` section, indistinguishable from a blank page, so a partly failed book looked
+  complete. It now carries `> **Page N could not be read:** <reason>`. The server and cloud
+  results are Markdown, so they show it too.
+- Docs: Calamari described as the opt-in line voter it is (not a 5-model page ensemble),
+  CONTRIBUTING lists every gate CI runs, and the install lines name the `tesseract` and
+  `desktop` extras.
 
 ### Fixed — Calamari wired and tested; dead code removed (audit remediation PR9)
 

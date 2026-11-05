@@ -57,7 +57,12 @@ class MarkdownExporter(IExporter):
                 lines = "\n\n".join(para_texts)
             else:
                 lines = "\n".join(line.text for line in page.lines)
-            sections.append(f"## Page {page.number}\n\n{lines}")
+            heading = f"## Page {page.number}"
+            # A page that failed has no text. Saying so keeps a reader of the
+            # result from taking the empty section for a blank page.
+            for failure in page.failures:
+                heading += f"\n\n> **Page {page.number} could not be read:** {failure.message}"
+            sections.append(f"{heading}\n\n{lines}")
         return Ok(("\n\n".join(sections) + ("\n" if sections else "")).encode("utf-8"))
 
 

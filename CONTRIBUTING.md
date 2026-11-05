@@ -15,12 +15,17 @@ Run the same gates CI runs:
 
 ```bash
 python -m pytest --cov=packages/omniocr/src/omniocr --cov-report=term-missing --cov-fail-under=80
-ruff check packages tests
-ruff format --check packages tests
+ruff check packages tests editions scripts
+ruff format --check packages tests editions scripts
 mypy --strict --ignore-missing-imports --python-version 3.11 packages/omniocr/src
+mypy --strict --ignore-missing-imports --python-version 3.11 --explicit-package-bases editions scripts
 python scripts/check_license_isolation.py
 python scripts/check_layering.py
 ```
+
+CI also builds the cloud and server images (`editions/*/Dockerfile`). The Kraken models
+are Git LFS files: run `git lfs pull` before building an image or running the engines
+locally (see `models/README.md`).
 
 ## Rules specific to this codebase
 
