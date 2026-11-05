@@ -53,6 +53,8 @@ def test_ensemble_pipeline_resolves_an_empty_model_path_to_the_manifest_default(
             seen.append(path)
 
     monkeypatch.setattr(desktop, "KrakenEngine", _Recorder)
+    # Without Git LFS the checked-in model is a pointer file, which the hash check refuses.
+    monkeypatch.setattr(desktop, "_verify_against_manifest", lambda path: None)
 
     create_ensemble_pipeline(tesseract_language="grc", kraken_model_path="")
 
