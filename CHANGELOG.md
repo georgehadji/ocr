@@ -9,6 +9,16 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Added — a promoted model is now used by recognition
+
+Training promoted a model but nothing read the registry: `promoted_for_script` returned `None` and
+the in-memory registry died with the process. `FileModelRegistry` copies the promoted weights to
+`models/promoted/` beside a `promoted.json` (measured CER/WER, sample count, hash). When no
+`--model` is given, `resolve_kraken_model` now uses the newest promotion for the run's `--script`,
+re-hashing the file first, and says so on stderr. `--model` still overrides it; a script with no
+promotion keeps the manifest default. MLflow, when configured, records the run on top of the file
+registry. `models/promoted/` is gitignored.
+
 ### Fixed — `scripts/train_kraken.py` could not train
 
 The script passed no page images, so no correction could be cropped into a training line, and the

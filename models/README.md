@@ -29,3 +29,11 @@ The `.mlmodel` files are stored in Git LFS. After cloning, run `git lfs pull` (o
 1. Place the artifact file here.
 2. Compute its SHA-256 digest: `python -c "from omniocr.infrastructure.models import sha256_file; print(sha256_file('models/your-model.mlmodel'))"`
 3. Add an entry to `manifest.json` with engine, name, source, licence, sha256.
+
+## Promoted models
+
+`scripts/train_kraken.py` promotes a fine-tuned model only if it beat its parent on the held-out
+test split. Promotions are kept in `models/promoted/` (`promoted.json` plus the weights) and are
+not committed. `omniocr run` uses the newest promotion for its `--script` when `--model` is not
+given, and prints which one on stderr. To go back to the manifest default, pass `--model` with that
+model's path, or delete `models/promoted/`.

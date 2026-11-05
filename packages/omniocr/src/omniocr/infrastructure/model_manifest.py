@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
+from omniocr.domain.models import Script
+from omniocr.infrastructure.model_registry import FileModelRegistry
 from omniocr.infrastructure.models import sha256_file
 
 # Where model artifacts and their manifest live, relative to the working
@@ -152,8 +154,19 @@ def is_lfs_pointer(path: Path) -> bool:
         return False
 
 
-def resolve_kraken_model(explicit: str | None = None, models_dir: Path = MODELS_DIR) -> str:
-    """Choose the Kraken model: explicit, else the manifest default.
+PROMOTED_DIR = MODELS_DIR / "promoted"
+
+
+def resolve_kraken_model(
+    explicit: str | None = None,
+    models_dir: Path = MODELS_DIR,
+    script: Script | None = None,
+) -> str:
+    """Choose the Kraken model: explicit, else a promoted one for ``script``, else the manifest default.
+
+    A promoted model is one training measured to beat its parent on held-out
+    pages (``FileModelRegistry``); it is announced on stderr, and ``--model``
+    always overrides it.
 
     Selection used to be ``sorted(glob("*.mlmodel"))[0]`` — alphabetical, so
     the choice was decided by a filename. That is not a detail. Measured on
@@ -168,6 +181,16 @@ def resolve_kraken_model(explicit: str | None = None, models_dir: Path = MODELS_
     """
     if explicit is not None:
         return explicit
+    if script is not None:
+        promoted = FileModelRegistry(models_dir / "promoted").promoted_for_script(script)
+        if promoted is not None and promoted.model_ref.engine == "kraken":
+            print(
+                f"using promoted model {promoted.checkpoint.name} for {script.value} "
+                f"({promoted.improvement_pct:+.1f}% CER on {promoted.report.sample_count} held-out "
+                "page(s)); pass --model to override",
+                file=sys.stderr,
+            )
+            return str(promoted.checkpoint)
     candidates = sorted(models_dir.glob("*.mlmodel"))
     if not candidates:
         raise FileNotFoundError(

@@ -15,3 +15,6 @@ implementation_audit_report.md
 # Claude Code machine-local settings (launch.json is shared, this is not)
 .claude/settings.local.json
 .claude/claudex/
+
+# Models promoted by training: local artifacts, not source
+/models/promoted/

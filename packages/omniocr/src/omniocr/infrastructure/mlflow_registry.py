@@ -36,13 +36,20 @@ class MlflowModelRegistry(IModelRegistry):
         self,
         tracking_uri: str | None = None,
         experiment_name: str = "omniocr",
+        inner: IModelRegistry | None = None,
     ) -> None:
         self._experiment_name = experiment_name
+        # MLflow records the run; ``inner`` is where recognition finds the model.
+        self._inner = inner
         if _HAS_MLFLOW and tracking_uri:
             mlflow.set_tracking_uri(tracking_uri)
 
     def register(self, model: PromotedModel) -> Result[None, TrainingError]:
-        """Log a promoted model to MLflow."""
+        """Record the model in ``inner`` (if any), then log it to MLflow."""
+        if self._inner is not None:
+            stored = self._inner.register(model)
+            if isinstance(stored, Err):
+                return stored
         if not _HAS_MLFLOW:
             _LOG.info(
                 "MLflow not installed — skipping registry for model %s",
@@ -85,14 +92,12 @@ class MlflowModelRegistry(IModelRegistry):
             return Err(TrainingError(f"MLflow registration failed: {exc}"))
 
     def promoted_for_script(self, script: Script) -> PromotedModel | None:
-        """Query MLflow for the best promoted model for a given script."""
-        # MLflow has no efficient "latest by tag" query without search;
-        # for now, return None and let the caller fall through to defaults.
-        return None
+        """Ask ``inner``: MLflow has no efficient "latest by tag" query without search."""
+        return self._inner.promoted_for_script(script) if self._inner is not None else None
 
     def promoted_for_typeface(self, typeface: str) -> PromotedModel | None:
-        """Query MLflow for a promoted model for a specific typeface."""
-        return None
+        """Ask ``inner`` for a promoted model for a specific typeface."""
+        return self._inner.promoted_for_typeface(typeface) if self._inner is not None else None
 
 
 class InMemoryModelRegistry(IModelRegistry):
