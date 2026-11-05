@@ -524,11 +524,13 @@ class IJobQueue(Protocol):
 
 ### Delete
 
-- `infrastructure/calamari.py`, `tests/test_calamari.py`, the Calamari wiring
+- **Decision (user, 2026-11-05): Calamari stays.** It was wired to the CLI and tested instead
+  of deleted; the adapter was broken against Calamari 2.x. The bullet below is not carried out.
+- ~~`infrastructure/calamari.py`, `tests/test_calamari.py`, the Calamari wiring
   in `composition/desktop.py:233-237, 250-251`, `Settings.enable_calamari`,
   the `calamari` extra in `pyproject.toml`, and the Calamari part of
   `scripts/check_license_isolation.py`. Keep the script itself if other GPL
-  checks remain; otherwise delete it from CI too.
+  checks remain; otherwise delete it from CI too.~~
 - `RegistryAwareRouter` (`application/router.py:93-120`),
   `refuse_unless_test_split` (`application/promotion.py:127`) and
   `EngineFamily` (`ports/interfaces.py:99`).

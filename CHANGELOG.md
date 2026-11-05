@@ -9,6 +9,25 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Fixed — Calamari wired and tested; dead code removed (audit remediation PR9)
+
+- **Calamari** now works against real Calamari 2.x and is reachable from the CLI
+  (`omniocr run --calamari-model CHECKPOINT`). The adapter passed `--files`, which Calamari
+  2.x rejects with `UnknownArgumentError`, and parsed a `{"texts": [...]}` stdout that it never
+  prints, so it returned an error on every page; its tests only parsed that invented format.
+  It now segments lines with the pipeline's own analyzer (Calamari reads lines, not pages),
+  runs one `calamari-predict` process per page, and reads the per-line `.json` files.
+  Checkpoints resolve through `.json`, because Calamari renames `.h5` files on first load.
+  A real-binary test runs when `calamari-predict` and `OMNIOCR_CALAMARI_MODEL` are present.
+- **[20]** Deleted `RegistryAwareRouter`, `ScriptRouter`'s unused model-registry path
+  (`_PromotedResolver`, `EngineFactory`, `engine_map`, `_build_engine_on_checkpoint`; no
+  composition root passed a registry), `refuse_unless_test_split` and `EngineFamily`.
+- **[20]** One diacritic check: `model_selection` now counts `post_correction.diacritic_violations`
+  instead of keeping a copy. A base character with both a double breathing and a double accent
+  now counts as two violations in the model-selection score, not one.
+- Docs and docstrings aligned with the code (layout fallback, composition package, cloud/server
+  worker claims, test pointer, lexicon comment).
+
 ### Fixed — desktop review UI (audit remediation PR8)
 
 - **[9]** Edit mode no longer raises `NameError` (`bar` and `badge` were bound

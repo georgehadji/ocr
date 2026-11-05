@@ -37,7 +37,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Mapping, Sequence
 
-from omniocr.application.post_correction import _lexicon_key
+from omniocr.application.post_correction import _lexicon_key, diacritic_violations
 from omniocr.domain.models import OCRLine, Script
 from omniocr.ports.interfaces import ILexicon
 
@@ -49,12 +49,6 @@ DIACRITIC_WEIGHT = 0.1
 # domain's Confidence permits either. Normalize before weighting so a model
 # reporting 0.9 does not lose to one reporting 90 for the same certainty.
 _CONFIDENCE_CEILING = 100.0
-
-# Same marks SuggestOnlyCorrector checks. Spelled with escapes rather than
-# literal combining characters, which are invisible in a source file and
-# silently corrupted by an editor that normalizes on save.
-_BREATHING_MARKS = frozenset(["\u0313", "\u0314"])  # smooth, rough
-_ACCENT_MARKS = frozenset(["\u0300", "\u0301", "\u0342"])  # grave, acute, perispomeni
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,24 +103,9 @@ def _diacritic_violation_rate(lines: Sequence[OCRLine]) -> float:
     bases = 0
     violations = 0
     for line in lines:
+        violations += len(diacritic_violations(line.text))
         nfd = unicodedata.normalize("NFD", line.text)
-        index = 0
-        while index < len(nfd):
-            if unicodedata.category(nfd[index]) in ("Mn", "Mc"):
-                index += 1
-                continue
-            bases += 1
-            index += 1
-            breathings = accents = 0
-            while index < len(nfd) and unicodedata.category(nfd[index]) in ("Mn", "Mc"):
-                mark = nfd[index]
-                if mark in _BREATHING_MARKS:
-                    breathings += 1
-                elif mark in _ACCENT_MARKS:
-                    accents += 1
-                index += 1
-            if breathings > 1 or accents > 1:
-                violations += 1
+        bases += sum(1 for char in nfd if unicodedata.category(char) not in ("Mn", "Mc"))
     if bases == 0:
         return 0.0
     return violations / bases

@@ -60,6 +60,46 @@ _PUNCTUATION: frozenset[str] = frozenset(".,;:·!?()[]{}«»\"'’‘“”—�
 
 _TOKEN = re.compile(r"\S+")
 
+# Spelled with escapes rather than literal combining characters, which are
+# invisible in a source file and silently corrupted by an editor that
+# normalizes on save.
+_BREATHING_MARKS: frozenset[str] = frozenset(["̓", "̔"])  # smooth, rough
+_ACCENT_MARKS: frozenset[str] = frozenset(
+    ["̀", "́", "͂"]  # grave, acute, circumflex/perispomeni
+)
+
+
+def diacritic_violations(text: str) -> list[str]:
+    """Impossible polytonic diacritic combinations in ``text``.
+
+    Returns one reason string per violation: two breathings, or two accents,
+    on one base character. An unusual but legal combination is not a defect.
+    Shared by the corrector (which reports each reason) and by per-document
+    model selection (which counts them).
+    """
+    issues: list[str] = []
+    nfd = unicodedata.normalize("NFD", text)
+    index = 0
+    while index < len(nfd):
+        if unicodedata.category(nfd[index]) in ("Mn", "Mc"):
+            index += 1
+            continue
+        breathing = 0
+        accents = 0
+        index += 1
+        while index < len(nfd) and unicodedata.category(nfd[index]) in ("Mn", "Mc"):
+            mark = nfd[index]
+            if mark in _BREATHING_MARKS:
+                breathing += 1
+            elif mark in _ACCENT_MARKS:
+                accents += 1
+            index += 1
+        if breathing > 1:
+            issues.append("multiple_breathing_marks")
+        if accents > 1:
+            issues.append("multiple_accent_marks")
+    return issues
+
 
 class SuggestOnlyCorrector(IPostCorrector):
     """Run conservative checks while preserving the recognized source text.
@@ -68,13 +108,6 @@ class SuggestOnlyCorrector(IPostCorrector):
     expansion, and lexicon highlighting — all reversible, all
     suggest-only. Source text is never modified in place.
     """
-
-    _BREATHING_MARKS: frozenset[str] = frozenset(
-        ["\u0313", "\u0314"]  # smooth, rough
-    )
-    _ACCENT_MARKS: frozenset[str] = frozenset(
-        ["\u0300", "\u0301", "\u0342"]  # grave, acute, circumflex/perispomeni
-    )
 
     _ABBREVIATIONS: dict[str, str] = {
         "κ.τ.λ.": "καὶ τὰ λοιπά",
@@ -221,8 +254,7 @@ class SuggestOnlyCorrector(IPostCorrector):
                         )
                     )
 
-        diacritic_issues = self._check_diacritics(line.text)
-        for issue in diacritic_issues:
+        for issue in diacritic_violations(line.text):
             suggestions.append(
                 Suggestion(
                     line_id=line.id,
@@ -235,35 +267,5 @@ class SuggestOnlyCorrector(IPostCorrector):
 
         return Ok(tuple(suggestions))
 
-    @staticmethod
-    def _check_diacritics(text: str) -> list[str]:
-        """Check for impossible polytonic diacritic combinations.
 
-        Returns a list of reason strings, one per detected violation.
-        """
-        issues: list[str] = []
-        nfd = unicodedata.normalize("NFD", text)
-        index = 0
-        while index < len(nfd):
-            character = nfd[index]
-            if unicodedata.category(character) in ("Mn", "Mc"):
-                index += 1
-                continue
-            breathing = 0
-            accents = 0
-            index += 1
-            while index < len(nfd) and unicodedata.category(nfd[index]) in ("Mn", "Mc"):
-                mark = nfd[index]
-                if mark in SuggestOnlyCorrector._BREATHING_MARKS:
-                    breathing += 1
-                elif mark in SuggestOnlyCorrector._ACCENT_MARKS:
-                    accents += 1
-                index += 1
-            if breathing > 1:
-                issues.append("multiple_breathing_marks")
-            if accents > 1:
-                issues.append("multiple_accent_marks")
-        return issues
-
-
-__all__ = ["SuggestOnlyCorrector"]
+__all__ = ["SuggestOnlyCorrector", "diacritic_violations"]

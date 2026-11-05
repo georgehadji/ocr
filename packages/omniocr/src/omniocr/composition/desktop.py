@@ -198,8 +198,13 @@ def create_ensemble_pipeline(
 ) -> PipelineOrchestrator:
     """Build a CPU ensemble with script rules injected at the composition root.
 
+    Kraken and Tesseract (each in a ``RetryingEngine``) recognize polytonic,
+    ancient and Byzantine pages; every other script goes to Tesseract alone.
+    Kraken's model is checked against the pinned manifest hash first, and the
+    layout analyzer falls back to Tesseract when Kraken finds no lines.
+
     When ``vlm_api_key`` is provided, a VLM engine is added as an opt-in
-    second opinion for polytonic/ancient scripts. The VLM endpoint and model
+    second opinion for those scripts. The VLM endpoint and model
     default to ``vlm.DEFAULT_API_URL`` / ``vlm.DEFAULT_VLM_MODEL`` (OpenRouter)
     — set ``vlm_api_url`` to use a different OpenAI-compatible provider. The
     defaults are not restated here: this root previously hardcoded an OpenAI
@@ -207,10 +212,12 @@ def create_ensemble_pipeline(
     ``google/...`` to a provider that does not serve it. When
     ``unlimited_ocr_url`` is provided, Unlimited-OCR-2 served at that
     OpenAI-compatible endpoint joins the same scripts as a further opt-in
-    voter. When ``calamari_model_glob``
-    is provided, a Calamari subprocess engine is added as a voting booster.
-    The VLM and Calamari are wrapped in ``RetryingEngine`` for transient-failure
-    resilience.
+    voter. Both are wrapped in ``GroundedEngine``, which drops blocks over
+    regions Tesseract read as empty, so a model's unaudited output never
+    reaches the reconciler. The VLM is also wrapped in ``RetryingEngine`` for
+    transient-failure resilience. When ``calamari_model_glob`` is provided, a
+    Calamari subprocess engine (GPLv3, never imported) joins the same scripts
+    as a voter, also in a ``RetryingEngine``.
     Unlimited-OCR is not retried: its failures are mostly ten-minute timeouts
     from a busy or dead GPU server, so a retry doubles the stall and resubmits
     a job the server may still be running. A circuit breaker instead skips it
@@ -248,41 +255,26 @@ def create_ensemble_pipeline(
         for script_key in ENSEMBLE_SCRIPTS:
             by_script[script_key] = (*by_script[script_key], guarded_unlimited)
 
+    # Kraken segmentation returns zero lines with no error on grainy
+    # scans; without a fallback those pages vanish from the output.
+    layout_analyzer = FallbackLayoutAnalyzer(
+        KrakenLayoutAnalyzer(script), TesseractLayoutAnalyzer(tesseract_language, script)
+    )
+
     if calamari_model_glob is not None:
-        calamari = CalamariEngine(model_glob=calamari_model_glob)
-        retrying_calamari = RetryingEngine(calamari)
+        # Calamari reads lines, so it gets the pipeline's own segmenter.
+        retrying_calamari = RetryingEngine(
+            CalamariEngine(model_glob=calamari_model_glob, layout_analyzer=layout_analyzer)
+        )
         for script_key in ENSEMBLE_SCRIPTS:
             by_script[script_key] = (*by_script[script_key], retrying_calamari)
 
-    # Build engine_map so the router can resolve promoted models by engine name
-    # Keys come from each engine's own ``name`` so the map cannot drift from
-    # the identity the router and manifest match on.
-    engine_map: dict[str, IOCREngine] = {
-        KrakenEngine.name: kraken,
-        TesseractEngine.name: tesseract,
-    }
-    if vlm_api_key is not None:
-        engine_map[VLMEngine.name] = retrying_vlm
-    if unlimited_ocr_url is not None:
-        engine_map[UnlimitedOCREngine.name] = guarded_unlimited
-    if calamari_model_glob is not None:
-        engine_map[CalamariEngine.name] = retrying_calamari
-
-    router = ScriptRouter(
-        by_script=by_script,
-        default=default,
-        engine_map=engine_map,
-        engine_factory=_build_engine_on_checkpoint,
-    )
+    router = ScriptRouter(by_script=by_script, default=default)
     assembler = DocumentAssembler() if assemble_structure else IdentityAssembler()
     return PipelineOrchestrator(
         page_source=DocumentPageSource(text_layer=text_layer, script=script),
         image_processor=_default_image_processor(),
-        # Kraken segmentation returns zero lines with no error on grainy
-        # scans; without a fallback those pages vanish from the output.
-        layout_analyzer=FallbackLayoutAnalyzer(
-            KrakenLayoutAnalyzer(script), TesseractLayoutAnalyzer(tesseract_language, script)
-        ),
+        layout_analyzer=layout_analyzer,
         router=router,
         # Kraken leads on Greek but its charset holds no Latin, so a plain
         # confidence vote hands Latin lines (footnote URLs, western-language
@@ -298,17 +290,6 @@ def create_ensemble_pipeline(
         max_workers=workers if workers > 1 else None,
         variants=_variant_processors(variants),
     )
-
-
-def _build_engine_on_checkpoint(engine_family: str, checkpoint: Path) -> IOCREngine:
-    """Build an engine running a promoted fine-tuned checkpoint.
-
-    Only Kraken is fine-tunable here (``ketos``), so other families fall back
-    to a Kraken engine on the checkpoint rather than silently returning the
-    parent-weights engine — a promoted model must never route to the weights
-    it was promoted over.
-    """
-    return RetryingEngine(KrakenEngine(checkpoint))
 
 
 class _TesseractRouter:

@@ -112,9 +112,11 @@ class TesseractLayoutAnalyzer(ILayoutAnalyzer):
 
     Exists as a fallback for pages Kraken's segmenter refuses. On grainy
     scans ``kraken.pageseg.segment`` hits its connected-component ceiling
-    ("Too many connected components for a page image: 16761"), returns an
-    empty line list, and reports no error — so the page silently produces no
-    text. Tesseract reads those same pages without complaint.
+    ("Too many connected components for a page image: 16761") and returns an
+    empty line list without raising. ``FallbackLayoutAnalyzer`` treats an empty
+    result as a failure and asks this analyzer instead, so the page is
+    segmented here rather than silently producing no text. Tesseract reads
+    those same pages without complaint.
 
     Only boxes are taken here. Recognition still runs through the normal
     engine bank, so a fallback page is not quietly downgraded to
