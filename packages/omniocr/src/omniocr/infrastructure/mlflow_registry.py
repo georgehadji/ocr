@@ -89,6 +89,11 @@ class MlflowModelRegistry(IModelRegistry):
 
             return Ok(None)
         except Exception as exc:
+            # With an inner registry the model is already stored and usable;
+            # the MLflow run is bookkeeping and must not undo a promotion.
+            if self._inner is not None:
+                _LOG.warning("MLflow run not recorded (model is registered): %s", exc)
+                return Ok(None)
             return Err(TrainingError(f"MLflow registration failed: {exc}"))
 
     def promoted_for_script(self, script: Script) -> PromotedModel | None:

@@ -9,6 +9,14 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Fixed — MLflow registration, found by installing MLflow
+
+The MLflow path had never run: MLflow was not installed, so every test and run skipped it. With
+MLflow 3.18 the default `--mlflow-uri file:./mlruns` is refused (file stores are in maintenance
+mode), so the default is now `sqlite:///mlflow.db`. A failed MLflow run no longer fails a
+promotion whose model is already stored in `models/promoted/`; it is logged as a warning. A sqlite
+store writes artifacts under `./mlruns`, which is now gitignored.
+
 ### Added — a promoted model is now used by recognition
 
 Training promoted a model but nothing read the registry: `promoted_for_script` returned `None` and

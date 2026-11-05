@@ -119,7 +119,10 @@ def test_other_scripts_and_script_less_calls_keep_the_manifest_default(tmp_path:
     assert resolve_kraken_model(None, models) == str(models / "default.mlmodel")
 
 
-def test_mlflow_registry_records_into_and_reads_from_its_inner_registry(tmp_path: Path) -> None:
+def test_mlflow_registry_records_into_and_reads_from_its_inner_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("omniocr.infrastructure.mlflow_registry._HAS_MLFLOW", False)
     inner = FileModelRegistry(tmp_path / "promoted")
     registry = MlflowModelRegistry(inner=inner)
 
@@ -127,3 +130,38 @@ def test_mlflow_registry_records_into_and_reads_from_its_inner_registry(tmp_path
 
     assert inner.promoted_for_script(Script.POLYTONIC) is not None
     assert registry.promoted_for_script(Script.POLYTONIC) is not None
+
+
+def test_an_mlflow_failure_does_not_undo_a_promotion_already_stored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mlflow = pytest.importorskip("mlflow")
+    monkeypatch.chdir(tmp_path)
+    inner = FileModelRegistry(tmp_path / "promoted")
+    registry = MlflowModelRegistry(inner=inner)
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("tracking server unreachable")
+
+    monkeypatch.setattr(mlflow, "set_experiment", _boom)
+
+    assert registry.register(_promoted(tmp_path, b"w")).is_ok()
+    assert inner.promoted_for_script(Script.POLYTONIC) is not None
+
+
+def test_mlflow_registry_logs_a_run_to_a_sqlite_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mlflow = pytest.importorskip("mlflow")
+    # A sqlite store keeps artifacts under ./mlruns of the working directory.
+    monkeypatch.chdir(tmp_path)
+    uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+    registry = MlflowModelRegistry(
+        tracking_uri=uri, experiment_name="check", inner=FileModelRegistry(tmp_path / "p")
+    )
+
+    assert registry.register(_promoted(tmp_path, b"w")).is_ok()
+
+    runs = mlflow.search_runs(experiment_names=["check"])
+    assert len(runs) == 1
+    assert runs["metrics.improvement_pct"].iloc[0] == 23.5

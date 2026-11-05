@@ -41,7 +41,7 @@ def test_pipeline_wires_corpus_evaluator_when_corpus_root_given(tmp_path: Path) 
 def test_pipeline_wires_mlflow_registry_when_tracking_uri_given(tmp_path: Path) -> None:
     orchestrator = create_training_pipeline(
         corrections_db=tmp_path / "corrections.db",
-        mlflow_tracking_uri=f"file:{tmp_path / 'mlruns'}",
+        mlflow_tracking_uri=f"sqlite:///{tmp_path / 'mlflow.db'}",
     )
 
     assert isinstance(orchestrator._model_registry, MlflowModelRegistry)

@@ -60,7 +60,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mlflow-uri",
-        default="file:./mlruns",
+        default="sqlite:///mlflow.db",
         help="MLflow tracking URI for the model registry",
     )
     parser.add_argument(
