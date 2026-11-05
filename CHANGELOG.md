@@ -26,6 +26,12 @@ dependencies). This follows up on what that run left open:
   password-protected Redis), and CI builds the image. Both image jobs now import `cv2`,
   `pytesseract` and `structlog` and resolve the default model, since each was missing once and
   failed only when a job ran.
+- **Git LFS models.** The Kraken models are committed as LFS pointers, but no repo rule said
+  so: only a machine-wide attributes file made LFS work, so a fresh clone, CI and every image
+  built from one held ~130-byte stubs instead of models. `.gitattributes` now tracks
+  `models/*.mlmodel`, the image jobs `git lfs pull` the manifest default and verify its pinned
+  hash inside the built image, and a pointer file is refused with a message saying to run
+  `git lfs pull`.
 
 ### Fixed — Calamari wired and tested; dead code removed (audit remediation PR9)
 

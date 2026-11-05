@@ -135,6 +135,23 @@ class ModelManifest:
 __all__ = ["ManifestEntry", "ModelManifest"]
 
 
+_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/"
+
+
+def is_lfs_pointer(path: Path) -> bool:
+    """True when ``path`` is a Git LFS pointer file standing in for the real artifact.
+
+    A checkout without ``git lfs pull`` leaves a ~130-byte text stub where each
+    model should be. Kraken cannot load it, and the hash check alone reports only
+    a mismatch, which does not say why.
+    """
+    try:
+        with path.open("rb") as stream:
+            return stream.read(len(_LFS_POINTER_PREFIX)) == _LFS_POINTER_PREFIX
+    except OSError:
+        return False
+
+
 def resolve_kraken_model(explicit: str | None = None, models_dir: Path = MODELS_DIR) -> str:
     """Choose the Kraken model: explicit, else the manifest default.
 

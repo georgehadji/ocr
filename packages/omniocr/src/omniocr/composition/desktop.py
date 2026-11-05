@@ -20,6 +20,7 @@ from omniocr.infrastructure.grounding import GroundedEngine
 from omniocr.infrastructure.model_manifest import (
     MANIFEST_PATH,
     ModelManifest,
+    is_lfs_pointer,
     resolve_kraken_model,
 )
 from omniocr.infrastructure.resilience import CircuitBreakerEngine, RetryingEngine
@@ -73,6 +74,11 @@ def _verify_against_manifest(model_path: Path) -> None:
     that no longer matches is refused: that is a corrupt or swapped artifact
     that would silently change accuracy by the 7x the manifest exists to pin.
     """
+    if is_lfs_pointer(model_path):
+        raise ValueError(
+            f"Kraken model {model_path} is a Git LFS pointer, not the model: run `git lfs pull`"
+            " (see models/README.md)"
+        )
     manifest = ModelManifest(MANIFEST_PATH)
     entry = manifest.get(model_path.name)
     if entry is not None and model_path.is_file() and not manifest.verify(entry.name, model_path):

@@ -47,3 +47,22 @@ def test_a_model_the_manifest_does_not_list_is_allowed(tmp_path: Path) -> None:
     model.write_bytes(b"custom")
 
     assert _ensemble(model) is not None
+
+
+def test_a_git_lfs_pointer_is_refused_with_the_reason(tmp_path: Path) -> None:
+    """A checkout without ``git lfs pull`` leaves a stub where the model should be."""
+    model = tmp_path / "stub.mlmodel"
+    model.write_bytes(b"version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 1\n")
+
+    with pytest.raises(ValueError, match="Git LFS pointer.*git lfs pull"):
+        _ensemble(model)
+
+
+def test_is_lfs_pointer_is_false_for_real_bytes_and_for_a_missing_file(tmp_path: Path) -> None:
+    from omniocr.infrastructure.model_manifest import is_lfs_pointer
+
+    real = tmp_path / "real.mlmodel"
+    real.write_bytes(b"\x08\x02weights")
+
+    assert not is_lfs_pointer(real)
+    assert not is_lfs_pointer(tmp_path / "absent.mlmodel")
