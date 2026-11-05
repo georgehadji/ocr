@@ -24,10 +24,9 @@ from omniocr.infrastructure.corpus_repository import FileCorpusRepository
 from omniocr.infrastructure.ketos_trainer import KetosTrainer
 from omniocr.infrastructure.kraken import KrakenEngine
 from omniocr.infrastructure.line_cropper import PilLineCropper
-from omniocr.infrastructure.mlflow_registry import (
-    InMemoryModelRegistry,
-    MlflowModelRegistry,
-)
+from omniocr.infrastructure.mlflow_registry import MlflowModelRegistry
+from omniocr.infrastructure.model_manifest import PROMOTED_DIR
+from omniocr.infrastructure.model_registry import FileModelRegistry
 from omniocr.ports.interfaces import (
     ICorrectionStore,
     ICorpusRepository,
@@ -73,6 +72,7 @@ def create_training_pipeline(
     min_improvement_pct: float = 1.0,
     min_sample_count: int = 10,
     crop_padding: int = 2,
+    promoted_dir: str | Path = PROMOTED_DIR,
 ) -> TrainingOrchestrator:
     """Create a fully-wired training pipeline.
 
@@ -84,6 +84,7 @@ def create_training_pipeline(
         min_improvement_pct: Minimum CER improvement for promotion.
         min_sample_count: Minimum sample count for promotion.
         crop_padding: Padding in pixels for line cropping.
+        promoted_dir: Where promoted models are kept; recognition reads it back.
 
     Returns:
         A ready-to-use ``TrainingOrchestrator``.
@@ -112,14 +113,15 @@ def create_training_pipeline(
         min_sample_count=min_sample_count,
     )
 
-    # Model registry
+    # Model registry: promoted weights are kept on disk, where recognition finds
+    # them; MLflow, when asked for, records the run on top.
+    model_registry: IModelRegistry = FileModelRegistry(promoted_dir)
     if mlflow_tracking_uri is not None:
-        model_registry: IModelRegistry = MlflowModelRegistry(
+        model_registry = MlflowModelRegistry(
             tracking_uri=mlflow_tracking_uri,
             experiment_name=mlflow_experiment,
+            inner=model_registry,
         )
-    else:
-        model_registry = InMemoryModelRegistry()
 
     return TrainingOrchestrator(
         correction_store=correction_store,

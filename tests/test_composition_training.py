@@ -15,7 +15,8 @@ from omniocr.domain.corpus import SplitName
 from omniocr.infrastructure.corpus_repository import FileCorpusRepository
 from omniocr.infrastructure.ketos_trainer import KetosTrainer
 from omniocr.infrastructure.line_cropper import PilLineCropper
-from omniocr.infrastructure.mlflow_registry import InMemoryModelRegistry, MlflowModelRegistry
+from omniocr.infrastructure.mlflow_registry import MlflowModelRegistry
+from omniocr.infrastructure.model_registry import FileModelRegistry
 
 
 def test_default_pipeline_wires_the_no_corpus_no_mlflow_defaults(tmp_path: Path) -> None:
@@ -24,7 +25,7 @@ def test_default_pipeline_wires_the_no_corpus_no_mlflow_defaults(tmp_path: Path)
     assert isinstance(orchestrator, TrainingOrchestrator)
     assert isinstance(orchestrator._cropper, PilLineCropper)
     assert isinstance(orchestrator._trainer, KetosTrainer)
-    assert isinstance(orchestrator._model_registry, InMemoryModelRegistry)
+    assert isinstance(orchestrator._model_registry, FileModelRegistry)
     # No corpus_root -> no evaluator, and the orchestrator refuses to train.
     assert orchestrator._evaluator is None
 

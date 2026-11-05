@@ -305,9 +305,9 @@ def _default_output_path(source: Path, fmt: str) -> Path:
     return _OUTPUT_DIR / f"{source.stem}{_SUFFIX_BY_FORMAT.get(fmt, f'.{fmt}')}"
 
 
-def _resolve_model(explicit: str | None) -> str:
-    """Choose the Kraken model: explicit, else the manifest default."""
-    return resolve_kraken_model(explicit, _MODELS_DIR)
+def _resolve_model(explicit: str | None, script: Script | None = None) -> str:
+    """Choose the Kraken model: explicit, else a promoted one for ``script``, else the manifest."""
+    return resolve_kraken_model(explicit, _MODELS_DIR, script)
 
 
 def _bakeoff_model(args: argparse.Namespace, document: bytes) -> str:
@@ -380,7 +380,7 @@ def _select_kraken_model(args: argparse.Namespace, document: bytes) -> str:
         return str(args.model)
     if getattr(args, "model_select", "default") == "bakeoff":
         return _bakeoff_model(args, document)
-    return _resolve_model(None)
+    return _resolve_model(None, Script(args.script))
 
 
 def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> PipelineOrchestrator:
@@ -403,7 +403,7 @@ def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> PipelineOr
     # falls back to Tesseract for varieties Kraken is not the best tool for.
     return create_ensemble_pipeline(
         tesseract_language=args.lang,
-        kraken_model_path=_resolve_model(args.model),
+        kraken_model_path=_resolve_model(args.model, script),
         script=script,
         exporter=exporter,
         assemble_structure=args.structure,
@@ -466,7 +466,8 @@ def _build_eval_engine(args: argparse.Namespace) -> Any:
 
     from omniocr.infrastructure.kraken import KrakenEngine
 
-    return KrakenEngine(model_path=Path(_resolve_model(args.model)))
+    script_hint = Script(args.script) if getattr(args, "script", None) else None
+    return KrakenEngine(model_path=Path(_resolve_model(args.model, script_hint)))
 
 
 def _load_baseline(path: Path) -> dict[str, RegressionBaseline]:

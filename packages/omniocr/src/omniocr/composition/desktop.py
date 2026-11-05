@@ -235,7 +235,7 @@ def create_ensemble_pipeline(
     timeout per window rather than two per page.
     """
     tesseract = RetryingEngine(TesseractEngine(tesseract_language))
-    kraken_model_path = kraken_model_path or resolve_kraken_model()
+    kraken_model_path = kraken_model_path or resolve_kraken_model(script=script)
     _verify_against_manifest(Path(kraken_model_path))
     kraken = RetryingEngine(KrakenEngine(kraken_model_path))
     by_script: dict[Script, tuple[IOCREngine, ...]] = {

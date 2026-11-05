@@ -311,7 +311,7 @@ def test_cli_passes_the_model_to_the_ensemble(monkeypatch: pytest.MonkeyPatch) -
         return object()
 
     monkeypatch.setattr(desktop, "create_ensemble_pipeline", fake)
-    monkeypatch.setattr(cli, "_resolve_model", lambda model: "x.mlmodel")
+    monkeypatch.setattr(cli, "_resolve_model", lambda model, script=None: "x.mlmodel")
     args = argparse.Namespace(
         engine="ensemble",
         script="polytonic",
