@@ -106,6 +106,24 @@ def test_train_calls_the_real_ketos_interface(
     assert listed == str((data_dir / "images" / "line-1.png").resolve())
 
 
+def test_train_accepts_the_manifest_path_the_exporter_returns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The orchestrator hands the trainer ``export``'s result, i.e. train.json itself."""
+    data_dir = _make_train_data(tmp_path)
+    parent_path = _make_parent_model(tmp_path)
+
+    def _fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        _produce(data_dir, b"model")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    result = KetosTrainer().train(data_dir / "train.json", _parent_ref(parent_path), {})
+
+    assert result.is_ok()
+
+
 def test_train_returns_err_on_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     data_dir = _make_train_data(tmp_path)
     parent_path = _make_parent_model(tmp_path)

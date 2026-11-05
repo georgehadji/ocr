@@ -46,6 +46,19 @@ def _parse_args() -> argparse.Namespace:
         help="Evaluation corpus root holding a test/ split of page images + .txt ground truth",
     )
     parser.add_argument(
+        "--pages-dir",
+        required=True,
+        type=Path,
+        help="Directory of the page images the corrections refer to, named <page number>.<ext> "
+        "(1.png, 2.png, ...)",
+    )
+    parser.add_argument(
+        "--min-samples",
+        default=10,
+        type=int,
+        help="Minimum number of held-out pages the candidate must be judged on",
+    )
+    parser.add_argument(
         "--mlflow-uri",
         default="file:./mlruns",
         help="MLflow tracking URI for the model registry",
@@ -88,12 +101,30 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+_PAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
+
+
+def _load_page_images(pages_dir: Path) -> dict[int, bytes]:
+    """Map page number to image bytes, from files named ``<page number>.<ext>``."""
+    images: dict[int, bytes] = {}
+    for path in sorted(pages_dir.iterdir()):
+        if path.suffix.lower() in _PAGE_SUFFIXES and path.stem.isdigit():
+            images[int(path.stem)] = path.read_bytes()
+    return images
+
+
 def main() -> None:
     args = _parse_args()
 
     # Validate inputs
     if not args.base_model.is_file():
         sys.exit(f"Base model not found: {args.base_model}")
+
+    if not args.pages_dir.is_dir():
+        sys.exit(f"Pages directory not found: {args.pages_dir}")
+    page_images = _load_page_images(args.pages_dir)
+    if not page_images:
+        sys.exit(f"No page images named <page number>.<ext> in {args.pages_dir}")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -103,6 +134,7 @@ def main() -> None:
         corpus_root=args.corpus,
         mlflow_tracking_uri=args.mlflow_uri,
         min_improvement_pct=args.min_improvement,
+        min_sample_count=args.min_samples,
     )
 
     # Build parent model ref
@@ -120,10 +152,9 @@ def main() -> None:
         params["batch_size"] = str(args.batch_size)
 
     # Run the training pipeline
-    # Note: page_images dict must be populated from the corpus in production
     result = orchestrator.run_training(
         parent_model=parent_model,
-        page_images={},
+        page_images=page_images,
         output_dir=args.output_dir,
         hyperparameters=params,
     )
