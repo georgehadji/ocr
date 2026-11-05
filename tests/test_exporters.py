@@ -13,6 +13,7 @@ from omniocr.domain.models import (
     ModelRef,
     OCRLine,
     OCRParagraph,
+    PageFailure,
     ParagraphRole,
     RegionType,
     Script,
@@ -82,6 +83,19 @@ def test_markdown_export_preserves_unicode_and_page_heading() -> None:
 
     assert result.is_ok()
     assert result.value.decode("utf-8") == "## Page 1\n\nἙλληνικά & λόγος\n"
+
+
+def test_markdown_export_says_when_a_page_could_not_be_read() -> None:
+    """An empty section otherwise reads as a blank page."""
+    failed = DocumentPage(
+        2, 600, 800, (), failures=(PageFailure(error_type="EngineError", message="boom"),)
+    )
+    document = DocumentStructure((*_document().pages, failed))
+
+    text = MarkdownExporter().export(document, TenantContext("o", "u", "desktop")).value.decode()
+
+    assert "## Page 2\n\n> **Page 2 could not be read:** boom" in text
+    assert "could not be read" not in text.split("## Page 2")[0]
 
 
 def test_alto_export_contains_geometry_confidence_and_provenance() -> None:

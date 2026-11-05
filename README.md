@@ -47,7 +47,8 @@ packs; `tessdata` and `tessdata_best` give different numbers and fail
 `tests/test_engine_accuracy.py`.
 
 ```bash
-pip install -e ".[pdf,kraken,opencv,docx,dev]"
+pip install -e ".[tesseract,pdf,kraken,opencv,docx,dev]"
+# plus the review UI:   pip install -e ".[desktop]"
 ```
 
 The core package has **zero required dependencies** — every engine and format is an
@@ -61,8 +62,9 @@ extra, so a minimal install stays small.
 | `opencv` | Sauvola binarization and preprocessing |
 | `docx` | DOCX export |
 | `vlm` | Vision-language second opinion (stdlib only, no new deps) |
-| `calamari` | Calamari voting booster — **GPLv3**, subprocess-isolated |
+| `calamari` | Calamari extra voter (`--calamari-model`) — **GPLv3**, subprocess-isolated |
 | `training` | Kraken fine-tuning with MLflow tracking |
+| `desktop` | The Streamlit review UI |
 | `server` / `cloud` | Server and Cloud edition runtimes |
 | `dev` | pytest, ruff, mypy, bandit, pip-audit |
 

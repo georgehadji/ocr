@@ -137,7 +137,7 @@ the accuracy driver; Tesseract is the fast baseline and searchable-PDF box sourc
 | **KrakenEngine** | Accuracy driver for polytonic / ancient / Byzantine print; loads script-specific `.mlmodel` (Ciaconna for ancient) | `kraken` (PyPI) | ✅ |
 | **PaddleEngine / EasyOCR** | Layout/detection + optional voting member | `Github/PaddleOCR-main.zip`, `Github/EasyOCR-master.zip` | layout only |
 | **VLMEngine** | Opt-in second opinion + messy-layout pages; **cloud API** (Claude/Gemini) since local VLM needs GPU | `Github/Unlimited-OCR-main.zip` (reference for a future GPU edition) | opt-in |
-| **CalamariEngine** | **Confidence voting** (5-model cross-fold ensemble) for degraded early-print / Byzantine typefaces; line-based; strong per-char confidence for faithful review-flagging | `Github/calamari-master.zip`, `calamari-ocr` (PyPI — **TensorFlow**, **GPLv3**) | v1.1, subprocess-isolated |
+| **CalamariEngine** | Opt-in **line voter** (`--calamari-model`): reads the pipeline's own line crops, several checkpoints vote inside Calamari; strong per-char confidence for faithful review-flagging | `Github/calamari-master.zip`, `calamari-ocr` (PyPI — **TensorFlow**, **GPLv3**) | opt-in, subprocess-isolated |
 
 All engines implement `IOCREngine.extract(img, context) -> List[OCRBlock]`. Editions differ
 only in **which engines the composition root wires up**.
@@ -152,8 +152,9 @@ only in **which engines the composition root wires up**.
   from the PyTorch stack (Kraken/VLM), so the base install stays lean and TF is pulled only when a
   user opts into Calamari.
 - Net: **Kraken is the default recognizer** (permissive, PyTorch, also segments, has Greek
-  models); **Calamari is the opt-in accuracy booster** whose voting shines on the hardest printed
-  pages (Würzburg/OCRopy lineage, purpose-built for early-modern print).
+  models); **Calamari is an opt-in voter** (Würzburg/OCRopy lineage, built for early-modern print). No
+  Greek-polytonic Calamari model ships here, and the one tested misreads the Didot-style
+  fixtures, so it is a mechanism, not a measured accuracy gain (see the README).
 
 ---
 
