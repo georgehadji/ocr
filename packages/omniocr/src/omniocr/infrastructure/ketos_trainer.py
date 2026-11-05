@@ -58,8 +58,9 @@ class KetosTrainer(ITrainer):
         """Fine-tune a Kraken model on the given training data.
 
         Args:
-            data: Directory written by ``TrainingDataExporter``: ``train.json``
-                and an ``images/`` folder of line crops, each beside a
+            data: What ``TrainingDataExporter`` wrote: its ``train.json``
+                (which is what ``export`` returns) or the directory holding it,
+                beside an ``images/`` folder of line crops, each next to a
                 ``.gt.txt`` file holding its transcription.
             parent: The base model reference to fine-tune from.
             params: Training hyperparameters (``epochs``, ``learning_rate``,
@@ -69,6 +70,9 @@ class KetosTrainer(ITrainer):
             A ``ModelCandidate`` pointing to the fine-tuned artifact, or an
             error.
         """
+        # The orchestrator passes on the exporter's return value, the manifest.
+        if data.name == "train.json":
+            data = data.parent
         train_json = data / "train.json"
         if not train_json.is_file():
             return Err(TrainingError(f"training data not found: {train_json}"))

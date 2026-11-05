@@ -9,6 +9,16 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Fixed — `scripts/train_kraken.py` could not train
+
+The script passed no page images, so no correction could be cropped into a training line, and the
+trainer was handed the exporter's `train.json` while expecting its directory. Run end to end for
+the first time, on a held-out page, it trained, evaluated, and promoted a model (CER -23.7%). New
+flags: `--pages-dir` (page images named `<page number>.<ext>`) and `--min-samples`. `KetosTrainer`
+accepts the manifest path or its directory. Registering the promoted model is a no-op unless
+`mlflow` (the `training` extra) is installed, and `promoted_for_script` never returns a model, so a
+promoted model is not yet picked up by recognition.
+
 ### Changed — blank pages no longer fail `omniocr run`
 
 A page with no text counted as a failure, so almost every book exited 1 for its blank leaves. Now
