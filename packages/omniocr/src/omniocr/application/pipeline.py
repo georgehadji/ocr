@@ -561,9 +561,11 @@ class PipelineOrchestrator:
 
         # A page that produced no lines is reported as a failure, not as a
         # successful empty page. Segmenters can return zero lines without
-        # raising, and that used to surface as `page N: ok (0 lines)` with
-        # exit code 0 — a job could drop a third of a book and still look
-        # clean to a scripted caller.
+        # raising, and that used to surface as `page N: ok (0 lines)` — a job
+        # could drop a third of a book and still look clean to a scripted
+        # caller. A blank leaf looks the same, so the CLI lists these pages
+        # apart (`empty_pages`) and fails the run only when every page was
+        # empty; the exports and the stderr summary keep each one visible.
         failures: list[PageFailure] = []
         if not page_lines:
             failures.append(
