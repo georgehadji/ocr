@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    pip install -e ".[pdf,kraken,opencv,docx]"
+    pip install -e ".[desktop,pdf,kraken,opencv,docx]"
     streamlit run editions/desktop/review_ui.py
 
 Keyboard shortcuts:
@@ -13,6 +13,7 @@ Keyboard shortcuts:
 from __future__ import annotations
 
 import hashlib
+import html
 import io
 import json
 from pathlib import Path
@@ -37,8 +38,11 @@ from omniocr.infrastructure.exporters import MarkdownExporter
 from omniocr.infrastructure.logging import configure_logging
 from omniocr.infrastructure.review import (
     ReviewLine,
+    UndoLog,
     build_review_document,
     group_suggestions_by_reason,
+    line_view_html,
+    page_images,
     persist_reviewed_lines,
 )
 
@@ -210,11 +214,39 @@ _DEFAULTS: list[tuple[str, Any]] = [
     ("file_name", ""),
     ("saved", False),
     ("decoded_images", {}),  # page_number → PIL.Image cache for fast navigation
+    ("undo_log", UndoLog()),
 ]
 
 for key, default in _DEFAULTS:
     if key not in st.session_state:
         st.session_state[key] = default
+
+
+def _stores() -> dict[str, dict[str, str]]:
+    return {
+        "ground_truth_lines": st.session_state.ground_truth_lines,
+        "edited_lines": st.session_state.edited_lines,
+    }
+
+
+def _set_line(store: str, line_id: str, value: str | None) -> None:
+    """Write a reviewed line (None removes it) through the undo log.
+
+    ``store`` names the session dict. Every write goes through here, so
+    "Undo last action" reverses the true last write.
+    """
+    st.session_state.undo_log.set(_stores(), store, line_id, value)
+
+
+def _forget_widgets(line_id: str) -> None:
+    """Drop the typed text a line's text boxes remember (edit mode and view mode)."""
+    for prefix in ("em_", "ta_"):
+        st.session_state.pop(f"{prefix}{line_id}", None)
+
+
+def _commit_edit(line: ReviewLine, new_text: str) -> None:
+    """Record a typed edit; text equal to the OCR output is no edit at all."""
+    _set_line("edited_lines", line.line_id, new_text if new_text != line.text else None)
 
 
 def _final_text(line: ReviewLine) -> str:
@@ -231,6 +263,74 @@ def _final_text(line: ReviewLine) -> str:
             st.session_state.edited_lines.get(line.line_id, line.text),
         )
     )
+
+
+def _render_suggestions(line: ReviewLine, display: str, *, edit_mode: bool) -> None:
+    """Accept buttons for reversible suggestions; flag-only ones are text."""
+    for index, s in enumerate(line.suggestions):
+        if edit_mode:
+            if not s.reversible:
+                st.caption(f"⚑ {s.reason}: {s.source_text[:30]}")
+            elif st.button(
+                f"💡 {s.reason}: {s.suggestion_text[:30]}", key=f"ems_{line.line_id}_{index}"
+            ):
+                _set_line("ground_truth_lines", line.line_id, apply_suggestions(display, [s]))
+                st.rerun()
+        elif s.reversible:
+            st.write(f"**{s.reason}**: {s.suggestion_text}")
+            if st.button("Accept", key=f"a_{line.line_id}_{index}"):
+                _set_line("ground_truth_lines", line.line_id, apply_suggestions(display, [s]))
+                st.rerun()
+        else:
+            st.write(f"**{s.reason}**: flag only ({s.source_text[:30]})")
+
+
+def _render_line_edit(line: ReviewLine, display: str) -> None:
+    """Edit mode: the text box is the line; no read-only block is drawn."""
+    new_text = st.text_input(
+        f"{line.line_id} ({line.confidence:.0f}%)",
+        value=display,
+        key=f"em_{line.line_id}",
+        label_visibility="collapsed",
+    )
+    if new_text != display:
+        _commit_edit(line, new_text)
+        st.rerun()
+    _render_suggestions(line, display, edit_mode=True)
+    st.caption(f"{line.confidence:.0f}% · {line.script} · {line.region_type}")
+
+
+def _render_line_view(line: ReviewLine, display: str) -> None:
+    """View mode: the read-only block, with the editor in an expander."""
+    st.markdown(
+        line_view_html(display, line.confidence, display != line.text),
+        unsafe_allow_html=True,
+    )
+    with st.expander("✏️ Edit / suggestions"):
+        new_text = st.text_area(
+            "Line", display, key=f"ta_{line.line_id}", label_visibility="collapsed"
+        )
+        if new_text != display:
+            _commit_edit(line, new_text)
+            st.rerun()
+
+        _render_suggestions(line, display, edit_mode=False)
+
+        with st.popover("⌨ Insert polytonic"):
+            selected = st.selectbox(
+                "Character",
+                [f"{c} → {POLYTONIC_MAP[c]}" for c in POLYTONIC_MAP],
+                label_visibility="collapsed",
+                key=f"pb_sb_{line.line_id}",
+            )
+            if selected:
+                glyph = POLYTONIC_MAP[selected.split(" → ")[0]]
+                st.write(f"**{glyph}** (Ctrl+C)")
+                if st.button("Insert at end", key=f"pb_ins_{line.line_id}"):
+                    _set_line("edited_lines", line.line_id, _final_text(line) + glyph)
+                    st.rerun()
+
+    st.caption(f"{line.script} · {line.region_type} · #{line.reading_order}")
 
 
 # ---------- Sidebar ----------
@@ -309,21 +409,9 @@ if uploaded_file is not None and st.session_state.review_document is None:
 
         progress.progress(1.0, "Complete — building review document")
 
-        page_images = [b""] * len(pages)
-        try:
-            import fitz
-
-            source = fitz.open(stream=pdf_bytes, filetype="pdf")
-            for i in range(min(len(pages), len(source))):
-                pix = source[i].get_pixmap(dpi=150)
-                page_images[i] = pix.tobytes("png")
-            source.close()
-        except ImportError:
-            pass
-
         # Build review document from pipeline output
         doc_struct = DocumentStructure(pages=tuple(pages))
-        st.session_state.review_document = build_review_document(doc_struct, page_images)
+        st.session_state.review_document = build_review_document(doc_struct, page_images(pdf_bytes))
         st.session_state.current_page = 0
         progress.empty()
         st.rerun()
@@ -417,7 +505,7 @@ if st.session_state.review_document is not None:
                 current = _final_text(line)
                 updated = apply_suggestions(current, applicable)
                 if updated != current:
-                    st.session_state.ground_truth_lines[line.line_id] = updated
+                    _set_line("ground_truth_lines", line.line_id, updated)
                     accepted += len(applicable)
         st.sidebar.success(f"Accepted {accepted} suggestions")
         st.rerun()
@@ -425,6 +513,10 @@ if st.session_state.review_document is not None:
     if st.sidebar.button("Clear all corrections", use_container_width=True):
         st.session_state.ground_truth_lines.clear()
         st.session_state.edited_lines.clear()
+        st.session_state.undo_log.clear()
+        for p in doc.pages:
+            for line_ in p.lines:
+                _forget_widgets(line_.line_id)
         st.rerun()
 
     # --- Save session ---
@@ -454,15 +546,14 @@ if st.session_state.review_document is not None:
                 st.sidebar.error(f"Could not commit corrections: {outcome.error}")
             else:
                 st.sidebar.success(f"Committed {outcome.value} corrections for training")
-    if st.sidebar.button("↩ Undo last action"):
-        if st.session_state.ground_truth_lines:
-            last_key = list(st.session_state.ground_truth_lines.keys())[-1]
-            del st.session_state.ground_truth_lines[last_key]
-            st.rerun()
-        elif st.session_state.edited_lines:
-            last_key = list(st.session_state.edited_lines.keys())[-1]
-            del st.session_state.edited_lines[last_key]
-            st.rerun()
+    if st.sidebar.button("↩ Undo last action", disabled=not len(st.session_state.undo_log)):
+        undone = st.session_state.undo_log.undo(_stores())
+        if undone is not None:
+            # A text box keeps what was typed in it and would write it straight
+            # back on the next run, undoing the undo. Drop its state so it is
+            # rebuilt from the restored text.
+            _forget_widgets(undone.key)
+        st.rerun()
 
     # --- Polytonic keyboard ---
     st.sidebar.divider()
@@ -534,17 +625,24 @@ if st.session_state.review_document is not None:
                     DP(number=rp.number, width=rp.width, height=rp.height, lines=tuple(lines_out))
                 )
             export_doc = DS(pages=tuple(pages_out))
-            exporter = SearchablePdfExporter(source_pdf=file_bytes)
-            result = exporter.export(export_doc, TenantContext("desktop", "export", "desktop"))
-            if not isinstance(result, Err):
-                st.sidebar.download_button(
-                    "⬇ Download PDF",
-                    result.value,
-                    f"{base}_searchable.pdf",
-                    use_container_width=True,
-                )
+            # `create` says now that an image upload (or a missing Greek font)
+            # cannot become a searchable PDF, instead of raising from `export`.
+            created = SearchablePdfExporter.create(source_pdf=file_bytes)
+            if isinstance(created, Err):
+                st.sidebar.error(str(created.error))
             else:
-                st.sidebar.error(str(result.error))
+                result = created.value.export(
+                    export_doc, TenantContext("desktop", "export", "desktop")
+                )
+                if isinstance(result, Err):
+                    st.sidebar.error(str(result.error))
+                else:
+                    st.sidebar.download_button(
+                        "⬇ Download PDF",
+                        result.value,
+                        f"{base}_searchable.pdf",
+                        use_container_width=True,
+                    )
         except ImportError as exc:
             st.sidebar.error(f"Install PyMuPDF: pip install -e '.[pdf]' ({exc})")
         except Exception as exc:
@@ -670,11 +768,18 @@ if st.session_state.review_document is not None:
 
                     draw = ImageDraw.Draw(img)
                     colors = ["#ff4444", "#44aaff", "#44ff44", "#ffaa00", "#ff44ff", "#44ffff"]
+                    # Boxes are in the pipeline's pixel space (PDFs are read at
+                    # 300 dpi); the pane image is smaller, so scale to it.
+                    scale = img.width / page.width if page.width else 1.0
                     for idx, line in enumerate(page.lines):
                         b = line.bbox
                         color = colors[idx % len(colors)]
-                        draw.rectangle([b.x, b.y, b.right, b.bottom], outline=color, width=3)
-                        draw.text((b.x + 2, b.y + 2), str(idx + 1), fill=color)
+                        draw.rectangle(
+                            [b.x * scale, b.y * scale, b.right * scale, b.bottom * scale],
+                            outline=color,
+                            width=3,
+                        )
+                        draw.text((b.x * scale + 2, b.y * scale + 2), str(idx + 1), fill=color)
                 st.image(img, use_container_width=True)
             else:
                 st.info("Page image — install PyMuPDF: pip install -e '.[pdf]'")
@@ -686,99 +791,10 @@ if st.session_state.review_document is not None:
 
             for line in page.lines:
                 display = _final_text(line)
-                changed = display != line.text
-                conf = line.confidence
-
                 if edit_mode:
-                    new_text = st.text_input(
-                        f"{line.line_id} ({conf:.0f}%)",
-                        value=display,
-                        key=f"em_{line.line_id}",
-                        label_visibility="collapsed",
-                    )
-                    if new_text != display:
-                        if new_text != line.text:
-                            st.session_state.edited_lines[line.line_id] = new_text
-                        else:
-                            st.session_state.edited_lines.pop(line.line_id, None)
-                        st.rerun()
-                    for index, s in enumerate(line.suggestions):
-                        if not s.reversible:
-                            st.caption(f"⚑ {s.reason}: {s.source_text[:30]}")
-                        elif st.button(
-                            f"💡 {s.reason}: {s.suggestion_text[:30]}",
-                            key=f"ems_{line.line_id}_{index}",
-                        ):
-                            st.session_state.ground_truth_lines[line.line_id] = apply_suggestions(
-                                display, [s]
-                            )
-                            st.rerun()
-                    st.caption(f"{conf:.0f}% · {line.script} · {line.region_type}")
+                    _render_line_edit(line, display)
                 else:
-                    if conf < 40:
-                        badge = "🔴"
-                        bar = "#ff4444"
-                    elif conf < 60:
-                        badge = "🟡"
-                        bar = "#ffaa00"
-                    elif conf < 80:
-                        badge = "🟢"
-                        bar = "#44aa44"
-                    else:
-                        badge = "✅"
-                        bar = "#228822"
-
-                st.markdown(
-                    f"""<div style="border-left:4px solid {bar};padding:4px 8px 0;margin:2px 0;background:linear-gradient(90deg,{bar}08,transparent)">
-                    <span style="color:{bar};font-weight:bold">{badge} {conf:.0f}%</span>
-                    {"<span style='background:#22882222;text-decoration:underline;text-decoration-color:#228822'>" if changed else ""}
-                    {display}
-                    {"</span>" if changed else ""}
-                    </div>""",
-                    unsafe_allow_html=True,
-                )
-
-                if not edit_mode:
-                    with st.expander("✏️ Edit / suggestions"):
-                        new_text = st.text_area(
-                            "Line", display, key=f"ta_{line.line_id}", label_visibility="collapsed"
-                        )
-                        if new_text != display:
-                            if new_text != line.text:
-                                st.session_state.edited_lines[line.line_id] = new_text
-                            else:
-                                st.session_state.edited_lines.pop(line.line_id, None)
-                            st.rerun()
-
-                        for index, s in enumerate(line.suggestions):
-                            akey = f"a_{line.line_id}_{index}"
-                            if s.reversible:
-                                st.write(f"**{s.reason}**: {s.suggestion_text}")
-                                if st.button("Accept", key=akey):
-                                    st.session_state.ground_truth_lines[line.line_id] = (
-                                        apply_suggestions(display, [s])
-                                    )
-                                    st.rerun()
-                            else:
-                                st.write(f"**{s.reason}**: flag only ({s.source_text[:30]})")
-
-                        with st.popover("⌨ Insert polytonic"):
-                            selected = st.selectbox(
-                                "Character",
-                                [f"{c} → {POLYTONIC_MAP[c]}" for c in POLYTONIC_MAP],
-                                label_visibility="collapsed",
-                                key=f"pb_sb_{line.line_id}",
-                            )
-                            if selected:
-                                combo = selected.split(" → ")[0]
-                                glyph = POLYTONIC_MAP[combo]
-                                st.write(f"**{glyph}** (Ctrl+C)")
-                                if st.button("Insert at end", key=f"pb_ins_{line.line_id}"):
-                                    current = _final_text(line)
-                                    st.session_state.edited_lines[line.line_id] = current + glyph
-                                    st.rerun()
-
-                st.caption(f"{line.script} · {line.region_type} · #{line.reading_order}")
+                    _render_line_view(line, display)
 
             # Engine comparison
             has_blocks = any(len(line_.blocks) > 0 for p in doc.pages for line_ in p.lines)
@@ -805,7 +821,8 @@ if st.session_state.review_document is not None:
                                     else "#dc3545"
                                 )
                                 st.markdown(
-                                    f"<span style='color:{conf_color};font-weight:bold'>{eng}</span>: {' '.join(tokens)}",
+                                    f"<span style='color:{conf_color};font-weight:bold'>"
+                                    f"{html.escape(eng)}</span>: {html.escape(' '.join(tokens))}",
                                     unsafe_allow_html=True,
                                 )
 

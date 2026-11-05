@@ -316,6 +316,9 @@ class TestPersistReviewedLines:
             def append(self, correction):
                 return Err(CorrectionStoreError("disk full"))
 
+            def append_many(self, corrections):
+                return Err(CorrectionStoreError("disk full"))
+
             def for_document(self, document_id):
                 return []
 
@@ -329,3 +332,197 @@ class TestPersistReviewedLines:
 
         assert result.is_err()
         assert "disk full" in str(result.error)
+
+    def test_failure_partway_saves_nothing_and_a_retry_does_not_duplicate(self, tmp_path) -> None:
+        """The batch is one transaction: the first rows do not survive the failure."""
+        import sqlite3
+
+        from omniocr.infrastructure.corrections_store import SqliteCorrectionStore
+        from omniocr.infrastructure.review import persist_reviewed_lines
+
+        db = tmp_path / "c.db"
+        store = SqliteCorrectionStore(db)
+        document = self._document()
+        first, second = (line.line_id for line in document.pages[0].lines)
+
+        # A trigger makes the second insert fail after the first has succeeded.
+        raw = sqlite3.connect(str(db))
+        raw.execute(
+            "CREATE TRIGGER boom BEFORE INSERT ON corrections WHEN NEW.corrected_text = 'boom' "
+            "BEGIN SELECT RAISE(ABORT, 'boom'); END"
+        )
+        raw.commit()
+
+        failed = persist_reviewed_lines(store, document, {first: "ok", second: "boom"}, "s")
+
+        assert failed.is_err()
+        assert list(store.all_accepted()) == []
+
+        raw.execute("DROP TRIGGER boom")
+        raw.commit()
+        raw.close()
+        retried = persist_reviewed_lines(store, document, {first: "ok", second: "fine"}, "s")
+
+        assert retried.value == 2
+        assert [c.corrected_text for c in store.all_accepted()] == ["ok", "fine"]
+        store.close()
+
+
+class TestUndoLog:
+    @staticmethod
+    def _stores() -> dict[str, dict[str, str]]:
+        return {"ground_truth_lines": {}, "edited_lines": {}}
+
+    def test_undo_after_setting_the_same_key_twice_restores_the_middle_value(self) -> None:
+        from omniocr.infrastructure.review import UndoLog
+
+        stores, log = self._stores(), UndoLog()
+        log.set(stores, "edited_lines", "a", "one")
+        log.set(stores, "edited_lines", "a", "two")
+        log.set(stores, "edited_lines", "a", "three")
+
+        log.undo(stores)
+        assert stores["edited_lines"] == {"a": "two"}
+        log.undo(stores)
+        assert stores["edited_lines"] == {"a": "one"}
+        log.undo(stores)
+        assert stores["edited_lines"] == {}
+
+    def test_undo_reverses_the_true_last_action_across_stores(self) -> None:
+        """Dict order is not action order: the key set first stays first when rewritten."""
+        from omniocr.infrastructure.review import UndoLog
+
+        stores, log = self._stores(), UndoLog()
+        log.set(stores, "ground_truth_lines", "a", "accepted")
+        log.set(stores, "edited_lines", "b", "typed")
+        log.set(stores, "ground_truth_lines", "a", "accepted again")
+
+        log.undo(stores)
+
+        assert stores["ground_truth_lines"] == {"a": "accepted"}
+        assert stores["edited_lines"] == {"b": "typed"}
+
+    def test_removing_a_key_is_undoable(self) -> None:
+        from omniocr.infrastructure.review import UndoLog
+
+        stores, log = self._stores(), UndoLog()
+        log.set(stores, "edited_lines", "a", "typed")
+        log.set(stores, "edited_lines", "a", None)
+        assert stores["edited_lines"] == {}
+
+        log.undo(stores)
+
+        assert stores["edited_lines"] == {"a": "typed"}
+
+    def test_a_write_that_changes_nothing_is_not_an_undo_step(self) -> None:
+        from omniocr.infrastructure.review import UndoLog
+
+        stores, log = self._stores(), UndoLog()
+        log.set(stores, "edited_lines", "a", "typed")
+        log.set(stores, "edited_lines", "a", "typed")
+        log.set(stores, "edited_lines", "missing", None)
+
+        assert len(log) == 1
+
+    def test_undo_with_an_empty_log_is_a_no_op(self) -> None:
+        from omniocr.infrastructure.review import UndoLog
+
+        assert UndoLog().undo(self._stores()) is None
+
+    def test_undo_returns_the_entry_it_reversed(self) -> None:
+        from omniocr.infrastructure.review import UndoEntry, UndoLog
+
+        stores, log = self._stores(), UndoLog()
+        log.set(stores, "edited_lines", "a", "typed")
+
+        assert log.undo(stores) == UndoEntry("edited_lines", "a", None)
+
+
+class TestLineViewHtml:
+    def test_angle_brackets_are_escaped(self) -> None:
+        from omniocr.infrastructure.review import line_view_html
+
+        rendered = line_view_html("καὶ <τὸν> λόγον", 90.0, changed=False)
+
+        assert "&lt;τὸν&gt;" in rendered
+        assert "<τὸν>" not in rendered
+
+    def test_markup_in_the_text_cannot_inject_elements(self) -> None:
+        from omniocr.infrastructure.review import line_view_html
+
+        rendered = line_view_html('<img src=x onerror="alert(1)">', 90.0, changed=True)
+
+        assert "<img" not in rendered
+
+    def test_changed_text_is_marked(self) -> None:
+        from omniocr.infrastructure.review import line_view_html
+
+        assert "underline" in line_view_html("x", 90.0, changed=True)
+        assert "underline" not in line_view_html("x", 90.0, changed=False)
+
+    def test_badge_follows_confidence(self) -> None:
+        from omniocr.infrastructure.review import confidence_style
+
+        assert [confidence_style(c)[0] for c in (10, 50, 70, 95)] == ["🔴", "🟡", "🟢", "✅"]
+
+
+class TestPageImages:
+    @staticmethod
+    def _png() -> bytes:
+        import io
+
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.new("RGB", (40, 30), "white").save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def test_a_png_upload_gives_its_own_image_and_builds_a_review_document(self) -> None:
+        """An image used to be handed to PyMuPDF as a PDF, which raised."""
+        from omniocr.infrastructure.review import page_images
+
+        png = self._png()
+        images = page_images(png)
+
+        assert images == [png]
+        document = build_review_document(DocumentStructure(pages=(_page(1),)), images)
+        assert document.pages[0].image_bytes == png
+
+    def test_a_multi_page_tiff_gives_one_image_per_frame(self) -> None:
+        import io
+
+        from PIL import Image
+
+        from omniocr.infrastructure.review import page_images
+
+        frames = [Image.new("RGB", (40, 30), color) for color in ("white", "black", "red")]
+        buffer = io.BytesIO()
+        frames[0].save(buffer, format="TIFF", save_all=True, append_images=frames[1:])
+
+        images = page_images(buffer.getvalue())
+
+        assert len(images) == 3
+        assert all(image.startswith(b"\x89PNG") for image in images)
+
+    def test_a_pdf_gives_one_png_per_page(self) -> None:
+        import pytest
+
+        fitz = pytest.importorskip("fitz")
+        from omniocr.infrastructure.review import page_images
+
+        pdf = fitz.open()
+        pdf.new_page()
+        pdf.new_page()
+        data = pdf.tobytes()
+        pdf.close()
+
+        images = page_images(data)
+
+        assert len(images) == 2
+        assert all(image.startswith(b"\x89PNG") for image in images)
+
+    def test_unreadable_documents_give_no_images(self) -> None:
+        from omniocr.infrastructure.review import page_images
+
+        assert page_images(b"not an image") == []
+        assert page_images(b"%PDF-1.7 truncated") == []

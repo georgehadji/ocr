@@ -16,7 +16,7 @@ dependencies = []
 omniocr = "omniocr.interfaces.cli:main"
 
 [project.optional-dependencies]
-desktop = []
+desktop = ["streamlit>=1.40"]
 tesseract = ["pytesseract>=0.3.10", "Pillow>=10.0"]
 pdf = ["PyMuPDF>=1.24"]
 docx = ["python-docx>=1.1"]
