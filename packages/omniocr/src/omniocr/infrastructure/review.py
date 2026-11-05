@@ -12,13 +12,14 @@ as the durable ground-truth record for training.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import html
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Tuple
 
 from omniocr.domain.corrections import Correction
-from omniocr.domain.errors import TrainingError
+from omniocr.domain.errors import IngestError, TrainingError
 from omniocr.domain.models import (
     BBox,
     Confidence,
@@ -29,7 +30,8 @@ from omniocr.domain.models import (
     Script,
     Suggestion,
 )
-from omniocr.domain.result import Err, Ok, Result
+from omniocr.domain.result import Result
+from omniocr.infrastructure.ingest import DocumentPageSource, ImagePage
 from omniocr.ports.interfaces import ICorrectionStore
 
 
@@ -207,40 +209,166 @@ def persist_reviewed_lines(
         corrected_by: Reviewer identifier.
 
     Returns:
-        The number of corrections appended, or the first store error.
+        The number of corrections appended, or the store error. The batch is
+        one transaction: on an error nothing was saved, so retrying does not
+        duplicate the rows a half-finished first attempt wrote.
 
     Note:
-        The store is append-only by design, so calling this twice appends a
-        second generation of rows rather than updating the first. That is the
-        intended audit trail: a revised transcription is a new ``Correction``
-        with a later timestamp, and consumers order by ``corrected_at``.
+        The store is append-only by design, so calling this twice after a
+        success appends a second generation of rows rather than updating the
+        first. That is the intended audit trail: a revised transcription is a
+        new ``Correction`` with a later timestamp, and consumers order by
+        ``corrected_at``.
     """
-    appended = 0
-    for page in document.pages:
-        for line in page.lines:
-            final_text = reviewed_text.get(line.line_id)
-            if final_text is None:
-                continue
-            correction = review_line_to_correction(
-                review_line=line,
-                page_number=page.number,
-                corrected_text=final_text,
-                corrected_by=corrected_by,
-            )
-            result = store.append(correction)
-            if isinstance(result, Err):
-                return Err(result.error)
-            appended += 1
-    return Ok(appended)
+    corrections = [
+        review_line_to_correction(
+            review_line=line,
+            page_number=page.number,
+            corrected_text=reviewed_text[line.line_id],
+            corrected_by=corrected_by,
+        )
+        for page in document.pages
+        for line in page.lines
+        if line.line_id in reviewed_text
+    ]
+    return store.append_many(corrections)
+
+
+def confidence_style(confidence: float) -> tuple[str, str]:
+    """The (badge, bar colour) a line is drawn with at ``confidence``."""
+    if confidence < 40:
+        return "🔴", "#ff4444"
+    if confidence < 60:
+        return "🟡", "#ffaa00"
+    if confidence < 80:
+        return "🟢", "#44aa44"
+    return "✅", "#228822"
+
+
+def line_view_html(display: str, confidence: float, changed: bool) -> str:
+    """The read-only line block. The OCR text is escaped here, once.
+
+    The block is rendered with ``unsafe_allow_html``, so text such as
+    ``καὶ <τὸν> λόγον`` would otherwise be parsed as a tag and vanish from the
+    page the scholar is checking against the image.
+    """
+    badge, bar = confidence_style(confidence)
+    text = html.escape(display)
+    if changed:
+        text = (
+            "<span style='background:#22882222;text-decoration:underline;"
+            f"text-decoration-color:#228822'>{text}</span>"
+        )
+    return (
+        f'<div style="border-left:4px solid {bar};padding:4px 8px 0;margin:2px 0;'
+        f'background:linear-gradient(90deg,{bar}08,transparent)">'
+        f'<span style="color:{bar};font-weight:bold">{badge} {confidence:.0f}%</span> {text}</div>'
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class UndoEntry:
+    """One reversible write: ``previous`` is None when the key was absent."""
+
+    store: str
+    key: str
+    previous: str | None
+
+
+class UndoLog:
+    """Undo for the review stores, in the order the writes happened.
+
+    Undoing by "last key in the dict" is wrong once a key is written twice:
+    the dict keeps the key's first position, so the true last action is not
+    the last key, and removing it throws away the earlier value as well.
+    """
+
+    def __init__(self) -> None:
+        self._entries: list[UndoEntry] = []
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def set(
+        self,
+        stores: Mapping[str, MutableMapping[str, str]],
+        store: str,
+        key: str,
+        value: str | None,
+    ) -> None:
+        """Write ``value`` to ``stores[store][key]`` (None removes it) and log it."""
+        target = stores[store]
+        previous = target.get(key)
+        if value == previous:
+            return
+        self._entries.append(UndoEntry(store, key, previous))
+        if value is None:
+            del target[key]
+        else:
+            target[key] = value
+
+    def undo(self, stores: Mapping[str, MutableMapping[str, str]]) -> UndoEntry | None:
+        """Reverse the most recent write and return it; None when there is none."""
+        if not self._entries:
+            return None
+        entry = self._entries.pop()
+        if entry.previous is None:
+            stores[entry.store].pop(entry.key, None)
+        else:
+            stores[entry.store][entry.key] = entry.previous
+        return entry
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
+def page_images(document: bytes, dpi: int = 150) -> list[bytes]:
+    """One image per page for the review pane; ``b""`` where a page won't render.
+
+    A PDF is rendered with PyMuPDF. Anything else is an image, read with the
+    frame handling the pipeline uses, so a multi-page TIFF gives one image per
+    page here exactly as it gives one page to the pipeline. Returns ``[]`` when
+    the document cannot be read at all (or PyMuPDF is missing for a PDF); the
+    pane then shows its "no page image" notice.
+    """
+    if document[:4] == b"%PDF":
+        try:
+            import fitz
+
+            source = fitz.open(stream=document, filetype="pdf")
+        except Exception:
+            return []
+        images: list[bytes] = []
+        try:
+            for page in source:
+                try:
+                    images.append(page.get_pixmap(dpi=dpi).tobytes("png"))
+                except Exception:
+                    images.append(b"")
+        finally:
+            source.close()
+        return images
+    try:
+        return [
+            page.content if isinstance(page, ImagePage) else b""
+            for page in DocumentPageSource(text_layer=False).stream(document)
+        ]
+    except IngestError:
+        return []
 
 
 __all__ = [
     "ReviewDocument",
     "ReviewLine",
     "ReviewPage",
+    "UndoEntry",
+    "UndoLog",
     "build_review_document",
     "build_review_page",
+    "confidence_style",
     "group_suggestions_by_reason",
+    "line_view_html",
+    "page_images",
     "persist_reviewed_lines",
     "review_line_to_correction",
 ]

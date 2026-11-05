@@ -60,37 +60,49 @@ class SqliteCorrectionStore(ICorrectionStore):
         )
         self._conn.commit()
 
+    _INSERT = """
+        INSERT INTO corrections
+            (line_id, page_number, original_text, corrected_text,
+             corrected_by, corrected_at, bbox_json, script, accepted)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+
+    @staticmethod
+    def _row(correction: Correction) -> tuple[Any, ...]:
+        return (
+            correction.line_id,
+            correction.page_number,
+            correction.original_text,
+            correction.corrected_text,
+            correction.corrected_by,
+            correction.corrected_at,
+            json.dumps(
+                {
+                    "x": correction.bbox.x,
+                    "y": correction.bbox.y,
+                    "w": correction.bbox.w,
+                    "h": correction.bbox.h,
+                }
+            ),
+            correction.script.value,
+            1 if correction.accepted else 0,
+        )
+
     def append(self, correction: Correction) -> Result[None, TrainingError]:
         """Persist a single correction to the store."""
+        result = self.append_many([correction])
+        return Err(result.error) if isinstance(result, Err) else Ok(None)
+
+    def append_many(self, corrections: Sequence[Correction]) -> Result[int, TrainingError]:
+        """Persist every correction in one transaction, or none of them.
+
+        A failure partway rolls back, so a retry does not stack a second copy
+        on top of the rows the first attempt managed to write.
+        """
         try:
-            self._conn.execute(
-                """
-                INSERT INTO corrections
-                    (line_id, page_number, original_text, corrected_text,
-                     corrected_by, corrected_at, bbox_json, script, accepted)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    correction.line_id,
-                    correction.page_number,
-                    correction.original_text,
-                    correction.corrected_text,
-                    correction.corrected_by,
-                    correction.corrected_at,
-                    json.dumps(
-                        {
-                            "x": correction.bbox.x,
-                            "y": correction.bbox.y,
-                            "w": correction.bbox.w,
-                            "h": correction.bbox.h,
-                        }
-                    ),
-                    correction.script.value,
-                    1 if correction.accepted else 0,
-                ),
-            )
-            self._conn.commit()
-            return Ok(None)
+            with self._conn:
+                self._conn.executemany(self._INSERT, [self._row(c) for c in corrections])
+            return Ok(len(corrections))
         except sqlite3.Error as exc:
             return Err(CorrectionStoreError(f"SQLite append failed: {exc}"))
 
