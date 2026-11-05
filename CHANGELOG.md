@@ -9,6 +9,14 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Changed — blank pages no longer fail `omniocr run`
+
+A page with no text counted as a failure, so almost every book exited 1 for its blank leaves. Now
+such pages (`EmptyPage`) are listed apart — `empty_pages` in `--json`, a line on stderr otherwise —
+and do not change the exit code. A page that failed for another reason still exits 1, and so does
+a run where every page was empty (a wrong model or script, not a book). The `failures` list in
+`--json` now holds only real failures.
+
 ### Fixed — Kraken fine-tuning could not run
 
 `KetosTrainer` called `python -m kraken train` with options Kraken 7 does not have, so the A2
