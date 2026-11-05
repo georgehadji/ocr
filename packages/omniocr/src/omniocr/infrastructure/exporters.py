@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET  # nosec B405 - builds/writes XML here, never parses input
 
 from omniocr.domain.errors import ExportError
-from omniocr.domain.models import DocumentStructure, ParagraphRole, TenantContext
+from omniocr.domain.models import DocumentPage, DocumentStructure, ParagraphRole, TenantContext
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.ports.interfaces import IExporter
 
@@ -14,14 +14,20 @@ if TYPE_CHECKING:
     from docx.text.paragraph import Paragraph
 
 
+def _failure_notes(page: DocumentPage) -> list[str]:
+    """One note per failure on ``page``; a failed page has no text, so every format says so."""
+    return [f"Page {page.number} could not be read: {failure.message}" for failure in page.failures]
+
+
 class PlainTextExporter(IExporter):
     """Export OCR text as plain text with one line per recognized segment."""
 
     def export(
         self, document: DocumentStructure, context: TenantContext
     ) -> Result[bytes, ExportError]:
-        lines = []
+        lines: list[str] = []
         for page in document.pages:
+            lines.extend(f"[{note}]" for note in _failure_notes(page))
             if page.paragraphs:
                 for para in page.paragraphs:
                     lines.append(para.text)
@@ -312,6 +318,10 @@ class SearchablePdfExporter(IExporter):
                 unicode_font = self._resolve_font()
                 for index, ocr_page in enumerate(document.pages):
                     page = pdf[index]
+                    # No text layer exists for a failed page; a visible note keeps
+                    # a searcher from reading its silence as a blank page.
+                    for note in _failure_notes(ocr_page):
+                        page.add_text_annot(fitz.Point(10, 10), note)
                     x_scale = page.rect.width / max(1, ocr_page.width)
                     y_scale = page.rect.height / max(1, ocr_page.height)
                     for line in ocr_page.lines:
@@ -438,6 +448,10 @@ class DocxExporter(IExporter):
                 if page_index:
                     doc.add_page_break()
 
+                for note in _failure_notes(page):
+                    paragraph = doc.add_paragraph()
+                    _add_styled_run(paragraph, f"[{note}]", self._font_name)
+                    paragraph.runs[0].italic = True
                 if page.paragraphs:
                     for para in page.paragraphs:
                         style_name = _resolve_paragraph_style(

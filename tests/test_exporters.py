@@ -28,6 +28,8 @@ from omniocr.infrastructure.exporters import (
 )
 from omniocr.infrastructure.exporters import SearchablePdfExporter
 
+_CONTEXT = TenantContext("o", "u", "desktop")
+
 
 def test_docx_exporter_writes_a_package_with_requested_font() -> None:
     pytest.importorskip("docx")
@@ -96,6 +98,47 @@ def test_markdown_export_says_when_a_page_could_not_be_read() -> None:
 
     assert "## Page 2\n\n> **Page 2 could not be read:** boom" in text
     assert "could not be read" not in text.split("## Page 2")[0]
+
+
+def _document_with_failed_page() -> DocumentStructure:
+    failed = DocumentPage(
+        2, 600, 800, (), failures=(PageFailure(error_type="EngineError", message="boom"),)
+    )
+    return DocumentStructure((*_document().pages, failed))
+
+
+def test_plain_text_export_says_when_a_page_could_not_be_read() -> None:
+    text = PlainTextExporter().export(_document_with_failed_page(), _CONTEXT).value.decode()
+
+    assert text.splitlines() == ["Ἑλληνικά & λόγος", "[Page 2 could not be read: boom]"]
+
+
+def test_docx_export_says_when_a_page_could_not_be_read() -> None:
+    from io import BytesIO
+
+    docx = pytest.importorskip("docx")
+    data = DocxExporter().export(_document_with_failed_page(), _CONTEXT).value
+
+    paragraphs = [p for p in docx.Document(BytesIO(data)).paragraphs if p.text]
+    assert [p.text for p in paragraphs] == ["Ἑλληνικά & λόγος", "[Page 2 could not be read: boom]"]
+    assert paragraphs[1].runs[0].italic is True
+
+
+def test_searchable_pdf_export_says_when_a_page_could_not_be_read() -> None:
+    fitz = pytest.importorskip("fitz")
+    source = fitz.open()
+    source.new_page(width=100, height=100)
+    source.new_page(width=100, height=100)
+    source_pdf = source.tobytes()
+    source.close()
+
+    result = SearchablePdfExporter(source_pdf).export(_document_with_failed_page(), _CONTEXT)
+
+    output = fitz.open(stream=result.value, filetype="pdf")
+    notes = [a.info["content"] for a in output[1].annots()]
+    assert notes == ["Page 2 could not be read: boom"]
+    assert list(output[0].annots()) == []
+    output.close()
 
 
 def test_alto_export_contains_geometry_confidence_and_provenance() -> None:
