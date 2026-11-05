@@ -6,7 +6,13 @@ import hashlib
 import json
 from pathlib import Path
 
-from omniocr.infrastructure.model_manifest import ManifestEntry, ModelManifest
+import pytest
+
+from omniocr.infrastructure.model_manifest import (
+    ManifestEntry,
+    ModelManifest,
+    resolve_kraken_model,
+)
 
 
 def _entry(name: str = "greek-porson", sha256: str = "abc123") -> ManifestEntry:
@@ -185,3 +191,48 @@ def test_shipped_manifest_declares_exactly_one_kraken_default() -> None:
 
     assert len(defaults) == 1, f"expected one default, found {[e.name for e in defaults]}"
     assert defaults[0].name == "greek-german_serifs_bsb10234118.mlmodel"
+
+
+def _models_dir(tmp_path: Path, names: list[str], default: str | None) -> Path:
+    for name in names:
+        (tmp_path / name).write_bytes(b"x")
+    manifest = ModelManifest(tmp_path / "manifest.json")
+    for name in names:
+        manifest.add(
+            ManifestEntry(
+                engine="kraken",
+                name=name,
+                source="s",
+                licence="l",
+                sha256="h",
+                default=name == default,
+            )
+        )
+    return tmp_path
+
+
+def test_resolve_kraken_model_returns_an_explicit_path_untouched(tmp_path: Path) -> None:
+    assert resolve_kraken_model("mine.mlmodel", tmp_path) == "mine.mlmodel"
+
+
+def test_resolve_kraken_model_prefers_the_manifest_default_over_filename_order(
+    tmp_path: Path,
+) -> None:
+    models = _models_dir(tmp_path, ["a-first.mlmodel", "z-best.mlmodel"], default="z-best.mlmodel")
+
+    assert resolve_kraken_model(None, models) == str(models / "z-best.mlmodel")
+
+
+def test_resolve_kraken_model_falls_back_loudly_when_the_default_file_is_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    models = _models_dir(tmp_path, ["a-first.mlmodel", "z-best.mlmodel"], default="z-best.mlmodel")
+    (models / "z-best.mlmodel").unlink()
+
+    assert resolve_kraken_model(None, models) == str(models / "a-first.mlmodel")
+    assert "z-best.mlmodel is missing" in capsys.readouterr().err
+
+
+def test_resolve_kraken_model_without_any_model_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="no Kraken model"):
+        resolve_kraken_model(None, tmp_path)

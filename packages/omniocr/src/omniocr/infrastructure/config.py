@@ -36,7 +36,9 @@ class Settings:
     redis_url: str = _DEFAULT_REDIS_URL
     # Engine selection lives here so server/cloud editions configure recognition
     # instead of hardcoding it. Both previously passed an empty Kraken model
-    # path, and the server passed ``app_name`` as the Tesseract language.
+    # path, and the server passed ``app_name`` as the Tesseract language. An
+    # empty ``kraken_model_path`` now means the manifest default (see
+    # ``resolve_kraken_model``).
     tesseract_language: str = _DEFAULT_TESSERACT_LANGUAGE
     kraken_model_path: str = _DEFAULT_KRAKEN_MODEL_PATH
     vlm_api_key: str | None = field(default=None, repr=False)

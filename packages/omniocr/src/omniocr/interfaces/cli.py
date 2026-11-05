@@ -29,7 +29,11 @@ from typing import TYPE_CHECKING, Any, Sequence
 
 from omniocr.domain.corpus import SplitName
 from omniocr.infrastructure.config import DEFAULT_TESSERACT_LANGUAGE
-from omniocr.infrastructure.model_manifest import MANIFEST_PATH, MODELS_DIR
+from omniocr.infrastructure.model_manifest import (
+    MANIFEST_PATH,
+    MODELS_DIR,
+    resolve_kraken_model,
+)
 from omniocr.domain.models import (
     DocumentPage,
     DocumentStructure,
@@ -299,36 +303,8 @@ def _default_output_path(source: Path, fmt: str) -> Path:
 
 
 def _resolve_model(explicit: str | None) -> str:
-    """Choose the Kraken model: explicit, else the manifest default.
-
-    Selection used to be ``sorted(glob("*.mlmodel"))[0]`` — alphabetical, so
-    the choice was decided by a filename. That is not a detail. Measured on
-    page 31 of the target document, the three bundled models score 0.038,
-    0.147 and 0.264 CER, and the alphabetically first one is the 0.264 —
-    4.7x worse than Tesseract on the same page, while the best is 1.5x
-    better. The manifest now says which one to use and why.
-    """
-    if explicit is not None:
-        return explicit
-    candidates = sorted(_MODELS_DIR.glob("*.mlmodel"))
-    if not candidates:
-        raise FileNotFoundError(
-            f"no Kraken model found in {_MODELS_DIR}/ — pass --model or see models/README.md"
-        )
-
-    from omniocr.infrastructure.model_manifest import ModelManifest
-
-    preferred = ModelManifest(MANIFEST_PATH).default_for("kraken")
-    if preferred is not None:
-        chosen = _MODELS_DIR / preferred.name
-        if chosen.is_file():
-            return str(chosen)
-        print(
-            f"manifest default {preferred.name} is missing from {_MODELS_DIR}/ — "
-            f"falling back to {candidates[0].name}",
-            file=sys.stderr,
-        )
-    return str(candidates[0])
+    """Choose the Kraken model: explicit, else the manifest default."""
+    return resolve_kraken_model(explicit, _MODELS_DIR)
 
 
 def _bakeoff_model(args: argparse.Namespace, document: bytes) -> str:

@@ -9,6 +9,24 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Fixed — server and cloud images, job status, model default
+
+A live run of the cloud stack found the image could not OCR a page (PR #30 fixed its
+dependencies). This follows up on what that run left open:
+
+- **Kraken's model default** is resolved in one place. `Settings.kraken_model_path` defaults to
+  `""`, which Kraken read as the working directory, so the server, cloud and desktop editions
+  could not load a model unless the operator set `OMNIOCR_KRAKEN_MODEL_PATH` by hand. The CLI's
+  manifest-default lookup moved to `model_manifest.resolve_kraken_model`, and
+  `create_ensemble_pipeline` uses it when the path is empty. The cloud Dockerfile no longer
+  hard-codes a model name that duplicated `models/manifest.json`.
+- **A job whose pages all failed** is now FAILED. A failed page stays in the document with its
+  failure, so such a run produced an empty result and the job ended `done`.
+- **The server edition** has a Dockerfile and `docker-compose.yml` (FastAPI, an RQ worker, and
+  password-protected Redis), and CI builds the image. Both image jobs now import `cv2`,
+  `pytesseract` and `structlog` and resolve the default model, since each was missing once and
+  failed only when a job ran.
+
 ### Fixed — Calamari wired and tested; dead code removed (audit remediation PR9)
 
 - **Calamari** now works against real Calamari 2.x and is reachable from the CLI

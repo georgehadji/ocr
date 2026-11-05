@@ -103,3 +103,20 @@ jobs:
         run: docker run --rm --entrypoint tesseract omniocr-cloud --list-langs | grep -x -e ell -e grc | sort | tr '\n' ' ' | grep -x 'ell grc '
       - name: Image runs as a non-root user
         run: test "$(docker run --rm --entrypoint id omniocr-cloud -u)" != 0
+      # Each of these was missing once and failed only when a job ran.
+      - name: Image has every engine dependency and the default Kraken model
+        run: docker run --rm --entrypoint python omniocr-cloud -c "import cv2, pytesseract, structlog; from omniocr.infrastructure.model_manifest import resolve_kraken_model; print(resolve_kraken_model())"
+
+  docker-server:
+    name: Build server image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -f editions/server/Dockerfile -t omniocr-server .
+      - name: Tesseract has the Greek packs
+        run: docker run --rm --entrypoint tesseract omniocr-server --list-langs | grep -x -e ell -e grc | sort | tr '\n' ' ' | grep -x 'ell grc '
+      - name: Image has every engine dependency and the default Kraken model
+        run: docker run --rm --entrypoint python omniocr-server -c "import cv2, pytesseract, structlog, rq; from omniocr.infrastructure.model_manifest import resolve_kraken_model; print(resolve_kraken_model())"
+      - name: Image runs as a non-root user
+        run: test "$(docker run --rm --entrypoint id omniocr-server -u)" != 0
