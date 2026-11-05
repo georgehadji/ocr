@@ -16,6 +16,16 @@ and searchable PDF still showed an empty page that looked blank. DOCX and TXT no
 `[Page N could not be read: <reason>]` (italic in DOCX); the searchable PDF gets a visible text
 annotation on that page, so its source image is left untouched. ALTO and PAGE-XML are unchanged.
 
+### Fixed — Kraken fine-tuning could not run
+
+`KetosTrainer` called `python -m kraken train` with options Kraken 7 does not have, so the A2
+fine-tuning path had never run. It now calls Kraken's `ketos train` (`--format-type path`, a path
+list passed with `--training-data`, `--device` on the `ketos` group, early stopping off, learning
+rate 1e-4) and copies the best `best_*.mlmodel` to `ketos_finetuned.mlmodel`. `TrainingDataExporter`
+writes a `.gt.txt` sidecar beside each line image, which is what `ketos` pairs by name. The `decay`
+parameter is gone: `ketos` has no such option. A leave-one-page-out run on the real scans cut
+character errors about 18% and word errors about 29% (see `docs/ENGINE_ACCURACY.md`).
+
 ### Fixed — server and cloud images, job status, model default
 
 A live run of the cloud stack found the image could not OCR a page (PR #30 fixed its

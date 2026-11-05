@@ -30,7 +30,18 @@ def _make_train_data(tmp_path: Path) -> Path:
     data_dir = tmp_path / "training_data"
     data_dir.mkdir()
     (data_dir / "train.json").write_text("{}", encoding="utf-8")
+    images = data_dir / "images"
+    images.mkdir()
+    (images / "line-1.png").write_bytes(b"png")
+    (images / "line-1.gt.txt").write_text("text" + chr(10), encoding="utf-8")
     return data_dir
+
+
+def _produce(data_dir: Path, payload: bytes) -> None:
+    """What ``ketos train`` leaves behind: a ``best_<score>.mlmodel`` in its output dir."""
+    out = data_dir.parent / "ketos_out"
+    out.mkdir(exist_ok=True)
+    (out / "best_0.9000.mlmodel").write_bytes(payload)
 
 
 def test_train_fails_fast_when_train_json_missing(tmp_path: Path) -> None:
@@ -52,6 +63,47 @@ def test_train_fails_fast_when_parent_model_missing(tmp_path: Path) -> None:
 
     assert result.is_err()
     assert "parent model not found" in str(result.error)
+
+
+def test_train_fails_fast_when_there_are_no_line_images(tmp_path: Path) -> None:
+    data_dir = tmp_path / "training_data"
+    data_dir.mkdir()
+    (data_dir / "train.json").write_text("[]", encoding="utf-8")
+
+    result = KetosTrainer().train(data_dir, _parent_ref(_make_parent_model(tmp_path)), {})
+
+    assert result.is_err()
+    assert "no line images" in str(result.error)
+
+
+def test_train_calls_the_real_ketos_interface(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The device is a group option, the data is passed as a path list, and the
+    defaults suit fine-tuning (a model that ``python -m kraken train`` once
+    could not be run at all: ``kraken`` has no ``__main__``)."""
+    data_dir = _make_train_data(tmp_path)
+    parent_path = _make_parent_model(tmp_path)
+    captured: list[str] = []
+
+    def _fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        captured.extend(cmd)
+        _produce(data_dir, b"model")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    assert KetosTrainer(device="cpu").train(data_dir, _parent_ref(parent_path), {}).is_ok()
+
+    assert captured[1:3] == ["-c", "from kraken.ketos import cli; cli()"]
+    assert captured.index("--device") < captured.index("train")
+    assert captured[captured.index("--format-type") + 1] == "path"
+    assert captured[captured.index("--load") + 1] == str(parent_path)
+    assert captured[captured.index("--resize") + 1] == "union"
+    assert captured[captured.index("--quit") + 1] == "fixed"
+    assert captured[captured.index("--lrate") + 1] == "0.0001"
+    listed = Path(captured[captured.index("--training-data") + 1]).read_text(encoding="utf-8")
+    assert listed == str((data_dir / "images" / "line-1.png").resolve())
 
 
 def test_train_returns_err_on_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -115,11 +167,10 @@ def test_train_succeeds_and_returns_candidate_with_hash(
 ) -> None:
     data_dir = _make_train_data(tmp_path)
     parent_path = _make_parent_model(tmp_path)
-    expected_output = data_dir.parent / "ketos_finetuned.mlmodel"
 
     def _fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
         # Simulate ketos producing its output artifact as a side effect.
-        expected_output.write_bytes(b"fine-tuned model bytes")
+        _produce(data_dir, b"fine-tuned model bytes")
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
@@ -129,7 +180,7 @@ def test_train_succeeds_and_returns_candidate_with_hash(
 
     assert result.is_ok()
     candidate = result.value
-    assert candidate.path == expected_output
+    assert candidate.path == data_dir.parent / "ketos_finetuned.mlmodel"
     assert candidate.run_id == "run-42"
     assert candidate.parent.model_name == str(parent_path)
     assert len(candidate.model_hash) == 64  # sha256 hex digest
@@ -140,12 +191,11 @@ def test_train_includes_optional_hyperparameters_in_command(
 ) -> None:
     data_dir = _make_train_data(tmp_path)
     parent_path = _make_parent_model(tmp_path)
-    expected_output = data_dir.parent / "ketos_finetuned.mlmodel"
     captured_cmd: list[str] = []
 
     def _fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
         captured_cmd.extend(cmd)
-        expected_output.write_bytes(b"model")
+        _produce(data_dir, b"model")
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
@@ -154,15 +204,14 @@ def test_train_includes_optional_hyperparameters_in_command(
     result = trainer.train(
         data_dir,
         _parent_ref(parent_path),
-        {"learning_rate": "0.001", "batch_size": "8", "decay": "0.9", "momentum": "0.99"},
+        {"learning_rate": "0.001", "batch_size": "8", "momentum": "0.99"},
     )
 
     assert result.is_ok()
-    assert "--learning-rate" in captured_cmd and "0.001" in captured_cmd
-    assert "--batch-size" in captured_cmd and "8" in captured_cmd
-    assert "--decay" in captured_cmd and "0.9" in captured_cmd
-    assert "--momentum" in captured_cmd and "0.99" in captured_cmd
-    assert "--device" in captured_cmd and "cuda:0" in captured_cmd
+    assert captured_cmd[captured_cmd.index("--lrate") + 1] == "0.001"
+    assert captured_cmd[captured_cmd.index("--batch-size") + 1] == "8"
+    assert captured_cmd[captured_cmd.index("--momentum") + 1] == "0.99"
+    assert captured_cmd[captured_cmd.index("--device") + 1] == "cuda:0"
 
 
 class TestDeviceSelection:
@@ -174,12 +223,11 @@ class TestDeviceSelection:
     ) -> str:
         data_dir = _make_train_data(tmp_path)
         parent_path = _make_parent_model(tmp_path)
-        expected_output = data_dir.parent / "ketos_finetuned.mlmodel"
         captured: list[str] = []
 
         def _fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
             captured.extend(cmd)
-            expected_output.write_bytes(b"model")
+            _produce(data_dir, b"model")
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
         monkeypatch.setattr(subprocess, "run", _fake_run)

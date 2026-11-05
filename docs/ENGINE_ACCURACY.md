@@ -352,6 +352,38 @@ repeat itself could behave differently without the guard. The fixtures are
 2008×2835 px, under the 3508 px cap, so no downscaling took place. Three
 pages of one book, as above.
 
+## Update, 2026-11-05: model choice on the ensemble path, and fine-tuning
+
+Same three scan fixtures, full pipeline (`omniocr run`, Tesseract + Kraken ensemble), mean over
+pages:
+
+| Configuration | CER | WER |
+|---|---|---|
+| Tesseract alone | 0.1055 | 0.3446 |
+| ensemble + `porson` | 0.1227 | 0.3743 |
+| ensemble + `bsb10234118` (manifest default) | 0.0872 | 0.2755 |
+| ensemble + `sophokle1v3soph` | 0.0775 | 0.2398 |
+
+`sophokle1v3soph` beats the manifest default on all three pages. This disagrees with the ranking
+above, which came from one Kraken-only page. The default is unchanged: three pages of one book
+are too few to overturn it. `omniocr run --model-select bakeoff` picks per document.
+
+**Fine-tuning works.** Leave-one-page-out: fine-tune `sophokle1v3soph` on two pages, score the
+third. Training lines are the segmenter's own crops paired with the human transcription by fuzzy
+match (43-48 lines per page, mean CER 0.03-0.06 between the paired lines). 12 epochs, learning
+rate 1e-4, CPU, about 9.6 minutes per fold.
+
+| Held-out page | CER base → tuned | WER base → tuned |
+|---|---|---|
+| scan 1 | 0.0411 → 0.0324 | 0.1726 → 0.1263 |
+| scan 2 | 0.1430 → 0.1247 | 0.3527 → 0.2612 |
+| scan 3 | 0.0485 → 0.0334 | 0.1942 → 0.1260 |
+| mean | 0.0775 → 0.0635 | 0.2398 → 0.1712 |
+
+About 18% fewer character errors and 29% fewer word errors. Limits: one book and typeface,
+about 90 training lines, one hyperparameter setting, no held-out book. Expect less on a
+different face.
+
 ## Reproducing
 
 Kraken runs at roughly 60–90 s per page per model on CPU, so all three models
