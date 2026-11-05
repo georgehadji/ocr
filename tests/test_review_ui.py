@@ -30,7 +30,14 @@ _UI = Path(__file__).resolve().parent.parent / "editions" / "desktop" / "review_
 _LINE_ID = "line-1-1"
 
 
-def _app(*, edit_mode: bool, text: str = "καὶ <τὸν> λόγον") -> AppTest:
+def _app(
+    *,
+    edit_mode: bool,
+    text: str = "καὶ <τὸν> λόγον",
+    accepted: str | None = None,
+    edited: str | None = None,
+) -> AppTest:
+    """Run the script once. State must be seeded here: AppTest drops it after a run."""
     page = DocumentPage(
         number=1,
         width=600,
@@ -53,6 +60,10 @@ def _app(*, edit_mode: bool, text: str = "καὶ <τὸν> λόγον") -> AppT
     )
     app.session_state["file_name"] = "book.pdf"
     app.session_state["edit_mode"] = edit_mode
+    if accepted is not None:
+        app.session_state["ground_truth_lines"] = {_LINE_ID: accepted}
+    if edited is not None:
+        app.session_state["edited_lines"] = {_LINE_ID: edited}
     return app.run()
 
 
@@ -94,6 +105,42 @@ def test_clear_all_corrections_is_not_written_back_by_the_text_box() -> None:
     clear.click().run()
 
     assert app.session_state["edited_lines"] == {}
+
+
+def _shown(app: AppTest) -> str:
+    return "\n".join(block.value for block in app.markdown)
+
+
+def test_editing_an_accepted_line_is_not_shadowed_by_the_accepted_text() -> None:
+    """Accepted text outranks edited text, so a later edit was silently dropped."""
+    app = _app(edit_mode=False, accepted="accepted text")
+
+    app.text_area(key=f"ta_{_LINE_ID}").set_value("typed after accept").run()
+
+    assert "typed after accept" in _shown(app)
+    assert "accepted text" not in _shown(app)
+    assert app.text_area(key=f"ta_{_LINE_ID}").value == "typed after accept"
+
+
+def test_typing_the_ocr_text_back_over_an_accepted_line_restores_the_ocr_text() -> None:
+    app = _app(edit_mode=False, text="plain", accepted="accepted text", edited="older edit")
+
+    app.text_area(key=f"ta_{_LINE_ID}").set_value("plain").run()
+
+    assert app.session_state["ground_truth_lines"] == {}
+    assert app.session_state["edited_lines"] == {}
+    assert "accepted text" not in _shown(app)
+    assert "older edit" not in _shown(app)
+
+
+def test_undo_after_editing_an_accepted_line_restores_the_accepted_text() -> None:
+    app = _app(edit_mode=False, accepted="accepted text")
+    app.text_area(key=f"ta_{_LINE_ID}").set_value("typed after accept").run()
+
+    undo = next(b for b in app.sidebar.button if b.label == "↩ Undo last action")
+    undo.click().run()
+
+    assert "accepted text" in _shown(app)
 
 
 def test_angle_brackets_in_ocr_text_are_escaped_not_parsed_as_html() -> None:

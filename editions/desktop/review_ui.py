@@ -245,12 +245,28 @@ def _forget_widgets(line_id: str) -> None:
 
 
 def _commit_edit(line: ReviewLine, new_text: str) -> None:
-    """Record a typed edit; text equal to the OCR output is no edit at all."""
-    _set_line("edited_lines", line.line_id, new_text if new_text != line.text else None)
+    """Record a typed edit where ``_final_text`` will show it.
+
+    Accepted text outranks edited text, so a line that was accepted takes the
+    edit in the accepted store. Written to ``edited_lines`` it would be
+    shadowed and silently lost. Text equal to the OCR output is no edit at
+    all: every reviewed entry goes, or an older one would reappear.
+    """
+    stores = st.session_state
+    if new_text == line.text:
+        for store in ("ground_truth_lines", "edited_lines"):
+            if line.line_id in stores[store]:
+                _set_line(store, line.line_id, None)
+        return
+    accepted = line.line_id in stores.ground_truth_lines
+    _set_line("ground_truth_lines" if accepted else "edited_lines", line.line_id, new_text)
 
 
 def _final_text(line: ReviewLine) -> str:
     """The text a reader should see for ``line``: accepted > edited > raw OCR.
+
+    ``_commit_edit`` writes a typed edit to the accepted store when the line
+    is already accepted, so this precedence never hides the latest write.
 
     This precedence was written out inline at six call sites (search, both
     exports, the diff pane, the editor, and the accuracy readout). Any one of
@@ -327,7 +343,7 @@ def _render_line_view(line: ReviewLine, display: str) -> None:
                 glyph = POLYTONIC_MAP[selected.split(" → ")[0]]
                 st.write(f"**{glyph}** (Ctrl+C)")
                 if st.button("Insert at end", key=f"pb_ins_{line.line_id}"):
-                    _set_line("edited_lines", line.line_id, _final_text(line) + glyph)
+                    _commit_edit(line, _final_text(line) + glyph)
                     st.rerun()
 
     st.caption(f"{line.script} · {line.region_type} · #{line.reading_order}")

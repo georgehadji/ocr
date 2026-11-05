@@ -15,6 +15,11 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
   only in view mode): the per-line block is split into `_render_line_view` and
   `_render_line_edit`. OCR text is HTML-escaped once, in `line_view_html`, so
   `καὶ <τὸν> λόγον` stays visible; the engine-comparison pane is escaped too.
+- Editing a line that already had an accepted suggestion is no longer silently
+  lost. Accepted text outranks edited text, but typed edits and glyph inserts
+  always wrote to `edited_lines`, so they were shadowed and the text box snapped
+  back. `_commit_edit` now writes to the accepted store for an accepted line,
+  and typing the OCR text back clears both stores.
 - **[S4]** Image uploads no longer go to PyMuPDF as a PDF. `page_images` renders
   PDFs, and reads PNG/JPEG/TIFF with the ingest frame handling, so a multi-page
   TIFF gives one image per page.
