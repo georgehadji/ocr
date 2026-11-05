@@ -17,6 +17,13 @@ and do not change the exit code. A page that failed for another reason still exi
 a run where every page was empty (a wrong model or script, not a book). The `failures` list in
 `--json` now holds only real failures.
 
+### Fixed — failed pages are visible in every export
+
+PR #32 added a note for a page that could not be read, but only to Markdown. DOCX, plain text
+and searchable PDF still showed an empty page that looked blank. DOCX and TXT now carry
+`[Page N could not be read: <reason>]` (italic in DOCX); the searchable PDF gets a visible text
+annotation on that page, so its source image is left untouched. ALTO and PAGE-XML are unchanged.
+
 ### Fixed — Kraken fine-tuning could not run
 
 `KetosTrainer` called `python -m kraken train` with options Kraken 7 does not have, so the A2
