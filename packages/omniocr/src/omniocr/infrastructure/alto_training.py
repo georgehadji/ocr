@@ -1,16 +1,22 @@
-"""Training data exporter — emits JSON manifest + images consumable by ``ketos train``.
+"""Training data exporter — emits line crops + transcriptions consumable by ``ketos train``.
 
-``ketos train`` accepts a flat JSON manifest with image paths and transcriptions::
+``ketos train --format-type path`` reads each line image together with a
+sidecar sharing its name up to the last extension and ending ``.gt.txt``::
+
+    images/line-1.png
+    images/line-1.gt.txt      # the transcription of line-1.png
+
+This exporter copies line-crop images to an ``images/`` subdirectory, writes
+each sidecar, and also writes a manifest, ``train.json``, listing every pair::
 
     [
         {"image": "images/line-1.png", "text": "κεφάλαιον"},
         {"image": "images/line-2.png", "text": "next line text"}
     ]
 
-This exporter copies line-crop images to an ``images/`` subdirectory and
-writes the manifest as ``train.json``. For training pipeline use; ALTO XML
-is produced by ``omniocr.infrastructure.exporters.AltoXmlExporter`` for the
-export stage, not for training data.
+For training pipeline use; ALTO XML is produced by
+``omniocr.infrastructure.exporters.AltoXmlExporter`` for the export stage,
+not for training data.
 """
 
 from __future__ import annotations
@@ -55,6 +61,8 @@ class TrainingDataExporter(ITrainingDataExporter):
             dest = images_dir / sample.image_path.name
             if sample.image_path.exists():
                 dest.write_bytes(sample.image_path.read_bytes())
+            # ``with_suffix`` swaps ``.png`` for ``.gt.txt``: the sidecar ketos pairs by name.
+            dest.with_suffix(".gt.txt").write_text(sample.text + "\n", encoding="utf-8")
             records.append(
                 {
                     "image": str(dest.relative_to(output)),

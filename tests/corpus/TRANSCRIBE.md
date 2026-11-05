@@ -17,10 +17,10 @@ get done.
 | Modern monotonic | 10 | 0 | Baseline sanity |
 | Pontian | 10 | 0 | Post-correction path |
 
-A2 fine-tuning is fully built — `KetosTrainer`, the `BeatsParentOnHeldOut`
-promotion policy, the model registry, the router hand-off — and has never once
-run, for want of ground truth. Nothing in the plan pays off until this table
-fills in.
+A2 fine-tuning is built — `KetosTrainer`, the `BeatsParentOnHeldOut` promotion policy, the
+model registry, the router hand-off — and has run once, on the three scan fixtures (about 18%
+fewer character errors on held-out pages; see `docs/ENGINE_ACCURACY.md`). More ground truth is
+what makes it pay off; this table is how much there is.
 
 Measurement alone needs ~20 pages. Training wants 50–100 per typeface family.
 Be clear which you are buying.

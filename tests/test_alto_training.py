@@ -86,3 +86,12 @@ def test_export_creates_output_directory_when_absent(tmp_path: Path) -> None:
 
     assert result.is_ok()
     assert output.is_dir()
+
+
+def test_export_writes_gt_txt_sidecar_ketos_pairs_by_name(tmp_path: Path) -> None:
+    sample = _sample(tmp_path / "source", text="κεφάλαιον")
+    output = tmp_path / "out"
+
+    TrainingDataExporter().export([sample], output)
+
+    assert (output / "images" / "line-1.gt.txt").read_text(encoding="utf-8") == "κεφάλαιον\n"

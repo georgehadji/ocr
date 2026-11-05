@@ -8,6 +8,7 @@ Includes timeouts, resource caps, and structured logging.
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess  # nosec B404 - argv list, no shell, CLI isolation is the point
 import sys
 from pathlib import Path
@@ -23,12 +24,18 @@ from omniocr.ports.interfaces import ITrainer
 
 _LOG = logging.getLogger("omniocr.ketos_trainer")
 
+# Fine-tuning moves a trained model a little; ketos' own default (1e-3) is a
+# from-scratch rate. 1e-4 is what improved a held-out page in the leave-one-out
+# run recorded in docs/ENGINE_ACCURACY.md.
+_DEFAULT_LEARNING_RATE = "0.0001"
+
 
 class KetosTrainer(ITrainer):
     """Train or fine-tune a Kraken model via subprocess.
 
-    Wraps the ``kraken train`` CLI command. The training process runs in
-    a subprocess with configurable timeout and resource limits.
+    Runs ``ketos train`` (Kraken 7) on line crops with ``.gt.txt`` sidecars. The
+    training process runs in a subprocess with configurable timeout and
+    resource limits.
     """
 
     def __init__(
@@ -51,9 +58,12 @@ class KetosTrainer(ITrainer):
         """Fine-tune a Kraken model on the given training data.
 
         Args:
-            data: Path to the training data directory containing ``train.json``.
+            data: Directory written by ``TrainingDataExporter``: ``train.json``
+                and an ``images/`` folder of line crops, each beside a
+                ``.gt.txt`` file holding its transcription.
             parent: The base model reference to fine-tune from.
-            params: Training hyperparameters (epochs, learning rate, etc.).
+            params: Training hyperparameters (``epochs``, ``learning_rate``,
+                ``batch_size``, ``momentum``, ``run_id``).
 
         Returns:
             A ``ModelCandidate`` pointing to the fine-tuned artifact, or an
@@ -68,7 +78,16 @@ class KetosTrainer(ITrainer):
         if not parent_path.is_file():
             return Err(TrainingError(f"parent model not found: {parent_path}"))
 
-        # Build output path
+        lines = sorted((data / "images").glob("*.png"))
+        if not lines:
+            return Err(TrainingError(f"no line images under {data / 'images'}"))
+        # A path list, not one argument per line: a book's worth of lines
+        # overruns the Windows command-line limit.
+        path_list = data / "paths.txt"
+        path_list.write_text("\n".join(str(line.resolve()) for line in lines), encoding="utf-8")
+
+        # ``-o`` names a directory of checkpoints; the model is picked out of it.
+        output_dir = data.parent / "ketos_out"
         output_path = data.parent / "ketos_finetuned.mlmodel"
 
         # Fine-tuning is the most GPU-sensitive step in the project — an epoch
@@ -77,43 +96,51 @@ class KetosTrainer(ITrainer):
         # splits the string on ":" and indexes [1] unconditionally.
         device = select_device(self._requested_device)
 
-        # Build command
+        # ``--device`` belongs to the ``ketos`` group, before ``train``.
         epochs = params.get("epochs", "10")
         cmd = [
             sys.executable,
-            "-m",
-            "kraken",
-            "--log",
-            "info",
-            "train",
+            "-c",
+            "from kraken.ketos import cli; cli()",
             "--device",
             device,
+            "train",
+            "--format-type",
+            "path",
             "--load",
             str(parent_path),
-            "--train",
-            str(train_json),
+            # The fine-tune data may use characters the parent never saw.
+            "--resize",
+            "union",
+            # Early stopping needs a validation signal that a few dozen lines
+            # cannot give; run the epochs asked for.
+            "--quit",
+            "fixed",
             "--epochs",
             epochs,
+            "--lrate",
+            params.get("learning_rate", _DEFAULT_LEARNING_RATE),
+            "--weights-format",
+            "coreml",
             "--output",
-            str(output_path),
+            str(output_dir),
+            "--training-data",
+            str(path_list),
         ]
 
         # Optional parameters
-        if "learning_rate" in params:
-            cmd.extend(["--learning-rate", params["learning_rate"]])
         if "batch_size" in params:
             cmd.extend(["--batch-size", params["batch_size"]])
-        if "decay" in params:
-            cmd.extend(["--decay", params["decay"]])
         if "momentum" in params:
             cmd.extend(["--momentum", params["momentum"]])
 
         _LOG.info(
-            "ketos_train_start train_json=%s parent=%s epochs=%s device=%s",
+            "ketos_train_start train_json=%s parent=%s epochs=%s device=%s lines=%d",
             str(train_json),
             str(parent_path),
             epochs,
             device,
+            len(lines),
         )
 
         try:
@@ -121,6 +148,9 @@ class KetosTrainer(ITrainer):
                 cmd,
                 capture_output=True,
                 text=True,
+                # ketos draws its progress bar in UTF-8; the Windows locale codec cannot read it.
+                encoding="utf-8",
+                errors="replace",
                 timeout=self._timeout,
             )
         except subprocess.TimeoutExpired:
@@ -130,8 +160,11 @@ class KetosTrainer(ITrainer):
             stderr = result.stderr[-2000:] if result.stderr else ""
             return Err(TrainingError(f"ketos train failed (exit {result.returncode}): {stderr}"))
 
-        if not output_path.is_file():
-            return Err(TrainingError(f"ketos did not produce output model: {output_path}"))
+        # ketos converts its best checkpoint to ``best_<score>.mlmodel``.
+        produced = sorted(output_dir.glob("best_*.mlmodel"), key=lambda p: p.stat().st_mtime)
+        if not produced:
+            return Err(TrainingError(f"ketos did not produce output model: {output_dir}"))
+        shutil.copyfile(produced[-1], output_path)
 
         model_hash = sha256_file(output_path)
         run_id = params.get("run_id", "unknown")
