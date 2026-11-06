@@ -46,6 +46,19 @@ def test_settings_reject_non_numeric_max_upload_bytes() -> None:
             Settings.from_env({"OMNIOCR_MAX_UPLOAD_BYTES": bad})
 
 
+def test_max_workers_defaults_to_sequential_and_reads_the_environment() -> None:
+    assert Settings.from_env({}).max_workers == 1
+    assert Settings.from_env({"OMNIOCR_MAX_WORKERS": "4"}).max_workers == 4
+
+
+def test_max_workers_rejects_zero_negative_and_non_numeric() -> None:
+    for bad in ["0", "-2"]:
+        with pytest.raises(ValueError, match="at least 1"):
+            Settings.from_env({"OMNIOCR_MAX_WORKERS": bad})
+    with pytest.raises(ValueError, match="integer"):
+        Settings.from_env({"OMNIOCR_MAX_WORKERS": "many"})
+
+
 def test_settings_accept_valid_max_upload_bytes() -> None:
     """Innocence test: valid integer values parse correctly."""
     s = Settings.from_env({"OMNIOCR_MAX_UPLOAD_BYTES": "65536"})

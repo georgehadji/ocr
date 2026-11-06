@@ -37,6 +37,7 @@ def create_server_pipeline(
         vlm_api_key=cfg.vlm_api_key if cfg.enable_vlm else None,
         unlimited_ocr_url=cfg.unlimited_ocr_url if cfg.enable_vlm else None,
         event_bus=event_bus,
+        workers=cfg.max_workers,
     )
 
 

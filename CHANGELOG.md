@@ -9,6 +9,13 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Added — page workers on the server and cloud editions
+
+`OMNIOCR_MAX_WORKERS` (default 1, so nothing changes unless it is set) now reaches the pipeline
+that server and cloud workers build, as `--workers` already did on the CLI. Both compose files
+pass it through. `docs/RUNBOOK.md` already listed this variable, but nothing read it. On 7 corpus
+pages: 52 s at 1 worker, 33 s at 4, with byte-identical text.
+
 ### Added — `/metrics` on the server and cloud editions
 
 `GET /metrics` serves Prometheus text behind the same Bearer key as the other routes, with no
