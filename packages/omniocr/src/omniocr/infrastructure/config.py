@@ -11,6 +11,7 @@ _DEFAULT_ENABLE_VLM = False
 _DEFAULT_ENABLE_CALAMARI = False
 _DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
 _DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+_DEFAULT_MAX_WORKERS = 1
 _DEFAULT_JOB_TIMEOUT_S = 6 * 3600
 _DEFAULT_RESULT_TTL_S = 7 * 24 * 3600
 _DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1")
@@ -59,6 +60,10 @@ class Settings:
     api_keys: tuple[tuple[str, str], ...] = field(default=(), repr=False)
     cors_origins: tuple[str, ...] = ()
     allowed_hosts: tuple[str, ...] = _DEFAULT_ALLOWED_HOSTS
+    # Pages a server or cloud worker recognizes at once (the CLI's ``--workers``).
+    # Each page runs the engines on its own thread, so memory and CPU use grow
+    # with it; 1 keeps the pages strictly one after another.
+    max_workers: int = _DEFAULT_MAX_WORKERS
 
     def __post_init__(self) -> None:
         if not self.app_name.strip():
@@ -69,6 +74,8 @@ class Settings:
             raise ValueError("redis_url must not be empty")
         if self.job_timeout_s <= 0 or self.result_ttl_s <= 0:
             raise ValueError("job_timeout_s and result_ttl_s must be positive")
+        if self.max_workers < 1:
+            raise ValueError("max_workers must be at least 1")
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Settings":
@@ -97,6 +104,7 @@ class Settings:
             cors_origins=_env_list(values.get("OMNIOCR_CORS_ORIGINS", "")),
             allowed_hosts=_env_list(values.get("OMNIOCR_ALLOWED_HOSTS", ""))
             or _DEFAULT_ALLOWED_HOSTS,
+            max_workers=_env_int(values, "OMNIOCR_MAX_WORKERS", _DEFAULT_MAX_WORKERS),
         )
 
 
