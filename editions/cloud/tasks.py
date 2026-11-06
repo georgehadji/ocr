@@ -11,6 +11,7 @@ from pathlib import Path
 
 from omniocr.domain.models import TenantContext
 from omniocr.infrastructure.config import Settings
+from omniocr.infrastructure.prometheus_metrics import PageMetricsBus, worker_metrics
 
 from editions.cloud.celery_app import app
 from editions.cloud.composition import create_cloud_pipeline
@@ -28,4 +29,6 @@ def process_ocr(job_id: str, upload: str, tenant: str) -> None:
     """
     settings = Settings.from_env()
     context = TenantContext(organization_id=tenant, user_id="worker", subscription_tier="cloud")
-    run_job(Path(upload), result_path(settings, job_id), create_cloud_pipeline(settings), context)
+    metrics = worker_metrics()
+    pipeline = create_cloud_pipeline(settings, PageMetricsBus(metrics))
+    run_job(Path(upload), result_path(settings, job_id), pipeline, context, metrics)

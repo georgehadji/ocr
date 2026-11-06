@@ -12,12 +12,15 @@ from omniocr.application.pipeline import PipelineOrchestrator
 from omniocr.composition import create_ensemble_pipeline
 from omniocr.domain.models import Script, TenantContext
 from omniocr.infrastructure.config import Settings
+from omniocr.infrastructure.prometheus_metrics import PageMetricsBus, worker_metrics
+from omniocr.ports.interfaces import IEventBus
 
 from editions.common.worker import result_path, run_job
 
 
 def create_server_pipeline(
     settings: Settings | None = None,
+    event_bus: IEventBus | None = None,
 ) -> PipelineOrchestrator:
     """Build a server-grade pipeline with retry resilience.
 
@@ -33,6 +36,7 @@ def create_server_pipeline(
         script=Script.POLYTONIC,
         vlm_api_key=cfg.vlm_api_key if cfg.enable_vlm else None,
         unlimited_ocr_url=cfg.unlimited_ocr_url if cfg.enable_vlm else None,
+        event_bus=event_bus,
     )
 
 
@@ -45,4 +49,6 @@ def run_ocr_job(job_id: str, upload: str, tenant: str) -> None:
     """
     settings = Settings.from_env()
     context = TenantContext(organization_id=tenant, user_id="worker", subscription_tier="server")
-    run_job(Path(upload), result_path(settings, job_id), create_server_pipeline(settings), context)
+    metrics = worker_metrics()
+    pipeline = create_server_pipeline(settings, PageMetricsBus(metrics))
+    run_job(Path(upload), result_path(settings, job_id), pipeline, context, metrics)

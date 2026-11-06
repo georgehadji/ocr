@@ -14,8 +14,8 @@ RUN pip install --no-cache-dir ".[server,pdf,kraken,opencv,tesseract]"
 
 # Uploads and results live on a volume shared with the worker.
 RUN useradd --create-home --uid 10001 omniocr \
-    && mkdir -p /data/uploads /data/results \
-    && chown -R omniocr /data
+    && mkdir -p /data/uploads /data/results /metrics \
+    && chown -R omniocr /data /metrics
 USER omniocr
 
 CMD ["uvicorn", "editions.server.main:app", "--host", "0.0.0.0", "--port", "8000"]

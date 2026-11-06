@@ -6,3 +6,4 @@ uvicorn[standard]>=0.32
 rq>=2.0
 redis>=5.0
 python-multipart>=0.0.18
+prometheus-client>=0.20
