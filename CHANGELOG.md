@@ -9,6 +9,13 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Changed — `scripts/train_kraken.py` builds on the promoted model by default
+
+`--base-model` is now optional. Without it the script starts from the newest promoted model for
+`--script` (default `polytonic`, as in `omniocr run`), else the manifest default, and says which on
+stderr. A fine-tune therefore continues from the last promotion instead of from whatever file was
+named. An explicit `--base-model` still wins.
+
 ### Fixed — MLflow registration, found by installing MLflow
 
 The MLflow path had never run: MLflow was not installed, so every test and run skipped it. With
