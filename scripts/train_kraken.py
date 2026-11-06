@@ -4,7 +4,7 @@ Usage::
 
     python scripts/train_kraken.py \\
         --corrections-db ./corrections.db \\
-        --base-model /path/to/kraken_base.mlmodel \\
+        --corpus tests/corpus --pages-dir ./pages \\
         --output-dir ./training_output \\
         --epochs 10
 
@@ -18,8 +18,9 @@ import sys
 from pathlib import Path
 
 from omniocr.composition import create_training_pipeline
-from omniocr.domain.models import ModelRef
+from omniocr.domain.models import ModelRef, Script
 from omniocr.domain.result import Err
+from omniocr.infrastructure.model_manifest import resolve_kraken_model
 from omniocr.infrastructure.models import sha256_file
 
 
@@ -35,9 +36,16 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--base-model",
-        required=True,
+        default=None,
         type=Path,
-        help="Path to the pretrained Kraken .mlmodel file",
+        help="Path to the pretrained Kraken .mlmodel file (default: the newest promoted model "
+        "for --script, else the manifest default)",
+    )
+    parser.add_argument(
+        "--script",
+        choices=[script.value for script in Script],
+        default=Script.POLYTONIC.value,
+        help="script variety whose promoted model is the default base (default: polytonic)",
     )
     parser.add_argument(
         "--corpus",
@@ -117,6 +125,11 @@ def main() -> None:
     args = _parse_args()
 
     # Validate inputs
+    if args.base_model is None:
+        try:
+            args.base_model = Path(resolve_kraken_model(script=Script(args.script)))
+        except FileNotFoundError as exc:
+            sys.exit(str(exc))
     if not args.base_model.is_file():
         sys.exit(f"Base model not found: {args.base_model}")
 

@@ -36,4 +36,5 @@ The `.mlmodel` files are stored in Git LFS. After cloning, run `git lfs pull` (o
 test split. Promotions are kept in `models/promoted/` (`promoted.json` plus the weights) and are
 not committed. `omniocr run` uses the newest promotion for its `--script` when `--model` is not
 given, and prints which one on stderr. To go back to the manifest default, pass `--model` with that
-model's path, or delete `models/promoted/`.
+model's path, or delete `models/promoted/`. `scripts/train_kraken.py` starts from the same model
+when `--base-model` is omitted, so each fine-tune continues from the last promotion.
