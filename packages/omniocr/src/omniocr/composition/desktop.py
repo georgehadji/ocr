@@ -34,7 +34,7 @@ from omniocr.application.router import ScriptRouter
 from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
 from omniocr.infrastructure.exporters import MarkdownExporter
 from omniocr.infrastructure.lexicons import lexicons_by_script
-from omniocr.ports.interfaces import IExporter, IImageProcessor, IOCREngine
+from omniocr.ports.interfaces import IEventBus, IExporter, IImageProcessor, IOCREngine
 
 # Defaults only — no optional third-party imports in vlm's module scope, so
 # these resolve even when the VLM extra is absent. They are function-signature
@@ -205,6 +205,7 @@ def create_ensemble_pipeline(
     workers: int = 1,
     variants: int = 1,
     text_layer: bool = True,
+    event_bus: IEventBus | None = None,
 ) -> PipelineOrchestrator:
     """Build a CPU ensemble with script rules injected at the composition root.
 
@@ -298,6 +299,7 @@ def create_ensemble_pipeline(
         post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
         exporter=exporter or MarkdownExporter(),
         assembler=assembler,
+        event_bus=event_bus,
         max_workers=workers if workers > 1 else None,
         variants=_variant_processors(variants),
     )

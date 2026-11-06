@@ -12,18 +12,20 @@ from __future__ import annotations
 import hmac
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePath
 from typing import BinaryIO
 
-from fastapi import APIRouter, Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST
 
 from omniocr.domain.errors import QueueError
 from omniocr.domain.result import Err
 from omniocr.infrastructure.config import Settings
+from omniocr.infrastructure.prometheus_metrics import ApiMetrics, render
 from omniocr.infrastructure.security import validate_upload
 from omniocr.ports.interfaces import IJobQueue, JobState
 
@@ -77,9 +79,18 @@ def _authenticator(settings: Settings) -> Callable[..., str]:
     return authenticate
 
 
-def build_router(queue: IJobQueue, settings: Settings) -> APIRouter:
+def build_router(queue: IJobQueue, settings: Settings, metrics: ApiMetrics) -> APIRouter:
     router = APIRouter()
     authenticate = _authenticator(settings)
+
+    @router.get("/metrics")
+    def scrape(_tenant: str = Depends(authenticate)) -> Response:
+        """Prometheus text for the API and, when the metrics volume is shared, the workers.
+
+        Needs a valid key (Prometheus: ``authorization`` with ``type: Bearer``). Carries no
+        tenant labels, so any tenant's key reveals nothing about another's jobs.
+        """
+        return Response(content=render(metrics.registry), media_type=CONTENT_TYPE_LATEST)
 
     def current_state(tenant: str, job_id: str) -> JobState:
         if not _JOB_ID.match(job_id):
@@ -121,6 +132,7 @@ def build_router(queue: IJobQueue, settings: Settings) -> APIRouter:
             # Nothing was queued, so nothing will ever delete this file.
             upload.unlink(missing_ok=True)
             raise HTTPException(503, "Job queue unavailable") from exc
+        metrics.jobs_submitted.inc()
         return {"job_id": job_id, "status": JobState.QUEUED.value}
 
     @router.get("/ocr/status/{job_id}")
@@ -150,10 +162,25 @@ def create_app(title: str, queue: IJobQueue, settings: Settings) -> FastAPI:
         allow_headers=["Authorization", "Content-Type"],
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
+    metrics = ApiMetrics()
+
+    @app.middleware("http")
+    async def count_requests(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        response = await call_next(request)
+        # The route template, never the URL: a job id in the label would make a series per job.
+        route = request.scope.get("route")
+        metrics.requests.labels(
+            method=request.method,
+            route=route.path if route is not None else "unmatched",
+            status=str(response.status_code),
+        ).inc()
+        return response
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "app": settings.app_name}
 
-    app.include_router(build_router(queue, settings))
+    app.include_router(build_router(queue, settings, metrics))
     return app

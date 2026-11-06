@@ -93,3 +93,26 @@ cached = CachingEngine(my_engine, max_size=128, ttl=3600)
 - VLM: no per-request logging yet — use network proxy
 - Errors: all wrapped in `Result` types — no silent failures
 - Coverage: `python -m pytest --cov=packages/omniocr`
+
+### Metrics (server and cloud)
+
+`GET /metrics` on the API serves Prometheus text. It needs a valid API key, so scrape with a
+bearer token (`authorization: {type: Bearer, credentials: <key>}`), and the scraper's `Host`
+must be in `OMNIOCR_ALLOWED_HOSTS`. There are no tenant labels.
+
+| Metric | Written by | Labels |
+|---|---|---|
+| `omniocr_http_requests_total` | API | `method`, `route` (template, never the URL), `status` |
+| `omniocr_jobs_submitted_total` | API | none |
+| `omniocr_pages_total` | worker | `outcome` = `completed` or `failed` |
+| `omniocr_page_duration_seconds` | worker | histogram |
+| `omniocr_page_failures_total` | worker | `error_type` (for example `EmptyPage`) |
+| `omniocr_jobs_total` | worker | `outcome` = `done` or `failed` |
+| `omniocr_job_duration_seconds` | worker | histogram |
+
+The API and the workers are separate containers. The compose files mount one volume
+(`omniocr-metrics`) at `/metrics` in both and set `PROMETHEUS_MULTIPROC_DIR=/metrics`; every
+process writes its counters there and a scrape adds them up. Without that variable, `/metrics`
+shows only the API's own numbers. Counts survive restarts because the files stay on the volume;
+`docker compose down -v` resets them. Each worker process leaves a small file set behind, and an
+RQ work horse is one process per job, so the directory grows with the number of jobs.

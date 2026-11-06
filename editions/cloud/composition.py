@@ -16,10 +16,12 @@ from omniocr.application.pipeline import PipelineOrchestrator
 from omniocr.composition import create_ensemble_pipeline
 from omniocr.domain.models import Script
 from omniocr.infrastructure.config import Settings
+from omniocr.ports.interfaces import IEventBus
 
 
 def create_cloud_pipeline(
     settings: Settings | None = None,
+    event_bus: IEventBus | None = None,
 ) -> PipelineOrchestrator:
     """Build a multi-tenant cloud pipeline with the full engine ensemble.
 
@@ -33,4 +35,5 @@ def create_cloud_pipeline(
         script=Script.POLYTONIC,
         vlm_api_key=cfg.vlm_api_key if cfg.enable_vlm else None,
         unlimited_ocr_url=cfg.unlimited_ocr_url if cfg.enable_vlm else None,
+        event_bus=event_bus,
     )

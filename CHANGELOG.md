@@ -9,6 +9,17 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Added — `/metrics` on the server and cloud editions
+
+`GET /metrics` serves Prometheus text behind the same Bearer key as the other routes, with no
+tenant labels. The API counts requests (by route template and status) and accepted jobs. Workers
+count pages (completed or failed), page duration, failures by error type, and jobs with their
+duration, through a `PageMetricsBus` on the pipeline's event bus. The API and the workers are
+separate containers, so both compose files share an `omniocr-metrics` volume and set
+`PROMETHEUS_MULTIPROC_DIR`; a scrape adds up every process's counters. `prometheus-client` joins
+the `server` and `cloud` extras only, so desktop stays free of it. `create_ensemble_pipeline`
+gained an optional `event_bus`. See `docs/RUNBOOK.md`.
+
 ### Changed — `scripts/train_kraken.py` builds on the promoted model by default
 
 `--base-model` is now optional. Without it the script starts from the newest promoted model for

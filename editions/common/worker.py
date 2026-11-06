@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+from time import perf_counter
 
 from omniocr.application.pipeline import PipelineOrchestrator
 from omniocr.domain.models import TenantContext
 from omniocr.domain.result import Err
 from omniocr.infrastructure.config import Settings
+from omniocr.infrastructure.prometheus_metrics import WorkerMetrics
 
 
 def queue_id(tenant: str, job_id: str) -> str:
@@ -27,14 +29,21 @@ def result_path(settings: Settings, job_id: str) -> Path:
 
 
 def run_job(
-    upload: Path, out: Path, pipeline: PipelineOrchestrator, context: TenantContext
+    upload: Path,
+    out: Path,
+    pipeline: PipelineOrchestrator,
+    context: TenantContext,
+    metrics: WorkerMetrics | None = None,
 ) -> None:
     """Recognize ``upload``, write the export to ``out`` atomically, delete the upload.
 
     A failed run, or one where every page failed, raises, so the queue records
-    the job as failed; ``out`` is only ever created whole.
+    the job as failed; ``out`` is only ever created whole. ``metrics`` counts
+    the job and the failures on its pages.
     """
     partial = out.with_name(out.name + ".part")
+    started = perf_counter()
+    outcome = "failed"
     try:
         result = pipeline.run(upload.read_bytes(), context)
         if isinstance(result, Err):
@@ -43,6 +52,8 @@ def run_job(
         # where every page failed still "succeeds" with nothing in it. Serving
         # that as done would hand the client an empty result.
         pages = result.value.pages
+        if metrics is not None:
+            metrics.record_failures(pages)
         if pages and all(page.failures for page in pages):
             raise RuntimeError(
                 f"every page failed ({len(pages)}); first: {pages[0].failures[0].message}"
@@ -53,8 +64,11 @@ def run_job(
         out.parent.mkdir(parents=True, exist_ok=True)
         partial.write_bytes(exported.value)
         os.replace(partial, out)
+        outcome = "done"
     except BaseException:
         partial.unlink(missing_ok=True)
         raise
     finally:
         upload.unlink(missing_ok=True)
+        if metrics is not None:
+            metrics.record_job(outcome, perf_counter() - started)
