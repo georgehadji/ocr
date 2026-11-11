@@ -44,7 +44,11 @@ core with `pip install -e ".[dev,docx]"` plus the extras you need (`tesseract`, 
   or `docker compose -f editions/server/docker-compose.yml up`
 - **Cloud**: `docker compose -f editions/cloud/docker-compose.yml up`
 - **CI gates**: see `CONTRIBUTING.md` (pytest with 80% coverage, ruff, mypy strict,
-  `scripts/check_layering.py`, `scripts/check_license_isolation.py`)
+  `scripts/check_layering.py`, `scripts/check_license_isolation.py`,
+  `scripts/gen_state_docs.py --check`)
+- **State machines**: lifecycles are a `StrEnum` + transition table (`domain/state.py`);
+  `docs/STATE_MACHINES.md` is generated, never hand-edited. Plan:
+  `docs/STATE_MACHINES_PLAN.md`.
 
 ## Architecture in one screen
 

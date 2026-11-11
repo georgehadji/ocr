@@ -12,6 +12,10 @@ for reference. Tests are in `tests/`; design and build documentation is in
 edition-specific composition roots and UIs. Keep business logic in the
 shared package, not in edition controllers.
 
+Lifecycles (job, review session, training run, …) are declared as a `StrEnum` plus a
+transition table; `domain/state.py` is the shared guard and `docs/STATE_MACHINES.md`
+is the generated catalog of every one. Plan: `docs/STATE_MACHINES_PLAN.md`.
+
 ## Build, Test, and Development Commands
 
 Use Python 3.11 or newer. Install development dependencies with:
