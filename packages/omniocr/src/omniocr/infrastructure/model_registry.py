@@ -45,6 +45,12 @@ class FileModelRegistry(IModelRegistry):
 
     def register(self, model: PromotedModel) -> Result[None, TrainingError]:
         digest = model.model_ref.model_hash
+        # Before anything is written: a damaged index stops the registration with
+        # nothing copied and the index exactly as it was.
+        loaded = self._load()
+        if isinstance(loaded, Err):
+            return Err(loaded.error)
+        records = loaded.value
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
             weights = self._dir / f"{digest[:16]}.mlmodel"
@@ -53,7 +59,6 @@ class FileModelRegistry(IModelRegistry):
             if sha256_file(weights) != digest:
                 weights.unlink(missing_ok=True)
                 return Err(TrainingError(f"promoted weights do not match their hash {digest}"))
-            records = self._read()
             records.append(
                 {
                     "engine": model.model_ref.engine,
@@ -90,12 +95,33 @@ class FileModelRegistry(IModelRegistry):
         # A promotion is measured per script; no typeface is recorded with it.
         return None
 
-    def _read(self) -> list[dict[str, Any]]:
+    def _load(self) -> Result[list[dict[str, Any]], TrainingError]:
+        """The index's records. A missing index is an empty registry; a damaged one is an error.
+
+        Telling them apart is what keeps ``register`` from rewriting a corrupt
+        index as if it were empty, which would erase every earlier promotion.
+        """
         try:
-            data = json.loads(self._index.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            text = self._index.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return Ok([])
+        except OSError as exc:
+            return Err(TrainingError(f"could not read {self._index}: {exc}"))
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            return Err(TrainingError(f"{INDEX_FILENAME} is not valid JSON ({exc}): {self._index}"))
+        if not isinstance(data, list) or not all(isinstance(r, dict) for r in data):
+            return Err(TrainingError(f"{INDEX_FILENAME} is not a list of records: {self._index}"))
+        return Ok(data)
+
+    def _read(self) -> list[dict[str, Any]]:
+        """Records for recognition, which must not fail: a damaged index finds no model."""
+        loaded = self._load()
+        if isinstance(loaded, Err):
+            _LOG.warning("ignoring the model registry: %s", loaded.error)
             return []
-        return [r for r in data if isinstance(r, dict)] if isinstance(data, list) else []
+        return loaded.value
 
     @staticmethod
     def _promoted(record: dict[str, Any], weights: Path) -> PromotedModel:

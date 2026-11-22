@@ -90,6 +90,30 @@ def _submit(
     return client.post("/ocr/submit", headers=headers, files={"file": (name, data)})
 
 
+class _StateOnlyQueue:
+    """Satisfies ``IJobQueue`` structurally, without subclassing it.
+
+    A protocol's default method is inherited only by explicit subclasses, so this
+    queue has no ``status``; the API must still serve its jobs.
+    """
+
+    def submit(self, job_id: str, upload: Path, filename: str, tenant: str) -> None:
+        raise AssertionError("not used")
+
+    def state(self, job_id: str) -> JobState:
+        return JobState.RUNNING
+
+
+def test_a_queue_without_status_is_served_from_its_state(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client = TestClient(create_app("test", _StateOnlyQueue(), settings))  # type: ignore[arg-type]
+
+    response = client.get(f"/ocr/status/{'a' * 32}", headers=KEY_A)
+
+    assert response.status_code == 200
+    assert response.json() == {"job_id": "a" * 32, "status": "running"}
+
+
 def test_a_png_goes_from_submit_to_status_to_result(tmp_path: Path) -> None:
     client, _, settings = _client(tmp_path)
 

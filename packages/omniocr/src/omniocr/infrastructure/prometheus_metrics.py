@@ -25,7 +25,7 @@ from pathlib import Path
 from prometheus_client import CollectorRegistry, Counter, Histogram, generate_latest, values
 from prometheus_client.multiprocess import MultiProcessCollector
 
-from omniocr.domain.models import DocumentPage, PipelineEvent
+from omniocr.domain.models import DocumentPage, EventType, PipelineEvent
 
 MULTIPROC_ENV = "PROMETHEUS_MULTIPROC_DIR"
 
@@ -143,7 +143,12 @@ def worker_metrics() -> WorkerMetrics:
 class PageMetricsBus:
     """An ``IEventBus`` that turns the pipeline's page events into metrics."""
 
-    _OUTCOMES = {"page_completed": "completed", "page_failed": "failed"}
+    # Keyed by the enum, so renaming an event type is a type error here rather
+    # than a counter that silently stops moving.
+    _OUTCOMES: dict[EventType, str] = {
+        EventType.PAGE_COMPLETED: "completed",
+        EventType.PAGE_FAILED: "failed",
+    }
 
     def __init__(self, metrics: WorkerMetrics) -> None:
         self._metrics = metrics

@@ -9,9 +9,11 @@ structural.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Mapping
 
+from omniocr.domain.errors import PromotionRefused
 from omniocr.domain.models import ModelRef, Script
 
 
@@ -112,10 +114,41 @@ class PromotedModel:
             raise ValueError("checkpoint must not be empty")
 
 
+class TrainingOutcome(StrEnum):
+    """How a training run that did not error ended. Errors stay ``Err``."""
+
+    NO_CORRECTIONS = "no_corrections"  # nothing accepted to learn from
+    NO_SAMPLES = "no_samples"  # corrections existed, none made a training line
+    REFUSED = "refused"  # trained, but the candidate did not earn promotion
+    PROMOTED = "promoted"
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingReport:
+    """What a finished training run did, so the caller never has to guess from ``None``.
+
+    ``promoted`` is set exactly when the outcome is ``PROMOTED`` and ``refusal``
+    exactly when it is ``REFUSED``; anything else is a contradiction and cannot
+    be built.
+    """
+
+    outcome: TrainingOutcome
+    promoted: PromotedModel | None = None
+    refusal: PromotionRefused | None = None
+
+    def __post_init__(self) -> None:
+        if (self.promoted is not None) != (self.outcome is TrainingOutcome.PROMOTED):
+            raise ValueError(f"model and outcome disagree: outcome is '{self.outcome}'")
+        if (self.refusal is not None) != (self.outcome is TrainingOutcome.REFUSED):
+            raise ValueError(f"refusal and outcome disagree: outcome is '{self.outcome}'")
+
+
 __all__ = [
     "EvaluationReport",
     "ModelCandidate",
     "PromotedModel",
+    "TrainingOutcome",
+    "TrainingReport",
     "TrainingRun",
     "TrainingSample",
 ]

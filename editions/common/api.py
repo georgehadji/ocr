@@ -27,7 +27,7 @@ from omniocr.domain.result import Err
 from omniocr.infrastructure.config import Settings
 from omniocr.infrastructure.prometheus_metrics import ApiMetrics, render
 from omniocr.infrastructure.security import validate_upload
-from omniocr.ports.interfaces import IJobQueue, JobState
+from omniocr.ports.interfaces import IJobQueue, JobState, JobStatus
 
 from editions.common.worker import queue_id, result_path
 
@@ -92,16 +92,24 @@ def build_router(queue: IJobQueue, settings: Settings, metrics: ApiMetrics) -> A
         """
         return Response(content=render(metrics.registry), media_type=CONTENT_TYPE_LATEST)
 
-    def current_state(tenant: str, job_id: str) -> JobState:
+    def current_status(tenant: str, job_id: str) -> JobStatus:
         if not _JOB_ID.match(job_id):
             raise HTTPException(404, "Job not found")
+        job_queue_id = queue_id(tenant, job_id)
+        # A queue that matches ``IJobQueue`` without subclassing it has not
+        # inherited the protocol's default ``status``; its ``state`` is enough.
+        read_status: Callable[[str], JobStatus] | None = getattr(queue, "status", None)
         try:
-            state = queue.state(queue_id(tenant, job_id))
+            status = (
+                read_status(job_queue_id)
+                if read_status is not None
+                else JobStatus(queue.state(job_queue_id))
+            )
         except QueueError as exc:
             raise HTTPException(503, "Job queue unavailable") from exc
-        if state is JobState.NOT_FOUND:
+        if status.state is JobState.NOT_FOUND:
             raise HTTPException(404, "Job not found")
-        return state
+        return status
 
     @router.post("/ocr/submit", status_code=202)
     def submit_ocr(
@@ -136,12 +144,31 @@ def build_router(queue: IJobQueue, settings: Settings, metrics: ApiMetrics) -> A
         return {"job_id": job_id, "status": JobState.QUEUED.value}
 
     @router.get("/ocr/status/{job_id}")
-    def job_status(job_id: str, tenant: str = Depends(authenticate)) -> dict[str, str]:
-        return {"job_id": job_id, "status": current_state(tenant, job_id).value}
+    def job_status(job_id: str, tenant: str = Depends(authenticate)) -> dict[str, str | int]:
+        """The job's state. ``reason`` and the page counts appear only when known.
+
+        ``reason`` explains a ``failed`` job, or a ``done`` one whose result file is
+        gone. ``pages_failed`` above zero on a ``done`` job means a partial result.
+        """
+        status = current_status(tenant, job_id)
+        reason = status.reason
+        if (
+            status.state is JobState.DONE
+            and not result_path(settings, queue_id(tenant, job_id)).is_file()
+        ):
+            reason = reason or "result missing"
+        body: dict[str, str | int] = {"job_id": job_id, "status": status.state.value}
+        if reason:
+            body["reason"] = reason
+        if status.pages_total is not None:
+            body["pages_total"] = status.pages_total
+        if status.pages_failed is not None:
+            body["pages_failed"] = status.pages_failed
+        return body
 
     @router.get("/ocr/result/{job_id}")
     def job_result(job_id: str, tenant: str = Depends(authenticate)) -> Response:
-        state = current_state(tenant, job_id)
+        state = current_status(tenant, job_id).state
         if state is not JobState.DONE:
             raise HTTPException(400, f"Job is {state.value}, not completed")
         path = result_path(settings, queue_id(tenant, job_id))

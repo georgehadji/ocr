@@ -28,5 +28,14 @@ class ScriptRouter(IRouter):
         """Select engines for a line from its script."""
         return self._by_script.get(line.script, self._default)
 
+    def engines(self) -> tuple[IOCREngine, ...]:
+        """Every engine this router can hand out, each once, in routing order."""
+        listed: list[IOCREngine] = []
+        for group in (*self._by_script.values(), self._default):
+            for engine in group:
+                if not any(engine is seen for seen in listed):
+                    listed.append(engine)
+        return tuple(listed)
+
 
 __all__ = ["ScriptRouter"]

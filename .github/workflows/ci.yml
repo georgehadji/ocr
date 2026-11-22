@@ -66,6 +66,9 @@ jobs:
       - name: Check architectural layering
         if: always()
         run: python scripts/check_layering.py
+      - name: Check state machine catalog is current
+        if: always()
+        run: python scripts/gen_state_docs.py --check
       - name: Test CER regression gate
         if: always()
         run: python -m pytest tests/test_regression.py -v

@@ -251,3 +251,76 @@ def test_circuit_breaker_thread_safety() -> None:
     assert len(results) == 50
     assert all(r == "err" for r in results)
     assert engine.calls >= 1
+
+
+# --- the breaker's state is readable and its changes are logged --------------
+
+
+def test_the_breaker_state_is_readable_through_a_full_cycle() -> None:
+    now = [0.0]
+    context = TenantContext("o", "u", "d")
+    seen_during_probe: list[str] = []
+
+    class Recovers:
+        name = "recovers"
+        healthy = False
+
+        def extract(self, page, context):
+            seen_during_probe.append(str(breaker.state))
+            return Ok(()) if Recovers.healthy else Err(EngineError("down"))
+
+    breaker = CircuitBreakerEngine(
+        Recovers(), failure_threshold=2, reset_timeout=5, clock=lambda: now[0]
+    )
+
+    assert breaker.state == "closed"
+    breaker.extract(None, context)
+    assert breaker.state == "closed"
+    breaker.extract(None, context)
+    assert breaker.state == "open"
+
+    now[0] = 5.0
+    Recovers.healthy = True
+    breaker.extract(None, context)
+
+    assert seen_during_probe[-1] == "half_open"
+    assert breaker.state == "closed"
+
+
+def test_every_state_change_is_logged_and_a_non_change_is_not(caplog) -> None:
+    import logging
+
+    now = [0.0]
+    context = TenantContext("o", "u", "d")
+    breaker = CircuitBreakerEngine(
+        AlwaysFailEngine(), failure_threshold=2, reset_timeout=5, clock=lambda: now[0]
+    )
+
+    with caplog.at_level(logging.INFO):
+        breaker.extract(None, context)  # first failure: still closed, nothing to say
+        breaker.extract(None, context)  # closed -> open
+        now[0] = 5.0
+        breaker.extract(None, context)  # open -> half_open, then the probe fails: -> open
+
+    moves = [
+        (record.from_state, record.to_state)
+        for record in caplog.records
+        if record.getMessage() == "state_transition"
+    ]
+    assert moves == [("closed", "open"), ("open", "half_open"), ("half_open", "open")]
+    assert {record.engine for record in caplog.records} == {"always-fail"}
+
+
+def test_a_success_while_closed_logs_nothing(caplog) -> None:
+    import logging
+
+    class Fine:
+        name = "fine"
+
+        def extract(self, page, context):
+            return Ok(())
+
+    with caplog.at_level(logging.INFO):
+        CircuitBreakerEngine(Fine()).extract(None, TenantContext("o", "u", "d"))
+
+    assert [r for r in caplog.records if r.getMessage() == "state_transition"] == []

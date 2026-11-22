@@ -37,10 +37,11 @@ def create_server_pipeline(
         vlm_api_key=cfg.vlm_api_key if cfg.enable_vlm else None,
         unlimited_ocr_url=cfg.unlimited_ocr_url if cfg.enable_vlm else None,
         event_bus=event_bus,
+        workers=cfg.max_workers,
     )
 
 
-def run_ocr_job(job_id: str, upload: str, tenant: str) -> None:
+def run_ocr_job(job_id: str, upload: str, tenant: str) -> dict[str, int]:
     """Called by the RQ worker: recognize the stored upload, write its result.
 
     The API validated the upload against its real filename before queueing it,
@@ -51,4 +52,4 @@ def run_ocr_job(job_id: str, upload: str, tenant: str) -> None:
     context = TenantContext(organization_id=tenant, user_id="worker", subscription_tier="server")
     metrics = worker_metrics()
     pipeline = create_server_pipeline(settings, PageMetricsBus(metrics))
-    run_job(Path(upload), result_path(settings, job_id), pipeline, context, metrics)
+    return run_job(Path(upload), result_path(settings, job_id), pipeline, context, metrics)

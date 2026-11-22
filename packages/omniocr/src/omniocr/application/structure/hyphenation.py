@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Mapping
 
-from omniocr.domain.models import LineJoin, OCRLine, Script
+from omniocr.domain.models import JoinSeparator, JoinVerdict, LineJoin, OCRLine, Script
 from omniocr.ports.interfaces import ILexicon
 
 HYPHENS = ("-", "‐", "¬", "\u00ad")
@@ -69,25 +69,25 @@ class Dehyphenator:
             return LineJoin(
                 first_line_id=first.id,
                 second_line_id=second.id,
-                separator="",
+                separator=JoinSeparator.DROPPED,
                 removed=hyphen_char,
-                verdict="joined_in_lexicon",
+                verdict=JoinVerdict.JOINED_IN_LEXICON,
             )
         elif ab_hyphenated_in_lexicon:
             # hyphen_in_lexicon -> keep hyphen
             return LineJoin(
                 first_line_id=first.id,
                 second_line_id=second.id,
-                separator="-",
+                separator=JoinSeparator.KEPT,
                 removed="",
-                verdict="hyphen_in_lexicon",
+                verdict=JoinVerdict.HYPHEN_IN_LEXICON,
             )
         else:
             # unverified -> drop hyphen (default is drop hyphen, separator = "")
             return LineJoin(
                 first_line_id=first.id,
                 second_line_id=second.id,
-                separator="",
+                separator=JoinSeparator.DROPPED,
                 removed=hyphen_char,
-                verdict="unverified",
+                verdict=JoinVerdict.UNVERIFIED,
             )

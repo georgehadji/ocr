@@ -46,7 +46,7 @@ API: http://localhost:8000/docs
 | `OMNIOCR_ENABLE_VLM` | `false` | Enable VLM reviewer |
 | `OMNIOCR_VLM_API_KEY` | — | OpenRouter API key |
 | `OMNIOCR_APP_NAME` | `"omniocr"` | App identifier for logs |
-| `OMNIOCR_MAX_WORKERS` | — | Number of threads for parallel page processing (unset = sequential) |
+| `OMNIOCR_MAX_WORKERS` | `1` | Pages a server or cloud worker recognizes at once (1 = one after another). The CLI uses `--workers` instead |
 | `OMNIOCR_CACHE_TTL` | — | Cache TTL in seconds for CachingEngine (unset = no TTL) |
 | `OMNIOCR_REDIS_URL` | `redis://localhost:6379/0` | Redis URL for the Cloud broker |
 
@@ -65,6 +65,12 @@ result = pipeline.run(pdf_bytes)
 
 Start with `max_workers=2` and scale up to the number of CPU cores. The default
 (`None`) preserves the original synchronous, single-threaded behavior.
+
+The server and cloud editions build the pipeline for you: set `OMNIOCR_MAX_WORKERS` on the
+worker (the compose files pass it through, default 1). Every page in flight holds its image and
+runs the engines, so memory and CPU grow with it. Measured on 7 corpus pages on a 24-thread
+CPU: 52 s at 1 worker, 33 s at 4, with byte-identical text. Check `omniocr_page_duration_seconds`
+and the container's memory before raising it on a long book.
 
 ### TTL cache eviction
 

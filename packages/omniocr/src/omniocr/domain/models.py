@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Tuple
 
 
@@ -131,6 +131,14 @@ class AlignedToken:
         return len({text for _, text in self.readings}) > 1
 
 
+class SuggestionKind(StrEnum):
+    """How a suggestion is applied, derived from its fields, never stored."""
+
+    REPLACE = "replace"  # swaps the span ``start:end`` for ``suggestion_text``
+    FLAG = "flag"  # not applicable; the reviewer decides
+    WHOLE_LINE = "whole_line"  # replaces the line's entire text
+
+
 @dataclass(frozen=True, slots=True)
 class Suggestion:
     line_id: str
@@ -142,6 +150,15 @@ class Suggestion:
     # replaces the whole line. A flag (``reversible=False``) has no replacement.
     start: int | None = None
     end: int | None = None
+
+    @property
+    def kind(self) -> SuggestionKind:
+        """What applying this suggestion does; mirrors ``apply_suggestion``."""
+        if not self.reversible:
+            return SuggestionKind.FLAG
+        if self.start is None or self.end is None:
+            return SuggestionKind.WHOLE_LINE
+        return SuggestionKind.REPLACE
 
 
 def apply_suggestion(text: str, suggestion: Suggestion) -> str:
@@ -173,11 +190,13 @@ def apply_suggestions(text: str, suggestions: Sequence[Suggestion]) -> str:
     Right to left keeps each remaining span valid after a replacement that
     changes the length.
     """
+    # A suggestion is a span only when both ends are set, as in ``apply_suggestion``
+    # and ``Suggestion.kind``; half a span is a whole-line replacement.
     for suggestion in suggestions:
-        if suggestion.start is None:
+        if suggestion.start is None or suggestion.end is None:
             text = apply_suggestion(text, suggestion)
     spans = sorted(
-        (s for s in suggestions if s.start is not None),
+        (s for s in suggestions if s.start is not None and s.end is not None),
         key=lambda s: -(s.start or 0),
     )
     for suggestion in spans:
@@ -185,12 +204,56 @@ def apply_suggestions(text: str, suggestions: Sequence[Suggestion]) -> str:
     return text
 
 
+class PipelineStage(StrEnum):
+    """The step a page was in when it failed, in the order a page passes through them."""
+
+    INGEST = "ingest"
+    PREPROCESS = "preprocess"
+    SEGMENT = "segment"
+    RECOGNISE = "recognise"
+    RECONCILE = "reconcile"
+    POST_CORRECT = "post_correct"
+
+
+class FailureKind(StrEnum):
+    """The ``PageFailure.error_type`` values the pipeline itself produces.
+
+    ``error_type`` stays a ``str``: a failure nobody anticipated records its
+    exception's class name. These are the kinds a caller can branch on, and
+    their strings are a frozen contract (JSON output, metric labels).
+    """
+
+    INGEST_ERROR = "IngestError"
+    EMPTY_PAGE = "EmptyPage"
+    ENGINE_ERROR = "EngineError"
+
+
+class EventType(StrEnum):
+    """What a published event reports. The strings are a frozen contract."""
+
+    PAGE_COMPLETED = "page_completed"
+    PAGE_FAILED = "page_failed"
+    MODEL_PROMOTED = "model_promoted"
+    TRAINING_REFUSED = "training_refused"
+    TRAINING_NO_CORRECTIONS = "training_no_corrections"
+    TRAINING_NO_SAMPLES = "training_no_samples"
+
+
 @dataclass(frozen=True, slots=True)
 class PageFailure:
-    """A page-local failure retained for review without aborting the job."""
+    """A page-local failure retained for review without aborting the job.
+
+    ``stage`` says where the page stopped; ``None`` when that is not known.
+    """
 
     error_type: str
     message: str
+    stage: PipelineStage | None = None
+
+    def describe(self) -> str:
+        """The failure as one line for a person: where it stopped, then why."""
+        where = f" during {self.stage}" if self.stage else ""
+        return f"Failed{where}: {self.message}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,7 +280,7 @@ def page_scoped_id(page_number: int, local_id: str) -> str:
 class PipelineEvent:
     """Immutable progress event emitted after a page reaches a terminal state."""
 
-    event_type: str
+    event_type: EventType
     page_number: int
     detail: str = ""
     duration_ms: float = 0.0
@@ -248,7 +311,7 @@ class OCRLine:
     agreement: AgreementTier = AgreementTier.UNKNOWN
 
 
-class ParagraphRole(str, Enum):
+class ParagraphRole(StrEnum):
     BODY = "body"
     HEADING = "heading"
     SUBHEADING = "subheading"
@@ -257,15 +320,54 @@ class ParagraphRole(str, Enum):
     FOOTNOTE = "footnote"
 
 
+class JoinVerdict(StrEnum):
+    """Why a line-end hyphen was dropped or kept."""
+
+    JOINED_IN_LEXICON = "joined_in_lexicon"  # the joined word is known: hyphen dropped
+    HYPHEN_IN_LEXICON = "hyphen_in_lexicon"  # the hyphenated word is known: hyphen kept
+    UNVERIFIED = "unverified"  # neither is known: hyphen dropped, reviewer flagged
+
+
+class JoinSeparator(StrEnum):
+    """What sits between the two halves of a joined word."""
+
+    DROPPED = ""  # the hyphen was removed
+    KEPT = "-"  # the hyphen is part of the word
+    # A plain wrap is not a hyphen decision, so the assembler records no LineJoin
+    # for it and there is no member for it.
+
+
+# Each verdict's one coherent separator. Dropping a hyphen removes a character
+# (``unjoin`` restores it from ``removed``); keeping one removes nothing.
+_SEPARATOR_OF = {
+    JoinVerdict.JOINED_IN_LEXICON: JoinSeparator.DROPPED,
+    JoinVerdict.HYPHEN_IN_LEXICON: JoinSeparator.KEPT,
+    JoinVerdict.UNVERIFIED: JoinSeparator.DROPPED,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class LineJoin:
     """How two consecutive lines were joined, recorded so it can be undone."""
 
     first_line_id: str
     second_line_id: str
-    separator: str  # "" hyphen dropped | "-" hyphen kept | " " plain wrap
+    separator: JoinSeparator
     removed: str  # the exact character removed from line one, "" if none
-    verdict: str  # joined_in_lexicon | hyphen_in_lexicon | unverified
+    verdict: JoinVerdict
+
+    def __post_init__(self) -> None:
+        # A plain string equal to a member is accepted and stored as the member,
+        # so the identity checks below and in the assembler hold for it too; a
+        # string that is no member raises ValueError here.
+        object.__setattr__(self, "separator", JoinSeparator(self.separator))
+        object.__setattr__(self, "verdict", JoinVerdict(self.verdict))
+        dropped = self.separator is JoinSeparator.DROPPED
+        if _SEPARATOR_OF[self.verdict] is not self.separator or dropped != bool(self.removed):
+            raise ValueError(
+                f"illegal join: verdict {self.verdict!s} with separator "
+                f"{self.separator.value!r} and removed {self.removed!r}"
+            )
 
 
 @dataclass(frozen=True, slots=True)
