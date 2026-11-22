@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 import os
 from collections.abc import Mapping
 from pathlib import Path
+
+_LOG = logging.getLogger("omniocr.config")
 
 _DEFAULT_APP_NAME = "omniocr"
 _DEFAULT_DESKTOP_MODE = True
@@ -11,6 +14,7 @@ _DEFAULT_ENABLE_VLM = False
 _DEFAULT_ENABLE_CALAMARI = False
 _DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
 _DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+_DEFAULT_MAX_WORKERS = 1
 _DEFAULT_JOB_TIMEOUT_S = 6 * 3600
 _DEFAULT_RESULT_TTL_S = 7 * 24 * 3600
 _DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1")
@@ -59,6 +63,10 @@ class Settings:
     api_keys: tuple[tuple[str, str], ...] = field(default=(), repr=False)
     cors_origins: tuple[str, ...] = ()
     allowed_hosts: tuple[str, ...] = _DEFAULT_ALLOWED_HOSTS
+    # Pages a server or cloud worker recognizes at once (the CLI's ``--workers``).
+    # Each page runs the engines on its own thread, so memory and CPU use grow
+    # with it; 1 keeps the pages strictly one after another.
+    max_workers: int = _DEFAULT_MAX_WORKERS
 
     def __post_init__(self) -> None:
         if not self.app_name.strip():
@@ -69,6 +77,37 @@ class Settings:
             raise ValueError("redis_url must not be empty")
         if self.job_timeout_s <= 0 or self.result_ttl_s <= 0:
             raise ValueError("job_timeout_s and result_ttl_s must be positive")
+        if self.max_workers < 1:
+            raise ValueError("max_workers must be at least 1")
+        # Warn, never raise: an existing environment that carries one of these
+        # combinations has been running, and refusing to start would break it.
+        for problem in self.problems():
+            _LOG.warning(problem)
+
+    def problems(self) -> tuple[str, ...]:
+        """Combinations that are accepted but do not do what they appear to.
+
+        The VLM voters (a cloud API key, an Unlimited-OCR server) run only when
+        ``enable_vlm`` is on, so the switch and what it enables must agree.
+        Messages name the setting, never its value: a key must not reach a log.
+        """
+        has_voter = bool(self.vlm_api_key) or bool(self.unlimited_ocr_url)
+        found: list[str] = []
+        if self.enable_vlm and not has_voter:
+            found.append(
+                "OMNIOCR_ENABLE_VLM is on but neither OMNIOCR_VLM_API_KEY nor "
+                "OMNIOCR_UNLIMITED_OCR_URL is set: no VLM voter will run"
+            )
+        if not self.enable_vlm:
+            if self.vlm_api_key:
+                found.append(
+                    "OMNIOCR_VLM_API_KEY is set but OMNIOCR_ENABLE_VLM is off: it is ignored"
+                )
+            if self.unlimited_ocr_url:
+                found.append(
+                    "OMNIOCR_UNLIMITED_OCR_URL is set but OMNIOCR_ENABLE_VLM is off: it is ignored"
+                )
+        return tuple(found)
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Settings":
@@ -97,6 +136,7 @@ class Settings:
             cors_origins=_env_list(values.get("OMNIOCR_CORS_ORIGINS", "")),
             allowed_hosts=_env_list(values.get("OMNIOCR_ALLOWED_HOSTS", ""))
             or _DEFAULT_ALLOWED_HOSTS,
+            max_workers=_env_int(values, "OMNIOCR_MAX_WORKERS", _DEFAULT_MAX_WORKERS),
         )
 
 

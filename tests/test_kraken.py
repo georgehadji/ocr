@@ -25,7 +25,26 @@ def test_kraken_records_become_provenanced_blocks() -> None:
     assert blocks[0].confidence.value == pytest.approx(85.0)
     assert blocks[0].bbox.right == 42
     assert blocks[0].provenance is not None
-    assert blocks[0].provenance.model_hash == engine._model_hash
+    # The model file is absent, so there is no hash to record. In memory that is
+    # ``None``; the provenance written out keeps its frozen "unavailable" value.
+    assert engine._model_hash is None
+    assert blocks[0].provenance.model_hash == "unavailable"
+
+
+def test_a_present_model_is_hashed_into_the_provenance(tmp_path) -> None:
+    import hashlib
+
+    model = tmp_path / "m.mlmodel"
+    model.write_bytes(b"weights")
+    engine = KrakenEngine(model)
+    blocks = engine.parse_records(
+        [SimpleNamespace(prediction="α", confidences=[0.9], line=[(0, 0), (5, 5)])], 100, 100
+    )
+
+    expected = hashlib.sha256(b"weights").hexdigest()
+    assert engine._model_hash == expected
+    assert blocks[0].provenance is not None
+    assert blocks[0].provenance.model_hash == expected
 
 
 def test_bounds_reads_bbox_line_records() -> None:
@@ -117,9 +136,25 @@ def test_load_model_degrades_to_cpu_when_gpu_load_fails(
     )
     engine = KrakenEngine("missing-greek.mlmodel", device="cuda")
 
+    assert engine.device_fallback is False
+
     assert engine._load_model() == "cpu-model"
     assert attempts == ["cuda", "cpu"]
     assert engine.device == "cpu"
+    assert engine.device_fallback is True
+
+
+def test_a_cpu_engine_never_reports_a_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "kraken.lib",
+        SimpleNamespace(models=SimpleNamespace(load_any=lambda path, device="cpu": "model")),
+    )
+    engine = KrakenEngine("missing-greek.mlmodel", device="cpu")
+
+    engine._load_model()
+
+    assert engine.device_fallback is False
 
 
 class TestConcurrentModelLoad:

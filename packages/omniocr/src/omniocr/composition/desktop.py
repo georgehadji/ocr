@@ -34,7 +34,7 @@ from omniocr.application.router import ScriptRouter
 from omniocr.infrastructure.kraken import KrakenEngine, KrakenLayoutAnalyzer
 from omniocr.infrastructure.exporters import MarkdownExporter
 from omniocr.infrastructure.lexicons import lexicons_by_script
-from omniocr.ports.interfaces import IExporter, IImageProcessor, IOCREngine
+from omniocr.ports.interfaces import IEventBus, IExporter, IImageProcessor, IOCREngine
 
 # Defaults only — no optional third-party imports in vlm's module scope, so
 # these resolve even when the VLM extra is absent. They are function-signature
@@ -45,25 +45,15 @@ from omniocr.infrastructure.vlm import DEFAULT_MAX_EDGE_PX as DEFAULT_VLM_MAX_ED
 from omniocr.infrastructure.vlm import DEFAULT_MODEL as DEFAULT_VLM_MODEL
 from omniocr.infrastructure.unlimited_ocr import DEFAULT_MODEL as DEFAULT_UNLIMITED_OCR_MODEL
 
+# None of these three imports a third-party package at module scope (Calamari
+# runs in a subprocess, the VLM engines speak HTTP), so they cannot fail.
+from omniocr.infrastructure.calamari import CalamariEngine
+from omniocr.infrastructure.unlimited_ocr import UnlimitedOCREngine
+from omniocr.infrastructure.vlm import VLMEngine
+
 # The scripts the ensemble routes to Kraken and the opt-in voters; every other
 # script falls through to Tesseract alone.
 ENSEMBLE_SCRIPTS = (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC)
-
-# VLM and Calamari are optional extras; import failures gracefully disable them.
-try:
-    from omniocr.infrastructure.calamari import CalamariEngine  # noqa: F811
-
-    _CALAMARI_AVAILABLE = True
-except ImportError:
-    _CALAMARI_AVAILABLE = False
-
-try:
-    from omniocr.infrastructure.unlimited_ocr import UnlimitedOCREngine
-    from omniocr.infrastructure.vlm import VLMEngine  # noqa: F811
-
-    _VLM_AVAILABLE = True
-except ImportError:
-    _VLM_AVAILABLE = False
 
 
 def _verify_against_manifest(model_path: Path) -> None:
@@ -205,6 +195,7 @@ def create_ensemble_pipeline(
     workers: int = 1,
     variants: int = 1,
     text_layer: bool = True,
+    event_bus: IEventBus | None = None,
 ) -> PipelineOrchestrator:
     """Build a CPU ensemble with script rules injected at the composition root.
 
@@ -298,6 +289,7 @@ def create_ensemble_pipeline(
         post_corrector=SuggestOnlyCorrector(lexicons=lexicons_by_script()),
         exporter=exporter or MarkdownExporter(),
         assembler=assembler,
+        event_bus=event_bus,
         max_workers=workers if workers > 1 else None,
         variants=_variant_processors(variants),
     )
@@ -308,4 +300,7 @@ class _TesseractRouter:
         self._engine = engine
 
     def route(self, line: OCRLine, context: TenantContext) -> tuple[TesseractEngine, ...]:
+        return (self._engine,)
+
+    def engines(self) -> tuple[TesseractEngine, ...]:
         return (self._engine,)

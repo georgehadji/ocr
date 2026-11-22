@@ -44,7 +44,19 @@ core with `pip install -e ".[dev,docx]"` plus the extras you need (`tesseract`, 
   or `docker compose -f editions/server/docker-compose.yml up`
 - **Cloud**: `docker compose -f editions/cloud/docker-compose.yml up`
 - **CI gates**: see `CONTRIBUTING.md` (pytest with 80% coverage, ruff, mypy strict,
-  `scripts/check_layering.py`, `scripts/check_license_isolation.py`)
+  `scripts/check_layering.py`, `scripts/check_license_isolation.py`,
+  `scripts/gen_state_docs.py --check`)
+- **State machines**: lifecycles are a `StrEnum` + transition table (`domain/state.py`);
+  `docs/STATE_MACHINES.md` is generated, never hand-edited. Plan:
+  `docs/STATE_MACHINES_PLAN.md`. State values are frozen contracts (HTTP `status`, session /
+  `promoted.json` keys, metrics labels, `--json` keys, `PageFailure.error_type`): add, never
+  rename. Change state only through `transition()`; regenerate the catalog with
+  `python scripts/gen_state_docs.py`.
+- **Seeing state**: the circuit breaker logs `state_transition` (`engine`, `from_state`,
+  `to_state`); `omniocr run --json` lists `engines` (`name`, `device`, `breaker`);
+  `omniocr doctor` lists `Settings.problems()` (e.g. `OMNIOCR_ENABLE_VLM` with no key or URL).
+  `scripts/train_kraken.py` exits 0 for refused / nothing-to-train runs unless `--strict-exit`
+  (then 4 / 5); `--json` prints one object.
 
 ## Architecture in one screen
 

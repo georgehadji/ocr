@@ -21,7 +21,11 @@ mypy --strict --ignore-missing-imports --python-version 3.11 packages/omniocr/sr
 mypy --strict --ignore-missing-imports --python-version 3.11 --explicit-package-bases editions scripts
 python scripts/check_license_isolation.py
 python scripts/check_layering.py
+python scripts/gen_state_docs.py --check
 ```
+
+`docs/STATE_MACHINES.md` is generated from the declared lifecycles. After changing a
+transition table, run `python scripts/gen_state_docs.py` and commit the result.
 
 CI also builds the cloud and server images (`editions/*/Dockerfile`). The Kraken models
 are Git LFS files: run `git lfs pull` before building an image or running the engines

@@ -20,6 +20,18 @@ def test_server_composition_root_imports() -> None:
     assert pipeline is not None
 
 
+def test_server_pipeline_recognizes_pages_with_the_configured_workers() -> None:
+    from omniocr.infrastructure.config import Settings
+
+    from editions.server.composition import create_server_pipeline
+
+    settings = Settings(kraken_model_path="not-a-real-model.mlmodel", max_workers=3)
+    assert create_server_pipeline(settings)._max_workers == 3
+    # One worker keeps the pipeline sequential, as before.
+    sequential = Settings(kraken_model_path="not-a-real-model.mlmodel")
+    assert create_server_pipeline(sequential)._max_workers is None
+
+
 def test_server_composition_validates_upload() -> None:
     """The server pipeline's upload validation rejects invalid content."""
     from omniocr.infrastructure.security import validate_upload

@@ -93,6 +93,10 @@ class KetosTrainer(ITrainer):
         # ``-o`` names a directory of checkpoints; the model is picked out of it.
         output_dir = data.parent / "ketos_out"
         output_path = data.parent / "ketos_finetuned.mlmodel"
+        # Whatever an earlier run left here must not be mistaken for this run's
+        # model: the newest ``best_*`` is picked below, and a run that wrote none
+        # would otherwise promote last time's weights.
+        shutil.rmtree(output_dir, ignore_errors=True)
 
         # Fine-tuning is the most GPU-sensitive step in the project — an epoch
         # that takes minutes on a GPU takes hours on CPU. `select_device`

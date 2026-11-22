@@ -6,6 +6,10 @@ x-omniocr-env: &omniocr-env
   OMNIOCR_API_KEYS: ${OMNIOCR_API_KEYS:?set OMNIOCR_API_KEYS}
   OMNIOCR_UPLOAD_DIR: /data/uploads
   OMNIOCR_RESULT_DIR: /data/results
+  # Pages a worker recognizes at once; 1 = one after another.
+  OMNIOCR_MAX_WORKERS: ${OMNIOCR_MAX_WORKERS:-1}
+  # The api and the worker write their counters here; /metrics on the api adds them up.
+  PROMETHEUS_MULTIPROC_DIR: /metrics
 
 services:
   redis:
@@ -31,6 +35,7 @@ services:
         condition: service_healthy
     volumes:
       - omniocr-data:/data
+      - omniocr-metrics:/metrics
     environment: *omniocr-env
 
   api:
@@ -45,7 +50,9 @@ services:
         condition: service_healthy
     volumes:
       - omniocr-data:/data
+      - omniocr-metrics:/metrics
     environment: *omniocr-env
 
 volumes:
   omniocr-data:
+  omniocr-metrics:

@@ -27,6 +27,10 @@ from omniocr.ports.interfaces import ILayoutAnalyzer, IOCREngine, RawPage
 
 _LOG = logging.getLogger("omniocr.kraken")
 
+# What provenance records when the model file cannot be read. Part of the
+# written output, so it stays a string even though the engine holds ``None``.
+_HASH_UNAVAILABLE = "unavailable"
+
 
 def _open_bilevel(content: bytes) -> Any:
     """Decode page bytes into the bi-level image ``kraken.pageseg`` requires.
@@ -182,7 +186,15 @@ class KrakenEngine(IOCREngine):
         # bottleneck at ~500s/page, so contention on a one-time load is noise.
         # Split it only if profiling ever says otherwise.
         self._lock = threading.RLock()
-        self._model_hash = self._hash_model()
+        # ``None`` when the file cannot be read. The provenance written out says
+        # "unavailable" instead (a frozen value), see ``parse_records``.
+        self._model_hash: str | None = self._hash_model()
+        self._device_fallback = False
+
+    @property
+    def device_fallback(self) -> bool:
+        """True once a requested accelerator failed and this engine went to CPU for good."""
+        return self._device_fallback
 
     @property
     def device(self) -> str:
@@ -257,6 +269,7 @@ class KrakenEngine(IOCREngine):
             )
             with self._lock:
                 self._device = CPU
+                self._device_fallback = True
                 self._model = self._load_model()
                 return self.parse_records(
                     rpred.rpred(self._model, image, segmentation), page.width, page.height
@@ -273,20 +286,22 @@ class KrakenEngine(IOCREngine):
                 raise
             _LOG.warning("Kraken model load on %s failed (%s) — using CPU", self.device, exc)
             self._device = CPU
+            self._device_fallback = True
             return models.load_any(str(self.model_path), device=CPU)
 
     def parse_records(
         self, records: Iterable[Any], page_width: int, page_height: int
     ) -> tuple[OCRBlock, ...]:
         timestamp = datetime.now(timezone.utc).isoformat()
+        model_hash = self._model_hash or _HASH_UNAVAILABLE
         run = EngineRun(
             engine=self.name,
             model_ref=ModelRef(
                 engine=self.name,
                 model_name=self.model_path.name,
-                model_hash=self._model_hash,
+                model_hash=model_hash,
             ),
-            model_hash=self._model_hash,
+            model_hash=model_hash,
             params=(self.device,),
             timestamp=timestamp,
         )
@@ -328,7 +343,7 @@ class KrakenEngine(IOCREngine):
         x, y, width, height = KrakenLayoutAnalyzer._bounds(record, page_width, page_height)
         return x, y, x + width, y + height
 
-    def _hash_model(self) -> str:
+    def _hash_model(self) -> str | None:
         try:
             digest = hashlib.sha256()
             with self.model_path.open("rb") as model:
@@ -336,7 +351,7 @@ class KrakenEngine(IOCREngine):
                     digest.update(chunk)
             return digest.hexdigest()
         except OSError:
-            return "unavailable"
+            return None
 
 
 __all__ = ["KrakenEngine", "KrakenLayoutAnalyzer"]
