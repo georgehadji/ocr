@@ -13,6 +13,7 @@ import hmac
 import re
 import uuid
 from collections.abc import Awaitable, Callable
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path, PurePath
 from typing import BinaryIO
 
@@ -179,9 +180,17 @@ def build_router(queue: IJobQueue, settings: Settings, metrics: ApiMetrics) -> A
     return router
 
 
+def _package_version() -> str:
+    """The installed ``omniocr`` version: ``pyproject.toml`` is its only source."""
+    try:
+        return version("omniocr")
+    except PackageNotFoundError:  # running from a checkout that was never installed
+        return "0+unknown"
+
+
 def create_app(title: str, queue: IJobQueue, settings: Settings) -> FastAPI:
     """The FastAPI app for an edition: its queue, plus same-origin-by-default security."""
-    app = FastAPI(title=title, version="0.2.0")
+    app = FastAPI(title=title, version=_package_version())
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_origins),

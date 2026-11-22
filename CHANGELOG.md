@@ -3,8 +3,8 @@
 All notable changes to this project are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project's first tagged release is `v0.2.0`. Everything before it is
-under that heading; later changes go under `[Unreleased]`.
+and this project's first tagged release is `v0.2.0`. Every change up to that
+release is listed under `[0.2.0]`; add new changes under `[Unreleased]`.
 
 ## [Unreleased]
 
