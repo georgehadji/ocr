@@ -396,6 +396,20 @@ Each block: **target model → fix → UX / DX / AX gain → tests → files**.
   `tests/test_faithfulness*.py` must pass unchanged — that is the regression gate.
 - **Tests:** `test_hyphenation.py`, `test_suggestions.py`.
 
+> **Phase 5 outcome — differences from the plan above.** All three enums live in
+> `domain/models.py`. `LineJoin.__post_init__` accepts exactly three combinations:
+> `joined_in_lexicon` and `unverified` with separator `""` and a non-empty `removed`,
+> and `hyphen_in_lexicon` with separator `"-"` and `removed == ""`. The check also
+> covers `removed`, which the plan did not mention, because `unjoin` rebuilds the
+> original line from it. The `" "` separator is kept as `JoinSeparator.SPACE` but no
+> verdict is legal with it: a plain wrap produces no `LineJoin` at all. The assembler
+> compares by member (`is JoinSeparator.DROPPED`, `is JoinVerdict.UNVERIFIED`).
+> `Suggestion.kind` is a derived property (flag if not reversible, else whole-line if it
+> has no span, else replace). It mirrors `apply_suggestion`, which was not touched, so no
+> suggestion is applied differently. The `reason` strings stay open. New tests:
+> `tests/test_text_structure_types.py`; the existing hyphenation, suggestion and
+> faithfulness tests pass unchanged.
+
 ### 4.7 M8 + M9 + M15 + M17 + M18 — Visibility of infra state (🟡, Phase 6)
 
 - Breaker: transitions go through one `_move(to)` that logs `state_transition`;

@@ -18,6 +18,8 @@ from omniocr.application.structure.running_heads import detect as detect_running
 from omniocr.domain.errors import LayoutError
 from omniocr.domain.models import (
     DocumentStructure,
+    JoinSeparator,
+    JoinVerdict,
     LineJoin,
     OCRLine,
     OCRParagraph,
@@ -152,13 +154,13 @@ class DocumentAssembler:
                     join_decision = self.dehyphenator.join(first, second)
                     if join_decision is not None:
                         joins.append(join_decision)
-                        if join_decision.separator == "":
+                        if join_decision.separator is JoinSeparator.DROPPED:
                             # dropped hyphen
                             first_stripped = text.rstrip()
                             text = first_stripped[:-1] + second.text.lstrip()
 
                             # If it was unverified, also emit a Suggestion
-                            if join_decision.verdict == "unverified":
+                            if join_decision.verdict is JoinVerdict.UNVERIFIED:
                                 extracted = extract_join_candidates(first.text, second.text)
                                 A, B, hyphen_char = (
                                     extracted if extracted is not None else ("", "", "")

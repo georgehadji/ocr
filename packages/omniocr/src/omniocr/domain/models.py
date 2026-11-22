@@ -131,6 +131,14 @@ class AlignedToken:
         return len({text for _, text in self.readings}) > 1
 
 
+class SuggestionKind(StrEnum):
+    """How a suggestion is applied, derived from its fields, never stored."""
+
+    REPLACE = "replace"  # swaps the span ``start:end`` for ``suggestion_text``
+    FLAG = "flag"  # not applicable; the reviewer decides
+    WHOLE_LINE = "whole_line"  # replaces the line's entire text
+
+
 @dataclass(frozen=True, slots=True)
 class Suggestion:
     line_id: str
@@ -142,6 +150,15 @@ class Suggestion:
     # replaces the whole line. A flag (``reversible=False``) has no replacement.
     start: int | None = None
     end: int | None = None
+
+    @property
+    def kind(self) -> SuggestionKind:
+        """What applying this suggestion does; mirrors ``apply_suggestion``."""
+        if not self.reversible:
+            return SuggestionKind.FLAG
+        if self.start is None or self.end is None:
+            return SuggestionKind.WHOLE_LINE
+        return SuggestionKind.REPLACE
 
 
 def apply_suggestion(text: str, suggestion: Suggestion) -> str:
@@ -301,15 +318,50 @@ class ParagraphRole(str, Enum):
     FOOTNOTE = "footnote"
 
 
+class JoinVerdict(StrEnum):
+    """Why a line-end hyphen was dropped or kept."""
+
+    JOINED_IN_LEXICON = "joined_in_lexicon"  # the joined word is known: hyphen dropped
+    HYPHEN_IN_LEXICON = "hyphen_in_lexicon"  # the hyphenated word is known: hyphen kept
+    UNVERIFIED = "unverified"  # neither is known: hyphen dropped, reviewer flagged
+
+
+class JoinSeparator(StrEnum):
+    """What sits between the two halves of a joined word."""
+
+    DROPPED = ""  # the hyphen was removed
+    KEPT = "-"  # the hyphen is part of the word
+    # Reserved for a plain wrap. A plain wrap is not a hyphen decision, so the
+    # assembler records no LineJoin for it and no verdict is legal with this value.
+    SPACE = " "
+
+
+# Each verdict's one coherent separator. Dropping a hyphen removes a character
+# (``unjoin`` restores it from ``removed``); keeping one removes nothing.
+_SEPARATOR_OF = {
+    JoinVerdict.JOINED_IN_LEXICON: JoinSeparator.DROPPED,
+    JoinVerdict.HYPHEN_IN_LEXICON: JoinSeparator.KEPT,
+    JoinVerdict.UNVERIFIED: JoinSeparator.DROPPED,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class LineJoin:
     """How two consecutive lines were joined, recorded so it can be undone."""
 
     first_line_id: str
     second_line_id: str
-    separator: str  # "" hyphen dropped | "-" hyphen kept | " " plain wrap
+    separator: JoinSeparator
     removed: str  # the exact character removed from line one, "" if none
-    verdict: str  # joined_in_lexicon | hyphen_in_lexicon | unverified
+    verdict: JoinVerdict
+
+    def __post_init__(self) -> None:
+        dropped = self.separator is JoinSeparator.DROPPED
+        if _SEPARATOR_OF.get(self.verdict) is not self.separator or dropped != bool(self.removed):
+            raise ValueError(
+                f"illegal join: verdict {self.verdict!s} with separator "
+                f"{self.separator.value!r} and removed {self.removed!r}"
+            )
 
 
 @dataclass(frozen=True, slots=True)
