@@ -229,10 +229,15 @@ def unjoin(paragraph: OCRParagraph) -> tuple[str, ...]:
 
         # Check if there is a join at this boundary
         j = joins.get(line.id)
-        if j is not None:
+        if j is not None and j.separator is JoinSeparator.KEPT:
+            # The hyphen stays in paragraph.text, so line one is taken whole
+            # and nothing is restored or skipped.
+            reconstructed.append(para_text[text_ptr : text_ptr + len(line.text)])
+            text_ptr += len(line.text)
+        elif j is not None:
             # We need to find where the next line starts in para_text.
             # Next line's text starts after first line's text.
-            # If j.separator == "" (hyphen dropped):
+            # With JoinSeparator.DROPPED (hyphen dropped):
             # first ends with j.removed, and next starts with the next line's
             # text, left-stripped.
             #

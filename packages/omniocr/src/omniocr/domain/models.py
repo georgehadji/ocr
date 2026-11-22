@@ -190,11 +190,13 @@ def apply_suggestions(text: str, suggestions: Sequence[Suggestion]) -> str:
     Right to left keeps each remaining span valid after a replacement that
     changes the length.
     """
+    # A suggestion is a span only when both ends are set, as in ``apply_suggestion``
+    # and ``Suggestion.kind``; half a span is a whole-line replacement.
     for suggestion in suggestions:
-        if suggestion.start is None:
+        if suggestion.start is None or suggestion.end is None:
             text = apply_suggestion(text, suggestion)
     spans = sorted(
-        (s for s in suggestions if s.start is not None),
+        (s for s in suggestions if s.start is not None and s.end is not None),
         key=lambda s: -(s.start or 0),
     )
     for suggestion in spans:
@@ -309,7 +311,7 @@ class OCRLine:
     agreement: AgreementTier = AgreementTier.UNKNOWN
 
 
-class ParagraphRole(str, Enum):
+class ParagraphRole(StrEnum):
     BODY = "body"
     HEADING = "heading"
     SUBHEADING = "subheading"
@@ -331,9 +333,8 @@ class JoinSeparator(StrEnum):
 
     DROPPED = ""  # the hyphen was removed
     KEPT = "-"  # the hyphen is part of the word
-    # Reserved for a plain wrap. A plain wrap is not a hyphen decision, so the
-    # assembler records no LineJoin for it and no verdict is legal with this value.
-    SPACE = " "
+    # A plain wrap is not a hyphen decision, so the assembler records no LineJoin
+    # for it and there is no member for it.
 
 
 # Each verdict's one coherent separator. Dropping a hyphen removes a character
@@ -356,8 +357,13 @@ class LineJoin:
     verdict: JoinVerdict
 
     def __post_init__(self) -> None:
+        # A plain string equal to a member is accepted and stored as the member,
+        # so the identity checks below and in the assembler hold for it too; a
+        # string that is no member raises ValueError here.
+        object.__setattr__(self, "separator", JoinSeparator(self.separator))
+        object.__setattr__(self, "verdict", JoinVerdict(self.verdict))
         dropped = self.separator is JoinSeparator.DROPPED
-        if _SEPARATOR_OF.get(self.verdict) is not self.separator or dropped != bool(self.removed):
+        if _SEPARATOR_OF[self.verdict] is not self.separator or dropped != bool(self.removed):
             raise ValueError(
                 f"illegal join: verdict {self.verdict!s} with separator "
                 f"{self.separator.value!r} and removed {self.removed!r}"

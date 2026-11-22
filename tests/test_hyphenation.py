@@ -149,3 +149,30 @@ def test_joins_are_exactly_reversible(lines: list[OCRLine]) -> None:
     # Act & Assert: reverse the join to reconstruct original line texts
     reconstructed = unjoin(paragraph)
     assert reconstructed == tuple(sl.text for sl in sequential_lines)
+
+
+def test_a_kept_hyphen_is_reversible_too() -> None:
+    # The hypothesis property above has no lexicon, so it only ever drops
+    # hyphens; a hyphen the lexicon says to keep stays in paragraph.text and
+    # unjoin must not take it for a removed one.
+    lexicon = SetLexicon("greek", ["ἀντι-εὐχή", "εὐχή"])
+    texts = ("ἀντι-", "εὐχή", "foo-", "bar")
+    lines = tuple(
+        OCRLine(
+            id=f"l{i}",
+            text=text,
+            confidence=Confidence(1.0),
+            bbox=BBox(10, 10 + i * 25, 90, 15),
+            script="polytonic",
+        )
+        for i, text in enumerate(texts)
+    )
+    doc = DocumentStructure(pages=(DocumentPage(number=1, width=150, height=500, lines=lines),))
+    context = TenantContext(organization_id="org", user_id="user", subscription_tier="desktop")
+
+    res = DocumentAssembler({"polytonic": lexicon}).assemble(doc, context)
+
+    assert isinstance(res, Ok)
+    (paragraph,) = res.value.pages[0].paragraphs
+    assert paragraph.text == "ἀντι-εὐχή foobar"
+    assert unjoin(paragraph) == texts

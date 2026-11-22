@@ -9,7 +9,15 @@ from __future__ import annotations
 
 import pytest
 
-from omniocr.domain.models import JoinSeparator, JoinVerdict, LineJoin, Suggestion, SuggestionKind
+from omniocr.domain.models import (
+    JoinSeparator,
+    JoinVerdict,
+    LineJoin,
+    ParagraphRole,
+    Suggestion,
+    SuggestionKind,
+    apply_suggestions,
+)
 
 
 def _join(separator: JoinSeparator, removed: str, verdict: JoinVerdict) -> LineJoin:
@@ -22,7 +30,7 @@ def test_the_enum_values_are_the_strings_already_in_use() -> None:
         "hyphen_in_lexicon",
         "unverified",
     ]
-    assert [s.value for s in JoinSeparator] == ["", "-", " "]
+    assert [s.value for s in JoinSeparator] == ["", "-"]
     assert [k.value for k in SuggestionKind] == ["replace", "flag", "whole_line"]
 
 
@@ -59,8 +67,6 @@ def test_the_joins_the_dehyphenator_makes_are_legal(
         (JoinSeparator.DROPPED, "", JoinVerdict.JOINED_IN_LEXICON),
         # a kept hyphen removed nothing
         (JoinSeparator.KEPT, "-", JoinVerdict.HYPHEN_IN_LEXICON),
-        # a plain wrap is not a hyphen decision, so no verdict goes with it
-        (JoinSeparator.SPACE, "", JoinVerdict.UNVERIFIED),
     ],
 )
 def test_an_incoherent_join_is_rejected(
@@ -68,6 +74,34 @@ def test_an_incoherent_join_is_rejected(
 ) -> None:
     with pytest.raises(ValueError, match="illegal join"):
         _join(separator, removed, verdict)
+
+
+def test_a_plain_wrap_is_not_a_join_so_a_space_separator_is_rejected() -> None:
+    with pytest.raises(ValueError, match="not a valid"):
+        LineJoin("a", "b", " ", "", "unverified")  # type: ignore[arg-type]
+
+
+def test_plain_strings_are_coerced_to_their_members() -> None:
+    join = LineJoin("a", "b", "", "-", "unverified")  # type: ignore[arg-type]
+
+    assert join.separator is JoinSeparator.DROPPED
+    assert join.verdict is JoinVerdict.UNVERIFIED
+
+
+def test_paragraph_roles_format_as_their_values() -> None:
+    assert f"{ParagraphRole.BODY}" == "body"
+    assert ParagraphRole.BODY == "body"
+
+
+def test_a_suggestion_with_half_a_span_is_a_whole_line_for_every_applier() -> None:
+    half = _suggestion(start=0)
+    whole = _suggestion(source_text="abc", suggestion_text="Z")
+
+    assert half.kind is SuggestionKind.WHOLE_LINE
+    # Whole-line suggestions are applied first, in order; spans right to left
+    # after. A half span is not a span, so it is applied with the whole lines
+    # (here "b" and then "Z"), not after them.
+    assert apply_suggestions("abc", [half, whole]) == "Z"
 
 
 def _suggestion(**overrides: object) -> Suggestion:
