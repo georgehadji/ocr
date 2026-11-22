@@ -44,7 +44,11 @@ class _Parser(argparse.ArgumentParser):
 def _parse_args() -> argparse.Namespace:
     parser = _Parser(description="Fine-tune a Kraken model on human-verified corrections (v2)")
     # Known before parsing, so that a parse error can already answer in JSON.
-    parser.json_mode = "--json" in sys.argv[1:]
+    # A probe parser, not a string search, so that an abbreviation argparse
+    # accepts (``--js``) counts as ``--json`` here too.
+    probe = argparse.ArgumentParser(add_help=False)
+    probe.add_argument("--json", action="store_true")
+    parser.json_mode = probe.parse_known_args(sys.argv[1:])[0].json
     parser.add_argument(
         "--corrections-db",
         default="corrections.db",
@@ -127,8 +131,14 @@ def _parse_args() -> argparse.Namespace:
         "--json",
         action="store_true",
         help="print one JSON object on stdout describing how the run ended "
-        "(exit codes: 0 promoted, 1 failed, 2 usage, 3 environment, "
-        "4 not promoted, 5 nothing to train on)",
+        "(its 'outcome' says promoted, refused, no_corrections, no_samples or error)",
+    )
+    parser.add_argument(
+        "--strict-exit",
+        action="store_true",
+        help="exit 4 when the candidate is not promoted and 5 when there is nothing to "
+        "train on; without it both exit 0, as they always did "
+        "(1 failed, 2 usage and 3 environment apply either way)",
     )
     return parser.parse_args()
 
@@ -148,8 +158,10 @@ def _load_page_images(pages_dir: Path) -> dict[int, bytes]:
 class TrainExit(IntEnum):
     """Exit codes, so a caller can branch on how the run ended.
 
-    0-3 mean what they mean for the ``omniocr`` CLI; 4 and 5 are the two ways a
-    run can finish cleanly without producing a model.
+    0-3 mean what they mean for the ``omniocr`` CLI. 4 and 5 are the two ways a
+    run can finish cleanly without producing a model; they are returned only
+    with ``--strict-exit``, because those runs have always exited 0 and a
+    scheduled retrain must not start failing on them.
     """
 
     PROMOTED = 0
@@ -281,9 +293,8 @@ def _run(args: argparse.Namespace) -> int:
         return _emit(args, TrainExit.FAILURE, "error", f"Training failed: {result.error}")
 
     message, fields = _describe(result.value)
-    return _emit(
-        args, _BY_OUTCOME[result.value.outcome], str(result.value.outcome), message, **fields
-    )
+    code = _BY_OUTCOME[result.value.outcome] if args.strict_exit else TrainExit.PROMOTED
+    return _emit(args, code, str(result.value.outcome), message, **fields)
 
 
 if __name__ == "__main__":

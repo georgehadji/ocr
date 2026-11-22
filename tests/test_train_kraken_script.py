@@ -144,24 +144,49 @@ def test_a_promoted_run_exits_zero(monkeypatch, tmp_path, capsys) -> None:
     assert "Model promoted!" in out
 
 
-def test_a_refused_run_exits_four_and_says_why(monkeypatch, tmp_path, capsys) -> None:
-    refused = TrainingReport(
+def _refused() -> TrainingReport:
+    return TrainingReport(
         TrainingOutcome.REFUSED,
         refusal=PromotionRefused("script polytonic CER regressed", RefusalReason.SCRIPT_REGRESSED),
     )
 
-    code, out, _ = _ended(monkeypatch, tmp_path, capsys, Ok(refused))
 
-    assert code == 4
+def test_a_refused_run_still_exits_zero_and_says_why(monkeypatch, tmp_path, capsys) -> None:
+    # Before the outcome was typed this exited 0; a caller that retrains on a
+    # schedule must not start failing because the candidate was not good enough.
+    code, out, _ = _ended(monkeypatch, tmp_path, capsys, Ok(_refused()))
+
+    assert code == 0
     assert "Not promoted: script polytonic CER regressed" in out
 
 
 @pytest.mark.parametrize("outcome", [TrainingOutcome.NO_CORRECTIONS, TrainingOutcome.NO_SAMPLES])
-def test_nothing_to_train_on_exits_five(monkeypatch, tmp_path, capsys, outcome) -> None:
+def test_nothing_to_train_on_still_exits_zero(monkeypatch, tmp_path, capsys, outcome) -> None:
     code, out, _ = _ended(monkeypatch, tmp_path, capsys, Ok(TrainingReport(outcome)))
 
-    assert code == 5
+    assert code == 0
     assert "Nothing to train on" in out
+
+
+def test_strict_exit_refused_exits_four(monkeypatch, tmp_path, capsys) -> None:
+    code, _, _ = _ended(monkeypatch, tmp_path, capsys, Ok(_refused()), "--strict-exit")
+
+    assert code == 4
+
+
+@pytest.mark.parametrize("outcome", [TrainingOutcome.NO_CORRECTIONS, TrainingOutcome.NO_SAMPLES])
+def test_strict_exit_nothing_to_train_on_exits_five(monkeypatch, tmp_path, capsys, outcome) -> None:
+    code, _, _ = _ended(monkeypatch, tmp_path, capsys, Ok(TrainingReport(outcome)), "--strict-exit")
+
+    assert code == 5
+
+
+def test_strict_exit_leaves_a_promoted_run_at_zero(monkeypatch, tmp_path, capsys) -> None:
+    code, _, _ = _ended(
+        monkeypatch, tmp_path, capsys, Ok(_promoted_report(tmp_path)), "--strict-exit"
+    )
+
+    assert code == 0
 
 
 def test_a_training_error_exits_one_on_stderr(monkeypatch, tmp_path, capsys) -> None:
@@ -205,18 +230,33 @@ def test_json_is_one_object_a_caller_can_branch_on(monkeypatch, tmp_path, capsys
     code, out, _ = _ended(monkeypatch, tmp_path, capsys, Ok(refused), "--json")
 
     record = json.loads(out)
-    assert code == 4
+    assert code == 0
     assert record["outcome"] == "refused"
-    assert record["exit_code"] == 4
+    assert record["exit_code"] == 0
     assert record["reason"] == "below_threshold"
 
 
-def test_json_reports_a_usage_error_as_json(monkeypatch, capsys) -> None:
-    """A --json caller parses stdout; argparse's plain-text error would break it."""
+def test_json_with_strict_exit_reports_the_finer_code(monkeypatch, tmp_path, capsys) -> None:
+    import json
+
+    code, out, _ = _ended(monkeypatch, tmp_path, capsys, Ok(_refused()), "--json", "--strict-exit")
+
+    record = json.loads(out)
+    assert code == 4
+    assert record["outcome"] == "refused"
+    assert record["exit_code"] == 4
+
+
+@pytest.mark.parametrize("flag", ["--json", "--js"])
+def test_json_reports_a_usage_error_as_json(monkeypatch, capsys, flag) -> None:
+    """A --json caller parses stdout; argparse's plain-text error would break it.
+
+    ``--js`` is an abbreviation argparse accepts for ``--json``, so it counts too.
+    """
     import json
 
     module = _load_script()
-    monkeypatch.setattr(sys, "argv", ["train_kraken.py", "--json", "--corpus", "c"])
+    monkeypatch.setattr(sys, "argv", ["train_kraken.py", flag, "--corpus", "c"])
 
     with pytest.raises(SystemExit) as exited:
         module.main()

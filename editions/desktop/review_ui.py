@@ -478,7 +478,8 @@ if uploaded_file is not None and phase is ReviewPhase.OCR_RUNNING:
                 )
 
             if cfg.enable_vlm and cfg.vlm_api_key:
-                st.sidebar.info(f"VLM enabled: {cfg.vlm_api_key[:12]}…")
+                # Never any part of the key: a screenshot of the sidebar is shared.
+                st.sidebar.info("VLM enabled")
             ctx = TenantContext("desktop", "reviewer", "desktop")
             total = pipeline.count_pages(pdf_bytes)
             progress = st.sidebar.progress(0, f"OCR in progress — 0/{total} pages")

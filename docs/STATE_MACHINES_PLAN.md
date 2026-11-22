@@ -377,10 +377,11 @@ Each block: **target model → fix → UX / DX / AX gain → tests → files**.
 > the policy now compares `evaluated_on` to `SplitName.TEST` instead of the literal
 > `"test"`. Events are one `TrainingEvent` dataclass (formerly a class defined inside the
 > method) with three new `EventType`s: `training_refused`, `training_no_corrections`,
-> `training_no_samples`. **Behaviour changes to know about:** `train_kraken.py` now exits
-> 4 when a candidate is refused (it used to exit 0) and 5 when there was nothing to train
-> on (also 0 before); a missing base model or pages directory exits 3 (was 1); `--json`
-> is new. A damaged `promoted.json` now makes `register` return an error and leave the file
+> `training_no_samples`. **Behaviour changes to know about:** `train_kraken.py` exits
+> 4 when a candidate is refused and 5 when there was nothing to train on only with the new
+> `--strict-exit` flag (both exit 0 without it, as before: a code review found that a
+> scheduled retrain would otherwise start failing); a missing base model or pages
+> directory exits 3 (was 1); `--json` is new. A damaged `promoted.json` now makes `register` return an error and leave the file
 > untouched; reads still treat it as "no promoted model". `KetosTrainer` clears
 > `ketos_out/` before each run.
 

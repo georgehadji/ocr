@@ -95,8 +95,16 @@ def build_router(queue: IJobQueue, settings: Settings, metrics: ApiMetrics) -> A
     def current_status(tenant: str, job_id: str) -> JobStatus:
         if not _JOB_ID.match(job_id):
             raise HTTPException(404, "Job not found")
+        job_queue_id = queue_id(tenant, job_id)
+        # A queue that matches ``IJobQueue`` without subclassing it has not
+        # inherited the protocol's default ``status``; its ``state`` is enough.
+        read_status: Callable[[str], JobStatus] | None = getattr(queue, "status", None)
         try:
-            status = queue.status(queue_id(tenant, job_id))
+            status = (
+                read_status(job_queue_id)
+                if read_status is not None
+                else JobStatus(queue.state(job_queue_id))
+            )
         except QueueError as exc:
             raise HTTPException(503, "Job queue unavailable") from exc
         if status.state is JobState.NOT_FOUND:
