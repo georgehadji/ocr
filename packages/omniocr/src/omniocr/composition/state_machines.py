@@ -9,8 +9,18 @@ may import them all. Each phase of ``docs/STATE_MACHINES_PLAN.md`` adds its
 
 from __future__ import annotations
 
-from omniocr.domain.state import MachineSpec
+from omniocr.domain.state import MachineSpec, machine
+from omniocr.ports.interfaces import JOB_TRANSITIONS, JobState
 
-ALL_MACHINES: tuple[MachineSpec, ...] = ()
+OCR_JOB = machine(
+    "OCR job",
+    "omniocr.ports.interfaces",
+    JobState,
+    JobState.QUEUED,
+    JOB_TRANSITIONS,
+    external=frozenset({JobState.NOT_FOUND}),
+)
 
-__all__ = ["ALL_MACHINES"]
+ALL_MACHINES: tuple[MachineSpec, ...] = (OCR_JOB,)
+
+__all__ = ["ALL_MACHINES", "OCR_JOB"]

@@ -19,7 +19,7 @@ from editions.common.worker import result_path, run_job
 
 
 @app.task  # type: ignore[untyped-decorator]
-def process_ocr(job_id: str, upload: str, tenant: str) -> None:
+def process_ocr(job_id: str, upload: str, tenant: str) -> dict[str, int]:
     """Recognize the stored upload and write its result for the API to serve.
 
     There is no settings parameter: the worker's own environment is the
@@ -31,4 +31,4 @@ def process_ocr(job_id: str, upload: str, tenant: str) -> None:
     context = TenantContext(organization_id=tenant, user_id="worker", subscription_tier="cloud")
     metrics = worker_metrics()
     pipeline = create_cloud_pipeline(settings, PageMetricsBus(metrics))
-    run_job(Path(upload), result_path(settings, job_id), pipeline, context, metrics)
+    return run_job(Path(upload), result_path(settings, job_id), pipeline, context, metrics)

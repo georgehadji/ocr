@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from enum import Enum
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
-from typing import Iterator, Mapping, Protocol, Sequence
+from types import MappingProxyType
+from typing import Final, Iterator, Mapping, Protocol, Sequence
 
 from omniocr.domain.corrections import Correction
 from omniocr.domain.corpus import CorpusPage, SplitName
@@ -157,13 +159,43 @@ class IDocumentAssembler(Protocol):
     ) -> Result[DocumentStructure, LayoutError]: ...
 
 
-class JobState(str, Enum):
+class JobState(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     DONE = "done"
     FAILED = "failed"
     # The queue has no record of the job: never submitted, or past its TTL.
     NOT_FOUND = "not_found"
+
+
+# The backend moves a job forward only: it is queued, then runs, then ends. The
+# API never moves it; it reads. NOT_FOUND is not a step in this chain: the queue
+# reports it for any job it has dropped, so it is declared as entered from outside.
+JOB_TRANSITIONS: Final[Mapping[JobState, frozenset[JobState]]] = MappingProxyType(
+    {
+        JobState.QUEUED: frozenset({JobState.RUNNING, JobState.FAILED}),
+        JobState.RUNNING: frozenset({JobState.DONE, JobState.FAILED}),
+        JobState.DONE: frozenset[JobState](),
+        JobState.FAILED: frozenset[JobState](),
+        JobState.NOT_FOUND: frozenset[JobState](),
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class JobStatus:
+    """A job's state plus what a client needs to act on it.
+
+    ``reason`` says why a job is ``FAILED`` (or why a ``DONE`` job has no result)
+    in words that are safe to show a client. ``pages_failed`` on a ``DONE`` job
+    tells a partial result from a complete one. All three are optional: a queue
+    that knows only the state still returns a valid status.
+    """
+
+    state: JobState
+    reason: str = ""
+    pages_total: int | None = None
+    pages_failed: int | None = None
 
 
 class IJobQueue(Protocol):
@@ -178,10 +210,16 @@ class IJobQueue(Protocol):
 
     def state(self, job_id: str) -> JobState: ...
 
+    def status(self, job_id: str) -> JobStatus:
+        """The state with its reason and page counts. Queues that know only the state need not override."""
+        return JobStatus(self.state(job_id))
+
 
 __all__ = [
     "IJobQueue",
+    "JOB_TRANSITIONS",
     "JobState",
+    "JobStatus",
     "ICorrectionStore",
     "ICorpusRepository",
     "IEvaluator",
