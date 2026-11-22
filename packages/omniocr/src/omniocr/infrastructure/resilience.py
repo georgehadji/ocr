@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from enum import Enum
+from enum import StrEnum
 from threading import Lock
 import hashlib
+import logging
 from time import monotonic
 
 from omniocr.domain.errors import EngineError
@@ -35,7 +36,10 @@ class RetryingEngine(IOCREngine):
         return Err(last_error or EngineError(f"{self.name} failed"))
 
 
-class _State(Enum):
+_LOG = logging.getLogger(__name__)
+
+
+class _State(StrEnum):
     CLOSED = "closed"
     OPEN = "open"
     HALF_OPEN = "half_open"
@@ -74,6 +78,21 @@ class CircuitBreakerEngine(IOCREngine):
         self._opened_at = 0.0
         self._lock = Lock()
 
+    @property
+    def state(self) -> str:
+        """``closed``, ``open`` or ``half_open``: whether calls are being let through."""
+        return self._state.value
+
+    def _move(self, to: _State) -> None:
+        """Change state, saying so. Call with ``self._lock`` held."""
+        if to is self._state:
+            return
+        _LOG.info(
+            "state_transition",
+            extra={"engine": self.name, "from_state": self._state.value, "to_state": to.value},
+        )
+        self._state = to
+
     def extract(
         self, page: RawPage, context: TenantContext
     ) -> Result[Sequence[OCRBlock], EngineError]:
@@ -83,7 +102,7 @@ class CircuitBreakerEngine(IOCREngine):
             if self._state is _State.OPEN:
                 if self._clock() - self._opened_at < self._reset_timeout:
                     return Err(EngineError(f"{self.name} circuit is open"))
-                self._state = _State.HALF_OPEN  # this caller is the one probe
+                self._move(_State.HALF_OPEN)  # this caller is the one probe
 
         try:
             result = self.engine.extract(page, context)
@@ -94,7 +113,7 @@ class CircuitBreakerEngine(IOCREngine):
         if isinstance(result, Ok):
             with self._lock:
                 self._failures = 0
-                self._state = _State.CLOSED
+                self._move(_State.CLOSED)
             return Ok(tuple(result.value))
 
         assert isinstance(result, Err)
@@ -105,7 +124,7 @@ class CircuitBreakerEngine(IOCREngine):
         with self._lock:
             self._failures += 1
             if self._state is _State.HALF_OPEN or self._failures >= self._failure_threshold:
-                self._state = _State.OPEN
+                self._move(_State.OPEN)
                 # After the call: it may have taken as long as the timeout.
                 self._opened_at = self._clock()
 

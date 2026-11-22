@@ -432,6 +432,20 @@ Each block: **target model → fix → UX / DX / AX gain → tests → files**.
 - Layout fallback and ingest: document only (catalog entry); no code change unless
   Phase 3 stage tracking already covers them.
 
+> **Phase 6 status.** Done: breaker `_move()` with a `state_transition` log
+> (`engine`, `from_state`, `to_state`) and a read-only `state`; `KrakenEngine.device_fallback`;
+> `_model_hash` is `None` in memory while provenance still writes `"unavailable"`;
+> `Settings.problems()` (logged as warnings at construction, never raised) listed by
+> `doctor` as problems, and an unreadable `OMNIOCR_*` value is reported there instead
+> of crashing; the dead `_CALAMARI_AVAILABLE` / `_VLM_AVAILABLE` guards are gone.
+> `run --json` gains `engines: [{name, device, breaker}]` (plus `device_fallback: true`
+> only when it happened), built by `infrastructure/engine_report.describe_engines`,
+> which looks through retry / grounding / breaker wrappers. The engines come from new
+> `ScriptRouter.engines()` and `PipelineOrchestrator.engines()` (empty when the router
+> cannot say). `doctor --json` was not given an engines block: it builds no pipeline, so
+> there is no breaker state or fallback to report; it already shows the device.
+> M17 and M18 stay documented only.
+
 ---
 
 ## 5. Execution plan and subagent routing

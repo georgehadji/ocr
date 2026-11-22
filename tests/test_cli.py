@@ -146,6 +146,60 @@ def test_doctor_exits_environment_when_language_pack_missing(capsys, monkeypatch
     assert any("ell, grc" in problem or "grc" in problem for problem in payload["problems"])
 
 
+class TestDoctorListsSettingsProblems:
+    """A combination the settings accept but cannot honour is the kind of thing `doctor` is for."""
+
+    @staticmethod
+    def _healthy(monkeypatch) -> None:
+        monkeypatch.setattr(
+            cli,
+            "_environment",
+            lambda: {
+                "tesseract": {
+                    "available": True,
+                    "path": "/usr/bin/tesseract",
+                    "languages": ["ell", "grc"],
+                },
+                "kraken": {"installed": True, "models": ["models/a.mlmodel"]},
+                "device": {"selected": "cpu"},
+                "extras": {"pdf": True, "docx": True, "opencv": True, "pillow": True},
+            },
+        )
+
+    def test_vlm_on_without_a_voter_is_a_problem(self, capsys, monkeypatch) -> None:
+        self._healthy(monkeypatch)
+        monkeypatch.setenv("OMNIOCR_ENABLE_VLM", "1")
+        monkeypatch.delenv("OMNIOCR_VLM_API_KEY", raising=False)
+        monkeypatch.delenv("OMNIOCR_UNLIMITED_OCR_URL", raising=False)
+
+        code = cli.main(["doctor", "--json"])
+        payload = json.loads(capsys.readouterr().out)
+
+        assert code == cli.EXIT_ENVIRONMENT
+        assert payload["ok"] is False
+        assert any("OMNIOCR_ENABLE_VLM" in problem for problem in payload["problems"])
+
+    def test_an_unreadable_setting_is_a_problem_not_a_crash(self, capsys, monkeypatch) -> None:
+        self._healthy(monkeypatch)
+        monkeypatch.setenv("OMNIOCR_ENABLE_VLM", "maybe")
+
+        code = cli.main(["doctor", "--json"])
+        payload = json.loads(capsys.readouterr().out)
+
+        assert code == cli.EXIT_ENVIRONMENT
+        assert any("OMNIOCR_ENABLE_VLM must be a boolean" in p for p in payload["problems"])
+
+    def test_clean_settings_add_no_problem(self, capsys, monkeypatch) -> None:
+        self._healthy(monkeypatch)
+        for name in ("OMNIOCR_ENABLE_VLM", "OMNIOCR_VLM_API_KEY", "OMNIOCR_UNLIMITED_OCR_URL"):
+            monkeypatch.delenv(name, raising=False)
+
+        code = cli.main(["doctor", "--json"])
+
+        assert code == cli.EXIT_OK
+        assert json.loads(capsys.readouterr().out)["problems"] == []
+
+
 class TestDoctorReportsTheDevice:
     """ "Do I have a GPU?" is the question `doctor` exists to answer."""
 
@@ -274,6 +328,43 @@ def test_run_writes_output_and_reports_json(tmp_path, capsys, monkeypatch) -> No
     assert payload["pages"] == 1
     assert payload["lines"] == 1
     assert payload["failures"] == []
+
+
+def _run_json(tmp_path, capsys, monkeypatch, stub) -> dict:
+    source = tmp_path / "in.png"
+    source.write_bytes(b"fake-image")
+    monkeypatch.setattr(cli, "_build_pipeline", lambda args, exporter: stub)
+    monkeypatch.setattr(cli, "_build_exporter", lambda fmt, payload: object())
+    cli.main(["run", str(source), "--out", str(tmp_path / "out.txt"), "--json"])
+    return json.loads(capsys.readouterr().out)
+
+
+def test_run_json_reports_the_engines_the_run_used(tmp_path, capsys, monkeypatch) -> None:
+    from omniocr.domain.result import Ok
+    from omniocr.infrastructure.resilience import CircuitBreakerEngine
+
+    class _Engine:
+        name = "unlimited-ocr"
+
+    class _WithEngines(_StubOrchestrator):
+        def engines(self):
+            return (CircuitBreakerEngine(_Engine()),)
+
+    stub = _WithEngines([_page(1, lines=(_line("l1", "α"),))], Ok(b"x"))
+
+    payload = _run_json(tmp_path, capsys, monkeypatch, stub)
+
+    assert payload["engines"] == [{"name": "unlimited-ocr", "device": None, "breaker": "closed"}]
+
+
+def test_run_json_has_an_empty_engine_list_when_the_pipeline_cannot_say(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    from omniocr.domain.result import Ok
+
+    stub = _StubOrchestrator([_page(1, lines=(_line("l1", "α"),))], Ok(b"x"))
+
+    assert _run_json(tmp_path, capsys, monkeypatch, stub)["engines"] == []
 
 
 def test_pdf_output_from_a_png_exits_before_the_pipeline_is_built(tmp_path, monkeypatch) -> None:

@@ -230,6 +230,11 @@ class PipelineOrchestrator:
         self._max_workers = max_workers
         self._log = _get_logger("omniocr.pipeline")
 
+    def engines(self) -> tuple[IOCREngine, ...]:
+        """The engines the router can use, or none when it cannot say."""
+        listed = getattr(self._router, "engines", None)
+        return tuple(listed()) if listed is not None else ()
+
     def run(
         self, document: bytes, context: TenantContext | None = None
     ) -> Result[DocumentStructure, PipelineError]:

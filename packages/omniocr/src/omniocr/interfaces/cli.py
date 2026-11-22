@@ -428,9 +428,19 @@ def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> PipelineOr
 # --------------------------------------------------------------------------
 
 
+def _settings_problems() -> list[str]:
+    """What is wrong with the ``OMNIOCR_*`` settings the servers would start with."""
+    from omniocr.infrastructure.config import Settings
+
+    try:
+        return list(Settings.from_env().problems())
+    except ValueError as exc:  # an unreadable value: say so rather than crash the check
+        return [str(exc)]
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     env = _environment()
-    problems = _environment_problems(env)
+    problems = [*_environment_problems(env), *_settings_problems()]
     payload = {"ok": not problems, "problems": problems, **env}
 
     if args.json:
@@ -678,9 +688,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     real_failures = [f for f in failures if f["type"] != FailureKind.EMPTY_PAGE]
     ok = not real_failures and len(empty_pages) < len(pages)
     if args.json:
+        from omniocr.infrastructure.engine_report import describe_engines
+
         _emit_json(
             {
                 "ok": ok,
+                "engines": describe_engines(getattr(orchestrator, "engines", tuple)()),
                 "input": str(source),
                 "output": str(out),
                 "format": fmt,
