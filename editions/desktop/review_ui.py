@@ -474,7 +474,7 @@ if uploaded_file is not None and phase is ReviewPhase.OCR_RUNNING:
             for page_num, ocr_page in pipeline.run_iteratively(pdf_bytes, ctx):
                 pages.append(ocr_page)
                 if ocr_page.failures:
-                    st.sidebar.warning(f"Page {page_num} failed: {ocr_page.failures[0].message}")
+                    st.sidebar.warning(f"Page {page_num}: {ocr_page.failures[0].describe()}")
                 progress.progress(page_num / total, f"OCR in progress — {page_num}/{total} pages")
 
             progress.progress(1.0, "Complete — building review document")
@@ -874,7 +874,7 @@ if st.session_state.review_document is not None:
         with text_col:
             st.subheader(f"Page {page.number}")
             for f in page.failures:
-                st.error(f"Failed: {f.message}")
+                st.error(f.describe())
 
             for line in page.lines:
                 display = _final_text(line)

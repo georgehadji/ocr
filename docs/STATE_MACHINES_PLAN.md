@@ -333,6 +333,19 @@ Each block: **target model → fix → UX / DX / AX gain → tests → files**.
 - **Files:** `domain/models.py`, `application/pipeline.py`,
   `infrastructure/prometheus_metrics.py`, `interfaces/cli.py`.
 
+> **Phase 3 outcome — differences from the plan above.** `PipelineStage` lists only the
+> six stages the pipeline can actually stop in (`ingest, preprocess, segment, recognise,
+> reconcile, post_correct`); `compose`, `route` and `export` have no failure site, so
+> they were left out rather than declared and never emitted. `EventType` carries only
+> the three types that exist today; Phase 4 adds the training outcomes. The `stage` key
+> in `run --json` failures is present only when the stage is known, so an existing exact
+> match on the three original keys still holds. `ExitCode(IntEnum)` was added and the
+> `EXIT_*` names remain as aliases of its members. No machine was added to the catalog:
+> the stage order is the enum order and nothing validates transitions between stages, so
+> a transition table would document something the code does not enforce. The stage also
+> appears in the review UI ("Failed during segment: …"); the worker's job-failure reason
+> text was not changed.
+
 ### 4.5 M4 + M5 + M10 + M13 — Training & promotion (🟠, Phase 4)
 
 - **Model:** `TrainingOutcome(StrEnum)`: `no_corrections, no_samples, refused,

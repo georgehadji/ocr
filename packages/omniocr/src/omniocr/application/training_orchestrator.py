@@ -20,7 +20,7 @@ from omniocr.application.ground_truth import (
 )
 from omniocr.application.promotion import PromotionPolicy
 from omniocr.domain.errors import TrainingError
-from omniocr.domain.models import ModelRef
+from omniocr.domain.models import EventType, ModelRef
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.domain.training import PromotedModel
 from omniocr.ports.interfaces import (
@@ -207,14 +207,14 @@ class TrainingOrchestrator:
 
             @dataclass(frozen=True)
             class _PromotionEvent:
-                event_type: str
+                event_type: EventType
                 run_id: str
                 model_hash: str
                 improvement_pct: float
 
             self._event_bus.publish(
                 _PromotionEvent(
-                    event_type="model_promoted",
+                    event_type=EventType.MODEL_PROMOTED,
                     run_id=run_id,
                     model_hash=promoted.model_ref.model_hash,
                     improvement_pct=promoted.improvement_pct,

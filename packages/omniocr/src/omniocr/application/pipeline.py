@@ -14,10 +14,13 @@ from omniocr.domain.models import (
     Confidence,
     DocumentPage,
     DocumentStructure,
+    EventType,
+    FailureKind,
     OCRLine,
     OCRBlock,
     PageFailure,
     PipelineEvent,
+    PipelineStage,
     Script,
     Suggestion,
     TenantContext,
@@ -183,6 +186,19 @@ def _or_default(context: TenantContext | None) -> TenantContext:
     )
 
 
+class _StageCursor:
+    """Where one page currently is, so a failure can say where it stopped.
+
+    One per page, created in ``_guarded``; pages run on separate threads, so it
+    must never be shared between them.
+    """
+
+    __slots__ = ("current",)
+
+    def __init__(self) -> None:
+        self.current: PipelineStage | None = None
+
+
 class PipelineOrchestrator:
     def __init__(
         self,
@@ -320,14 +336,19 @@ class PipelineOrchestrator:
     def _guarded(self, raw_page: RawPage, ctx: TenantContext) -> tuple[DocumentPage, float]:
         """Process one page; any error becomes a failure on that page, not the run's."""
         started_at = perf_counter()
+        cursor = _StageCursor()
         try:
-            page = self._process_page(raw_page, ctx)
+            page = self._process_page(raw_page, ctx, cursor)
         except Exception as exc:
             page = DocumentPage(
                 number=raw_page.number,
                 width=getattr(raw_page, "width", 1),
                 height=getattr(raw_page, "height", 1),
-                failures=(PageFailure(error_type=type(exc).__name__, message=str(exc)),),
+                failures=(
+                    PageFailure(
+                        error_type=type(exc).__name__, message=str(exc), stage=cursor.current
+                    ),
+                ),
             )
         return page, (perf_counter() - started_at) * 1000
 
@@ -336,13 +357,13 @@ class PipelineOrchestrator:
             message = "; ".join(failure.message for failure in page.failures)
             if self._event_bus is not None:
                 self._event_bus.publish(
-                    PipelineEvent("page_failed", page.number, message, duration_ms)
+                    PipelineEvent(EventType.PAGE_FAILED, page.number, message, duration_ms)
                 )
             self._log.warning("page_failed", page=page.number, error=message)
         else:
             if self._event_bus is not None:
                 self._event_bus.publish(
-                    PipelineEvent("page_completed", page.number, duration_ms=duration_ms)
+                    PipelineEvent(EventType.PAGE_COMPLETED, page.number, duration_ms=duration_ms)
                 )
             self._log.info("page_completed", page=page.number, duration_ms=round(duration_ms, 1))
         return page
@@ -436,7 +457,12 @@ class PipelineOrchestrator:
             suggestions=tuple(suggestions),
         )
 
-    def _process_page(self, raw_page: RawPage, context: TenantContext) -> DocumentPage:
+    def _process_page(
+        self, raw_page: RawPage, context: TenantContext, cursor: _StageCursor | None = None
+    ) -> DocumentPage:
+        # ``cursor`` is advanced before each stage, so an exception raised in it
+        # reaches `_guarded` with the stage it stopped in.
+        cursor = cursor or _StageCursor()
         # Read off the *raw* page, before `_variant_pages`: preprocessing
         # returns new page objects that do not carry the field. Accessed
         # defensively because `RawPage` is a structural protocol that only the
@@ -447,15 +473,24 @@ class PipelineOrchestrator:
                 number=raw_page.number,
                 width=raw_page.width,
                 height=raw_page.height,
-                failures=(PageFailure(error_type="IngestError", message=raw_page.error),),
+                failures=(
+                    PageFailure(
+                        error_type=FailureKind.INGEST_ERROR,
+                        message=raw_page.error,
+                        stage=PipelineStage.INGEST,
+                    ),
+                ),
             )
         text_lines: Sequence[OCRLine] = getattr(raw_page, "text_lines", ())
         if text_lines:
+            cursor.current = PipelineStage.POST_CORRECT
             return self._page_from_text_layer(raw_page, text_lines, context)
 
+        cursor.current = PipelineStage.PREPROCESS
         variant_pages = self._variant_pages(raw_page, context)
         processed_page = variant_pages[0][1]
 
+        cursor.current = PipelineStage.SEGMENT
         segments = self._layout_analyzer.segment(processed_page, context)
         if isinstance(segments, Err):
             raise segments.error
@@ -476,6 +511,7 @@ class PipelineOrchestrator:
         engine_results: dict[tuple[int, str], Sequence[OCRBlock]] = {}
         engine_assignments: dict[tuple[int, str], dict[int, list[OCRBlock]]] = {}
         for segment_index, segment in enumerate(segment_values):
+            cursor.current = PipelineStage.RECOGNISE
             engines = self._router.route(segment, context)
             candidate_lines: list[OCRLine] = []
             for variant_name, variant_page in variant_pages:
@@ -532,6 +568,7 @@ class PipelineOrchestrator:
             # itself. This also makes the fan-out monotone: adding variants can
             # no longer make the result worse than not adding them.
             selectable = [line for line in candidate_lines if _is_primary(line)] or candidate_lines
+            cursor.current = PipelineStage.RECONCILE
             chosen = self._reconciler.reconcile(selectable, context)
             if isinstance(chosen, Err):
                 raise chosen.error
@@ -552,6 +589,7 @@ class PipelineOrchestrator:
                 merged = suggester(chosen_line, candidate_lines)
                 if merged is not None:
                     suggestions.append(merged)
+            cursor.current = PipelineStage.POST_CORRECT
             corrections = self._post_corrector.correct(chosen_line, context)
             if isinstance(corrections, Err):
                 raise corrections.error
@@ -570,8 +608,10 @@ class PipelineOrchestrator:
         if not page_lines:
             failures.append(
                 PageFailure(
-                    error_type="EmptyPage",
+                    error_type=FailureKind.EMPTY_PAGE,
                     message="no text lines were produced for this page",
+                    # Every segment yields a line, so none means no segments.
+                    stage=PipelineStage.SEGMENT,
                 )
             )
         # Every engine that ran on this page failed: the lines are the layout
@@ -580,8 +620,9 @@ class PipelineOrchestrator:
         if engine_results and len(failed_engines) == len(engine_results):
             failures.append(
                 PageFailure(
-                    error_type="EngineError",
+                    error_type=FailureKind.ENGINE_ERROR,
                     message="every engine failed on this page: " + "; ".join(failed_engines),
+                    stage=PipelineStage.RECOGNISE,
                 )
             )
 

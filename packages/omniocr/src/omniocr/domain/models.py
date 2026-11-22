@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Tuple
 
 
@@ -185,12 +185,53 @@ def apply_suggestions(text: str, suggestions: Sequence[Suggestion]) -> str:
     return text
 
 
+class PipelineStage(StrEnum):
+    """The step a page was in when it failed, in the order a page passes through them."""
+
+    INGEST = "ingest"
+    PREPROCESS = "preprocess"
+    SEGMENT = "segment"
+    RECOGNISE = "recognise"
+    RECONCILE = "reconcile"
+    POST_CORRECT = "post_correct"
+
+
+class FailureKind(StrEnum):
+    """The ``PageFailure.error_type`` values the pipeline itself produces.
+
+    ``error_type`` stays a ``str``: a failure nobody anticipated records its
+    exception's class name. These are the kinds a caller can branch on, and
+    their strings are a frozen contract (JSON output, metric labels).
+    """
+
+    INGEST_ERROR = "IngestError"
+    EMPTY_PAGE = "EmptyPage"
+    ENGINE_ERROR = "EngineError"
+
+
+class EventType(StrEnum):
+    """What a published event reports. The strings are a frozen contract."""
+
+    PAGE_COMPLETED = "page_completed"
+    PAGE_FAILED = "page_failed"
+    MODEL_PROMOTED = "model_promoted"
+
+
 @dataclass(frozen=True, slots=True)
 class PageFailure:
-    """A page-local failure retained for review without aborting the job."""
+    """A page-local failure retained for review without aborting the job.
+
+    ``stage`` says where the page stopped; ``None`` when that is not known.
+    """
 
     error_type: str
     message: str
+    stage: PipelineStage | None = None
+
+    def describe(self) -> str:
+        """The failure as one line for a person: where it stopped, then why."""
+        where = f" during {self.stage}" if self.stage else ""
+        return f"Failed{where}: {self.message}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,7 +258,7 @@ def page_scoped_id(page_number: int, local_id: str) -> str:
 class PipelineEvent:
     """Immutable progress event emitted after a page reaches a terminal state."""
 
-    event_type: str
+    event_type: EventType
     page_number: int
     detail: str = ""
     duration_ms: float = 0.0
