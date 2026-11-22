@@ -3,11 +3,12 @@
 All notable changes to this project are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project has not yet reached a tagged release — everything below is
-tracked under `[Unreleased]` until `v0.2.0` is cut per
-`implementation_plan.md` §5 (Phase 2 exit criteria).
+and this project's first tagged release is `v0.2.0`. Every change up to that
+release is listed under `[0.2.0]`; add new changes under `[Unreleased]`.
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-11-22
 
 ### Added — the implicit state machines are explicit (PR #43)
 

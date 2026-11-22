@@ -84,6 +84,30 @@ def _client(tmp_path: Path, **kwargs: Any) -> tuple[TestClient, _FakeQueue, Sett
     return TestClient(create_app("test", queue, settings)), queue, settings
 
 
+def test_the_app_reports_the_installed_package_version(tmp_path: Path) -> None:
+    from importlib.metadata import version
+
+    client, _, _ = _client(tmp_path)
+
+    assert client.get("/openapi.json").json()["info"]["version"] == version("omniocr")
+
+
+def test_the_app_still_starts_when_the_package_metadata_is_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from importlib.metadata import PackageNotFoundError
+
+    from editions.common import api
+
+    def _missing(name: str) -> str:
+        raise PackageNotFoundError(name)
+
+    monkeypatch.setattr(api, "version", _missing)
+    client, _, _ = _client(tmp_path)
+
+    assert client.get("/openapi.json").json()["info"]["version"] == "0+unknown"
+
+
 def _submit(
     client: TestClient, headers: dict[str, str], name: str = "page.png", data: bytes = PNG
 ) -> Any:
