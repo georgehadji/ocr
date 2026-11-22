@@ -31,6 +31,22 @@ def test_review_phase(loaded: bool, upload: bool, error: str | None, expected: R
     assert review_phase(document_loaded=loaded, upload_present=upload, ocr_error=error) is expected
 
 
+def test_an_ocr_error_belongs_to_the_upload_that_failed() -> None:
+    """Dropping a new file over a failed one replaces it with no empty rerun between."""
+
+    def phase(upload_id: str) -> ReviewPhase:
+        return review_phase(
+            document_loaded=False,
+            upload_present=True,
+            ocr_error="boom",
+            failed_upload="file-a",
+            upload_id=upload_id,
+        )
+
+    assert phase("file-a") is ReviewPhase.OCR_FAILED
+    assert phase("file-b") is ReviewPhase.OCR_RUNNING
+
+
 def test_a_failed_run_can_retry_or_be_abandoned() -> None:
     assert transition(
         "Review session", REVIEW_TRANSITIONS, ReviewPhase.OCR_FAILED, ReviewPhase.OCR_RUNNING

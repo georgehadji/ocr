@@ -66,7 +66,7 @@ class BeatsParentOnHeldOut:
                 )
             )
 
-        # Rule 4: minimum sample count
+        # Rule 2: minimum sample count
         if candidate_report.sample_count < self._min_sample_count:
             return Err(
                 PromotionRefused(
@@ -93,7 +93,7 @@ class BeatsParentOnHeldOut:
                     )
                 )
 
-        # Rule 2: refuse if improvement is below threshold
+        # Rule 4: a parent at 0 CER leaves no relative improvement to measure
         if parent_mean_cer == 0.0:
             return Err(
                 PromotionRefused(
@@ -102,6 +102,7 @@ class BeatsParentOnHeldOut:
                 )
             )
 
+        # Rule 5: refuse if improvement is below threshold
         improvement_pct = (parent_mean_cer - candidate_mean_cer) / parent_mean_cer * 100.0
         if improvement_pct < self._min_improvement_pct:
             return Err(

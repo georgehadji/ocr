@@ -18,6 +18,7 @@ import json
 import sys
 from enum import IntEnum
 from pathlib import Path
+from typing import NoReturn
 
 from omniocr.composition import create_training_pipeline
 from omniocr.domain.models import ModelRef, Script
@@ -27,10 +28,23 @@ from omniocr.infrastructure.model_manifest import resolve_kraken_model
 from omniocr.infrastructure.models import sha256_file
 
 
+class _Parser(argparse.ArgumentParser):
+    """A ``--json`` caller parses stdout, so a usage error is one JSON object too."""
+
+    json_mode = False
+
+    def error(self, message: str) -> NoReturn:
+        if self.json_mode:
+            code = int(TrainExit.USAGE)
+            print(json.dumps({"outcome": "error", "exit_code": code, "message": message}))
+            self.exit(code)
+        super().error(message)
+
+
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Fine-tune a Kraken model on human-verified corrections (v2)"
-    )
+    parser = _Parser(description="Fine-tune a Kraken model on human-verified corrections (v2)")
+    # Known before parsing, so that a parse error can already answer in JSON.
+    parser.json_mode = "--json" in sys.argv[1:]
     parser.add_argument(
         "--corrections-db",
         default="corrections.db",
@@ -194,7 +208,18 @@ def _describe(report: TrainingReport) -> tuple[str, dict[str, object]]:
 
 def main() -> int:
     args = _parse_args()
+    try:
+        return _run(args)
+    except Exception as exc:
+        # Under --json stdout must stay one object; without it, the traceback is
+        # what a person debugging the run needs, so it is left to propagate.
+        if not args.json:
+            raise
+        message = f"Training crashed: {type(exc).__name__}: {exc}"
+        return _emit(args, TrainExit.FAILURE, "error", message)
 
+
+def _run(args: argparse.Namespace) -> int:
     # Validate inputs
     if args.base_model is None:
         try:

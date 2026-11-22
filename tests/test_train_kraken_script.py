@@ -211,6 +211,73 @@ def test_json_is_one_object_a_caller_can_branch_on(monkeypatch, tmp_path, capsys
     assert record["reason"] == "below_threshold"
 
 
+def test_json_reports_a_usage_error_as_json(monkeypatch, capsys) -> None:
+    """A --json caller parses stdout; argparse's plain-text error would break it."""
+    import json
+
+    module = _load_script()
+    monkeypatch.setattr(sys, "argv", ["train_kraken.py", "--json", "--corpus", "c"])
+
+    with pytest.raises(SystemExit) as exited:
+        module.main()
+
+    record = json.loads(capsys.readouterr().out)
+    assert exited.value.code == 2
+    assert record["outcome"] == "error"
+    assert record["exit_code"] == 2
+    assert "--pages-dir" in record["message"]
+
+
+def test_without_json_a_usage_error_stays_argparse_text(monkeypatch, capsys) -> None:
+    module = _load_script()
+    monkeypatch.setattr(sys, "argv", ["train_kraken.py", "--corpus", "c"])
+
+    with pytest.raises(SystemExit) as exited:
+        module.main()
+
+    captured = capsys.readouterr()
+    assert exited.value.code == 2
+    assert captured.out == ""
+    assert "--pages-dir" in captured.err
+
+
+class _Crashes:
+    def run_training(self, **_: object) -> object:
+        raise RuntimeError("disk vanished")
+
+
+def _crash(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *extra: str) -> int:
+    base = tmp_path / "base.mlmodel"
+    base.write_bytes(b"weights")
+    pages = tmp_path / "pages"
+    pages.mkdir()
+    (pages / "1.png").write_bytes(b"page")
+    module = _load_script()
+    monkeypatch.setattr(module, "create_training_pipeline", lambda **_: _Crashes())
+    argv = ["train_kraken.py", "--corpus", str(tmp_path), "--pages-dir", str(pages)]
+    monkeypatch.setattr(sys, "argv", [*argv, "--base-model", str(base), *extra])
+    return int(module.main())
+
+
+def test_json_reports_a_crash_as_json(monkeypatch, tmp_path, capsys) -> None:
+    import json
+
+    code = _crash(monkeypatch, tmp_path, "--json")
+
+    record = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert record == {
+        "outcome": "error",
+        "exit_code": 1,
+        "message": "Training crashed: RuntimeError: disk vanished",
+    }
+
+
+def test_without_json_a_crash_keeps_its_traceback(monkeypatch, tmp_path) -> None:
+    with pytest.raises(RuntimeError, match="disk vanished"):
+        _crash(monkeypatch, tmp_path)
+
+
 def test_json_of_a_promotion_carries_the_model(monkeypatch, tmp_path, capsys) -> None:
     import json
 

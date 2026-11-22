@@ -17,7 +17,7 @@ import html
 import io
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import streamlit as st
 from PIL import Image
@@ -220,6 +220,7 @@ _DEFAULTS: list[tuple[str, Any]] = [
     ("dirty", False),  # reviewed lines changed since the last save
     ("committed_lines", {}),  # line_id → text already appended to the corrections store
     ("ocr_error", None),  # why recognition failed, until the reviewer retries
+    ("ocr_failed_upload", None),  # file_id of the upload that raised `ocr_error`
     ("confirm_new", False),  # "New session" is waiting for the reviewer to confirm
     ("decoded_images", {}),  # page_number → PIL.Image cache for fast navigation
     ("undo_log", UndoLog()),
@@ -381,6 +382,10 @@ if st.sidebar.button("🔄 New session", help="Clear all state and start fresh")
     else:
         _reset_session()
 
+if st.session_state.confirm_new and not st.session_state.dirty:
+    # Saved since the prompt was raised: there is nothing left for it to warn about.
+    st.session_state.confirm_new = False
+
 if st.session_state.confirm_new:
     st.sidebar.warning("Unsaved changes will be lost.")
     discard_col, keep_col = st.sidebar.columns(2)
@@ -401,20 +406,34 @@ uploaded_file = st.sidebar.file_uploader(
 
 # ---------- Pipeline execution ----------
 
+upload_id = uploaded_file.file_id if uploaded_file is not None else None
+
+
+def _fail_ocr(reason: str) -> NoReturn:
+    """Record why recognition failed, for the upload that failed, and show it."""
+    st.session_state.ocr_error = reason
+    st.session_state.ocr_failed_upload = upload_id
+    st.rerun()
+
+
 phase = review_phase(
     document_loaded=st.session_state.review_document is not None,
     upload_present=uploaded_file is not None,
     ocr_error=st.session_state.ocr_error,
+    failed_upload=st.session_state.ocr_failed_upload,
+    upload_id=upload_id,
 )
 
-if phase is ReviewPhase.EMPTY and st.session_state.ocr_error is not None:
-    # The upload was removed: its failure no longer applies to whatever comes next.
+if phase is not ReviewPhase.OCR_FAILED and st.session_state.ocr_error is not None:
+    # The upload was removed or replaced: its failure no longer applies.
     st.session_state.ocr_error = None
+    st.session_state.ocr_failed_upload = None
 
 if phase is ReviewPhase.OCR_FAILED:
     st.error(f"OCR failed: {st.session_state.ocr_error}")
     if st.button("🔁 Retry OCR"):
         st.session_state.ocr_error = None
+        st.session_state.ocr_failed_upload = None
         st.rerun()
 
 if uploaded_file is not None and phase is ReviewPhase.OCR_RUNNING:
@@ -454,10 +473,9 @@ if uploaded_file is not None and phase is ReviewPhase.OCR_RUNNING:
                     unlimited_ocr_url=cfg.unlimited_ocr_url if cfg.enable_vlm else None,
                 )
             except ImportError as exc:
-                st.session_state.ocr_error = (
+                _fail_ocr(
                     f"Missing dependency: {exc}. Install: pip install -e '.[pdf,kraken,opencv]'"
                 )
-                st.rerun()
 
             if cfg.enable_vlm and cfg.vlm_api_key:
                 st.sidebar.info(f"VLM enabled: {cfg.vlm_api_key[:12]}…")
@@ -490,8 +508,7 @@ if uploaded_file is not None and phase is ReviewPhase.OCR_RUNNING:
             progress.empty()
             st.rerun()
     except Exception as exc:
-        st.session_state.ocr_error = f"{type(exc).__name__}: {exc}"
-        st.rerun()
+        _fail_ocr(f"{type(exc).__name__}: {exc}")
 
 # ---------- Review UI ----------
 
@@ -602,6 +619,7 @@ if st.session_state.review_document is not None:
     if st.sidebar.button("💾 Save session", use_container_width=True):
         _save_session(file_name, file_bytes)
         st.session_state.dirty = False
+        st.session_state.confirm_new = False
         st.sidebar.success("Session saved")
 
     # Session state and the JSON session file are UI scratch space; the
@@ -630,8 +648,14 @@ if st.session_state.review_document is not None:
                 st.sidebar.error(f"Could not commit corrections: {outcome.error}")
             else:
                 st.session_state.committed_lines.update(fresh)
-                st.session_state.dirty = True
-                st.sidebar.success(f"Committed {outcome.value} corrections for training")
+                # Saved at once: `committed_lines` survives a reload only in the
+                # session file, and a reload that forgot it would commit the same
+                # rows again. This also saves the edits, which were just committed.
+                _save_session(file_name, file_bytes)
+                st.session_state.dirty = False
+                st.sidebar.success(
+                    f"Committed {outcome.value} corrections for training; session saved"
+                )
     if st.sidebar.button("↩ Undo last action", disabled=not len(st.session_state.undo_log)):
         undone = st.session_state.undo_log.undo(_stores())
         if undone is not None:

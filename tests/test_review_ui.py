@@ -202,6 +202,41 @@ def test_saving_clears_the_unsaved_marker(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert app.session_state["dirty"] is False
 
 
+def test_saving_withdraws_a_pending_new_session_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Once the work is saved, there is nothing for the prompt to warn about."""
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app = _app(edit_mode=False)
+    app.text_area(key=f"ta_{_LINE_ID}").set_value("typed").run()
+
+    app = _click(_click(app, "🔄 New session"), "💾 Save session").run()
+
+    assert app.session_state["confirm_new"] is False
+    assert "Discard" not in _labels(app)
+    assert app.session_state["review_document"] is not None
+
+
+def test_committing_saves_the_session_so_a_reload_cannot_commit_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``committed_lines`` lives in the session file; left unsaved, a reload forgets it."""
+    import json
+
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".omniocr").mkdir()
+    app = _app(edit_mode=False)
+    app.text_area(key=f"ta_{_LINE_ID}").set_value("typed").run()
+
+    app = _click(app, "📚 Commit corrections for training")
+
+    (saved,) = (tmp_path / ".omniocr" / "sessions").glob("*.json")
+    assert json.loads(saved.read_text(encoding="utf-8"))["committed_lines"] == {_LINE_ID: "typed"}
+    assert app.session_state["dirty"] is False
+
+
 def test_committing_twice_appends_the_line_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

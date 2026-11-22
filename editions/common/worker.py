@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from pathlib import Path
 from time import perf_counter
@@ -13,6 +14,8 @@ from omniocr.domain.result import Err
 from omniocr.infrastructure.config import Settings
 from omniocr.infrastructure.prometheus_metrics import WorkerMetrics
 from omniocr.ports.interfaces import JobState
+
+_LOG = logging.getLogger("omniocr.worker")
 
 # A reason longer than this is cut: it goes back to an API client.
 _REASON_MAX = 200
@@ -30,13 +33,19 @@ class JobFailed(RuntimeError):
 def failure_reason(exc_text: str | None) -> str:
     """The client-safe reason for a failed job, from its recorded exception text.
 
-    RQ records a traceback whose last line names the exception class; Celery
-    records the message. Only a ``JobFailed`` is quoted, first line only.
+    RQ records a traceback; Celery records the message. Only a ``JobFailed``
+    that is the final exception is quoted, first line only. The final exception
+    starts on the first unindented line after the last indented frame line, so a
+    multi-line message is found by its head, and a ``JobFailed`` that a later
+    error replaced (``During handling ...``) is not quoted.
     """
     lines = [line for line in (exc_text or "").strip().splitlines() if line.strip()]
+    frames = [i for i, line in enumerate(lines) if line[:1].isspace()]
+    start = frames[-1] + 1 if frames else 0
+    head = lines[start] if start < len(lines) else ""
     marker = f"{JobFailed.__module__}.{JobFailed.__qualname__}:"
-    if lines and lines[-1].startswith(marker):
-        return lines[-1][len(marker) :].strip()[:_REASON_MAX]
+    if head.startswith(marker):
+        return head[len(marker) :].strip()[:_REASON_MAX]
     return "job failed"
 
 
@@ -91,9 +100,13 @@ def run_job(
     started = perf_counter()
     outcome = JobState.FAILED.value
     try:
+        # A ``JobFailed`` message goes back to the API client, so it is built
+        # from names only (an error class, a failure kind, a stage). The raw
+        # text, which may carry a server path or URL, stays in the worker log.
         result = pipeline.run(upload.read_bytes(), context)
         if isinstance(result, Err):
-            raise JobFailed(str(result.error))
+            _LOG.warning("job failed reading %s: %s", upload.name, result.error)
+            raise JobFailed(f"the document could not be read ({type(result.error).__name__})")
         # A page that fails is kept in the document with its failure, so a run
         # where every page failed still "succeeds" with nothing in it. Serving
         # that as done would hand the client an empty result.
@@ -101,12 +114,14 @@ def run_job(
         if metrics is not None:
             metrics.record_failures(pages)
         if pages and all(page.failures for page in pages):
-            raise JobFailed(
-                f"every page failed ({len(pages)}); first: {pages[0].failures[0].message}"
-            )
+            first = pages[0].failures[0]
+            _LOG.warning("every page failed in %s; first: %s", upload.name, first.message)
+            where = f" during {first.stage}" if first.stage else ""
+            raise JobFailed(f"every page failed ({len(pages)}); first: {first.error_type}{where}")
         exported = pipeline.export(result.value, context)
         if isinstance(exported, Err):
-            raise JobFailed(str(exported.error))
+            _LOG.warning("job failed exporting %s: %s", upload.name, exported.error)
+            raise JobFailed(f"export failed ({type(exported.error).__name__})")
         out.parent.mkdir(parents=True, exist_ok=True)
         partial.write_bytes(exported.value)
         os.replace(partial, out)

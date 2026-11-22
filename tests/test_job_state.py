@@ -268,6 +268,26 @@ def test_failure_reason_quotes_only_the_first_line_and_cuts_it() -> None:
     assert failure_reason("") == "job failed"
 
 
+def test_failure_reason_quotes_the_first_line_of_a_multi_line_message() -> None:
+    """RQ's traceback ends with the message's last line, not the marker line."""
+    trace = f"Traceback (most recent call last):\n  File x\n{_JOB_FAILED}: cannot write\nline 2\n"
+
+    assert failure_reason(trace) == "cannot write"
+
+
+def test_failure_reason_ignores_a_job_failed_that_was_not_the_final_error() -> None:
+    """A later exception raised while handling a ``JobFailed`` is not client-safe."""
+    trace = (
+        "Traceback (most recent call last):\n  File x\n"
+        f"{_JOB_FAILED}: safe text\n\n"
+        "During handling of the above exception, another exception occurred:\n\n"
+        "Traceback (most recent call last):\n  File y\n"
+        "OSError: [Errno 28] No space left on device: '/srv/results/x.md'\n"
+    )
+
+    assert failure_reason(trace) == "job failed"
+
+
 def test_pages_summary_accepts_only_two_integers() -> None:
     assert pages_summary({"pages_total": 2, "pages_failed": 1}) == (2, 1)
     assert pages_summary({"pages_total": 2}) == (None, None)

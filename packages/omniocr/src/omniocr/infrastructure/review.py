@@ -344,14 +344,25 @@ REVIEW_TRANSITIONS: Final[Mapping[ReviewPhase, frozenset[ReviewPhase]]] = Mappin
 
 
 def review_phase(
-    *, document_loaded: bool, upload_present: bool, ocr_error: str | None
+    *,
+    document_loaded: bool,
+    upload_present: bool,
+    ocr_error: str | None,
+    failed_upload: str | None = None,
+    upload_id: str | None = None,
 ) -> ReviewPhase:
-    """The phase a session is in. A stale error with no upload is no failure."""
+    """The phase a session is in. A stale error is no failure.
+
+    An error is stale when the upload is gone, or when ``failed_upload`` (the
+    upload that raised it) is not the current ``upload_id``: a file dropped
+    over a failed one replaces it with no empty rerun in between.
+    """
     if document_loaded:
         return ReviewPhase.REVIEWING
     if not upload_present:
         return ReviewPhase.EMPTY
-    return ReviewPhase.OCR_FAILED if ocr_error else ReviewPhase.OCR_RUNNING
+    stale = failed_upload is not None and failed_upload != upload_id
+    return ReviewPhase.OCR_FAILED if ocr_error and not stale else ReviewPhase.OCR_RUNNING
 
 
 @dataclass(frozen=True, slots=True)

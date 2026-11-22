@@ -619,11 +619,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # run_iteratively streams pages so progress is visible and --max-pages can
     # stop early; a per-page failure is captured on the page, not raised.
     pages: list[DocumentPage] = []
-    failures: list[dict[str, Any]] = []
+    failures: list[dict[str, str | int]] = []
     for number, page in orchestrator.run_iteratively(payload, context):
         pages.append(page)
         for failure in page.failures:
-            entry: dict[str, Any] = {
+            entry: dict[str, str | int] = {
                 "page": number,
                 "type": failure.error_type,
                 "message": failure.message,
