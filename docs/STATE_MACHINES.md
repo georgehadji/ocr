@@ -25,3 +25,25 @@ stateDiagram-v2
 | `done` | (terminal) |
 | `failed` | (terminal) |
 | `not_found` | (terminal) |
+
+## Review session
+
+Owner: `omniocr.infrastructure.review`. Initial: `empty`. Terminal: none.
+
+```mermaid
+stateDiagram-v2
+    [*] --> empty
+    empty --> ocr_running
+    ocr_running --> ocr_failed
+    ocr_running --> reviewing
+    ocr_failed --> empty
+    ocr_failed --> ocr_running
+    reviewing --> empty
+```
+
+| State | May move to |
+|---|---|
+| `empty` | `ocr_running` |
+| `ocr_running` | `ocr_failed`, `reviewing` |
+| `ocr_failed` | `empty`, `ocr_running` |
+| `reviewing` | `empty` |

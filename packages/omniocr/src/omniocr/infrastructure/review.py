@@ -16,7 +16,9 @@ import html
 from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Tuple
+from enum import StrEnum
+from types import MappingProxyType
+from typing import Final, Tuple
 
 from omniocr.domain.corrections import Correction
 from omniocr.domain.errors import IngestError, TrainingError
@@ -322,6 +324,78 @@ class UndoLog:
         self._entries.clear()
 
 
+class ReviewPhase(StrEnum):
+    """Where a review session is, derived from what the session holds."""
+
+    EMPTY = "empty"  # nothing uploaded
+    OCR_RUNNING = "ocr_running"  # an upload with no document and no error yet
+    OCR_FAILED = "ocr_failed"  # recognition raised; the reviewer can retry
+    REVIEWING = "reviewing"  # a document is loaded
+
+
+REVIEW_TRANSITIONS: Final[Mapping[ReviewPhase, frozenset[ReviewPhase]]] = MappingProxyType(
+    {
+        ReviewPhase.EMPTY: frozenset({ReviewPhase.OCR_RUNNING}),
+        ReviewPhase.OCR_RUNNING: frozenset({ReviewPhase.REVIEWING, ReviewPhase.OCR_FAILED}),
+        ReviewPhase.OCR_FAILED: frozenset({ReviewPhase.OCR_RUNNING, ReviewPhase.EMPTY}),
+        ReviewPhase.REVIEWING: frozenset({ReviewPhase.EMPTY}),
+    }
+)
+
+
+def review_phase(
+    *, document_loaded: bool, upload_present: bool, ocr_error: str | None
+) -> ReviewPhase:
+    """The phase a session is in. A stale error with no upload is no failure."""
+    if document_loaded:
+        return ReviewPhase.REVIEWING
+    if not upload_present:
+        return ReviewPhase.EMPTY
+    return ReviewPhase.OCR_FAILED if ocr_error else ReviewPhase.OCR_RUNNING
+
+
+@dataclass(frozen=True, slots=True)
+class SessionData:
+    """What a saved session file restores. Every field has a safe default."""
+
+    ground_truth_lines: dict[str, str]
+    edited_lines: dict[str, str]
+    committed_lines: dict[str, str]
+    current_page: int
+
+
+def _text_map(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {k: v for k, v in value.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def read_session(session: Mapping[str, object]) -> SessionData:
+    """Read a session file's contents, tolerating a missing or malformed key.
+
+    Older files lack ``committed_lines``; a hand-edited one may lack any key.
+    """
+    page = session.get("current_page")
+    return SessionData(
+        ground_truth_lines=_text_map(session.get("ground_truth_lines")),
+        edited_lines=_text_map(session.get("edited_lines")),
+        committed_lines=_text_map(session.get("committed_lines")),
+        current_page=page
+        if isinstance(page, int) and not isinstance(page, bool) and page >= 0
+        else 0,
+    )
+
+
+def pending_commit(reviewed: Mapping[str, str], committed: Mapping[str, str]) -> dict[str, str]:
+    """The reviewed lines not yet committed with this exact text.
+
+    The store is append-only, so committing a line again would add a duplicate
+    training row. A line whose text changed since it was committed is pending:
+    that is a revision and belongs in the audit trail.
+    """
+    return {line_id: text for line_id, text in reviewed.items() if committed.get(line_id) != text}
+
+
 def page_images(document: bytes, dpi: int = 150) -> list[bytes]:
     """One image per page for the review pane; ``b""`` where a page won't render.
 
@@ -358,9 +432,12 @@ def page_images(document: bytes, dpi: int = 150) -> list[bytes]:
 
 
 __all__ = [
+    "REVIEW_TRANSITIONS",
     "ReviewDocument",
     "ReviewLine",
     "ReviewPage",
+    "ReviewPhase",
+    "SessionData",
     "UndoEntry",
     "UndoLog",
     "build_review_document",
@@ -369,6 +446,9 @@ __all__ = [
     "group_suggestions_by_reason",
     "line_view_html",
     "page_images",
+    "pending_commit",
     "persist_reviewed_lines",
+    "read_session",
     "review_line_to_correction",
+    "review_phase",
 ]

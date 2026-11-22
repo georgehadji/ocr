@@ -294,6 +294,23 @@ Each block: **target model → fix → UX / DX / AX gain → tests → files**.
   retracts, duplicate commit yields one sample; `tests/test_corrections.py` for the helper.
 - **Files:** `domain/corrections.py`, `infrastructure/corrections_store.py`.
 
+> **Phase 2 outcome — this section is NOT implemented as written.** "Latest row per
+> `line_id`" is unsafe: the store has no document column and line ids are `p{n}-{local}`,
+> so page 1 line 1 of *every* book shares one id. Collapsing by `line_id` would silently
+> drop other documents' training rows. A correct fix needs a document id in the store
+> (a schema change on a frozen contract) — **the user's decision, deferred.** Phase 2
+> instead stops duplicate rows at the source: the review UI commits only lines whose
+> text differs from what it already committed (`pending_commit`). Rows already in an
+> existing store, and revisions across sessions, are unchanged.
+>
+> **Non-defects found in Phase 2:** M16 (`UndoLog` `previous is None`) is unambiguous
+> because stored values are always `str`. "A line in both stores" is already resolved:
+> `_commit_edit` routes a new edit to the accepted store when the line is accepted, and
+> `_final_text` / the commit merge give accepted text precedence, so the latest write
+> always wins. Neither needed a code change. `SaveState` / `LineStatus` enums were
+> dropped as over-engineering: one `dirty` flag and the existing two dicts carry the
+> same information.
+
 ### 4.4 M6 + M7 + M14 — Page outcome and events (🟠, Phase 3)
 
 - **Model:** `PipelineStage(StrEnum)`: `ingest, preprocess, segment, route,
