@@ -294,6 +294,23 @@ Each block: **target model → fix → UX / DX / AX gain → tests → files**.
   retracts, duplicate commit yields one sample; `tests/test_corrections.py` for the helper.
 - **Files:** `domain/corrections.py`, `infrastructure/corrections_store.py`.
 
+> **Phase 2 outcome — this section is NOT implemented as written.** "Latest row per
+> `line_id`" is unsafe: the store has no document column and line ids are `p{n}-{local}`,
+> so page 1 line 1 of *every* book shares one id. Collapsing by `line_id` would silently
+> drop other documents' training rows. A correct fix needs a document id in the store
+> (a schema change on a frozen contract) — **the user's decision, deferred.** Phase 2
+> instead stops duplicate rows at the source: the review UI commits only lines whose
+> text differs from what it already committed (`pending_commit`). Rows already in an
+> existing store, and revisions across sessions, are unchanged.
+>
+> **Non-defects found in Phase 2:** M16 (`UndoLog` `previous is None`) is unambiguous
+> because stored values are always `str`. "A line in both stores" is already resolved:
+> `_commit_edit` routes a new edit to the accepted store when the line is accepted, and
+> `_final_text` / the commit merge give accepted text precedence, so the latest write
+> always wins. Neither needed a code change. `SaveState` / `LineStatus` enums were
+> dropped as over-engineering: one `dirty` flag and the existing two dicts carry the
+> same information.
+
 ### 4.4 M6 + M7 + M14 — Page outcome and events (🟠, Phase 3)
 
 - **Model:** `PipelineStage(StrEnum)`: `ingest, preprocess, segment, route,
@@ -315,6 +332,19 @@ Each block: **target model → fix → UX / DX / AX gain → tests → files**.
   `test_cli.py` (`stage` present in `--json`, `EmptyPage` still detected).
 - **Files:** `domain/models.py`, `application/pipeline.py`,
   `infrastructure/prometheus_metrics.py`, `interfaces/cli.py`.
+
+> **Phase 3 outcome — differences from the plan above.** `PipelineStage` lists only the
+> six stages the pipeline can actually stop in (`ingest, preprocess, segment, recognise,
+> reconcile, post_correct`); `compose`, `route` and `export` have no failure site, so
+> they were left out rather than declared and never emitted. `EventType` carries only
+> the three types that exist today; Phase 4 adds the training outcomes. The `stage` key
+> in `run --json` failures is present only when the stage is known, so an existing exact
+> match on the three original keys still holds. `ExitCode(IntEnum)` was added and the
+> `EXIT_*` names remain as aliases of its members. No machine was added to the catalog:
+> the stage order is the enum order and nothing validates transitions between stages, so
+> a transition table would document something the code does not enforce. The stage also
+> appears in the review UI ("Failed during segment: …"); the worker's job-failure reason
+> text was not changed.
 
 ### 4.5 M4 + M5 + M10 + M13 — Training & promotion (🟠, Phase 4)
 
@@ -341,6 +371,20 @@ Each block: **target model → fix → UX / DX / AX gain → tests → files**.
 - **Files:** `domain/training.py`, `application/{training_orchestrator,promotion}.py`,
   `infrastructure/{model_registry,ketos_trainer}.py`, `scripts/train_kraken.py`.
 
+> **Phase 4 outcome — differences from the plan above.** `RefusalReason` lives in
+> `domain/errors.py` beside `PromotionRefused` (which gains an optional `reason`), so
+> `domain/training.py` can import both without a cycle. `SplitName` stays `(str, Enum)`;
+> the policy now compares `evaluated_on` to `SplitName.TEST` instead of the literal
+> `"test"`. Events are one `TrainingEvent` dataclass (formerly a class defined inside the
+> method) with three new `EventType`s: `training_refused`, `training_no_corrections`,
+> `training_no_samples`. **Behaviour changes to know about:** `train_kraken.py` exits
+> 4 when a candidate is refused and 5 when there was nothing to train on only with the new
+> `--strict-exit` flag (both exit 0 without it, as before: a code review found that a
+> scheduled retrain would otherwise start failing); a missing base model or pages
+> directory exits 3 (was 1); `--json` is new. A damaged `promoted.json` now makes `register` return an error and leave the file
+> untouched; reads still treat it as "no promoted model". `KetosTrainer` clears
+> `ketos_out/` before each run.
+
 ### 4.6 M11 + M12 — Text-structure decisions (🟠/🟡, Phase 5)
 
 - `JoinVerdict(StrEnum)` and `JoinSeparator(StrEnum)` (`""`, `"-"`, `" "`);
@@ -352,6 +396,27 @@ Each block: **target model → fix → UX / DX / AX gain → tests → files**.
 - **Faithfulness:** pure typing; no suggestion is applied differently. The existing
   `tests/test_faithfulness*.py` must pass unchanged — that is the regression gate.
 - **Tests:** `test_hyphenation.py`, `test_suggestions.py`.
+
+> **Phase 5 outcome — differences from the plan above.** All three enums live in
+> `domain/models.py`. `LineJoin.__post_init__` accepts exactly three combinations:
+> `joined_in_lexicon` and `unverified` with separator `""` and a non-empty `removed`,
+> and `hyphen_in_lexicon` with separator `"-"` and `removed == ""`. The check also
+> covers `removed`, which the plan did not mention, because `unjoin` rebuilds the
+> original line from it. The `" "` separator has no member: a plain wrap produces no
+> `LineJoin` at all. `LineJoin` coerces a plain string equal to a member to the member
+> and raises `ValueError` for any other string. The assembler compares by member
+> (`is JoinSeparator.DROPPED`, `is JoinVerdict.UNVERIFIED`).
+> `Suggestion.kind` is a derived property (flag if not reversible, else whole-line if it
+> has no span, else replace). It mirrors `apply_suggestion`, which was not touched, so no
+> suggestion is applied differently. The `reason` strings stay open. New tests:
+> `tests/test_text_structure_types.py`; the existing hyphenation, suggestion and
+> faithfulness tests pass unchanged.
+>
+> **Review fixes after Phase 5.** `unjoin` now takes line one whole for a kept hyphen
+> (it used to drop the hyphen from line one and leave it on line two).
+> `apply_suggestions` treats a suggestion with only one of `start`/`end` as whole-line,
+> matching `Suggestion.kind` and `apply_suggestion`. `ParagraphRole` is a `StrEnum`
+> like the other enums; nothing formats it, so no output changes.
 
 ### 4.7 M8 + M9 + M15 + M17 + M18 — Visibility of infra state (🟡, Phase 6)
 
@@ -366,6 +431,20 @@ Each block: **target model → fix → UX / DX / AX gain → tests → files**.
   lists them as problems.
 - Layout fallback and ingest: document only (catalog entry); no code change unless
   Phase 3 stage tracking already covers them.
+
+> **Phase 6 status.** Done: breaker `_move()` with a `state_transition` log
+> (`engine`, `from_state`, `to_state`) and a read-only `state`; `KrakenEngine.device_fallback`;
+> `_model_hash` is `None` in memory while provenance still writes `"unavailable"`;
+> `Settings.problems()` (logged as warnings at construction, never raised) listed by
+> `doctor` as problems, and an unreadable `OMNIOCR_*` value is reported there instead
+> of crashing; the dead `_CALAMARI_AVAILABLE` / `_VLM_AVAILABLE` guards are gone.
+> `run --json` gains `engines: [{name, device, breaker}]` (plus `device_fallback: true`
+> only when it happened), built by `infrastructure/engine_report.describe_engines`,
+> which looks through retry / grounding / breaker wrappers. The engines come from new
+> `ScriptRouter.engines()` and `PipelineOrchestrator.engines()` (empty when the router
+> cannot say). `doctor --json` was not given an engines block: it builds no pipeline, so
+> there is no breaker state or fallback to report; it already shows the device.
+> M17 and M18 stay documented only.
 
 ---
 

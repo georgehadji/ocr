@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from omniocr.domain.errors import PromotionRefused
+from omniocr.domain.corpus import SplitName
+from omniocr.domain.errors import PromotionRefused, RefusalReason
 from omniocr.domain.models import ModelRef
 from omniocr.domain.result import Err, Ok, Result
 from omniocr.domain.training import EvaluationReport, ModelCandidate, PromotedModel
@@ -29,12 +30,13 @@ class PromotionPolicy(Protocol):
 class BeatsParentOnHeldOut:
     """Promote only on measured improvement over the parent on the test split.
 
-    Rules:
+    Rules, in the order they are checked:
     1. Refuse unless ``evaluated_on == SplitName.TEST``.
-    2. Refuse if mean CER did not improve by at least ``min_improvement_pct``.
+    2. Refuse if ``sample_count`` is below the minimum floor.
     3. Refuse if **any** script's CER regressed.
-    4. Refuse if ``sample_count`` is below the minimum floor.
-    5. Every refusal returns a reason and is logged.
+    4. Refuse if the parent's mean CER is 0 (no relative improvement exists).
+    5. Refuse if mean CER did not improve by at least ``min_improvement_pct``.
+    Every refusal carries a ``RefusalReason`` and a message.
     """
 
     def __init__(
@@ -56,17 +58,21 @@ class BeatsParentOnHeldOut:
         parent_report: EvaluationReport,
     ) -> Result[PromotedModel, PromotionRefused]:
         # Rule 1: must be evaluated on TEST split
-        if candidate_report.evaluated_on != "test":
+        if candidate_report.evaluated_on != SplitName.TEST:
             return Err(
-                PromotionRefused(f"evaluated on '{candidate_report.evaluated_on}', expected 'test'")
+                PromotionRefused(
+                    f"evaluated on '{candidate_report.evaluated_on}', expected 'test'",
+                    RefusalReason.WRONG_SPLIT,
+                )
             )
 
-        # Rule 4: minimum sample count
+        # Rule 2: minimum sample count
         if candidate_report.sample_count < self._min_sample_count:
             return Err(
                 PromotionRefused(
                     f"sample count {candidate_report.sample_count} is below "
-                    f"minimum {self._min_sample_count}"
+                    f"minimum {self._min_sample_count}",
+                    RefusalReason.TOO_FEW_SAMPLES,
                 )
             )
 
@@ -82,16 +88,21 @@ class BeatsParentOnHeldOut:
                 return Err(
                     PromotionRefused(
                         f"script {script.value} CER regressed: "
-                        f"{parent_cer:.4f} → {candidate_cer:.4f}"
+                        f"{parent_cer:.4f} → {candidate_cer:.4f}",
+                        RefusalReason.SCRIPT_REGRESSED,
                     )
                 )
 
-        # Rule 2: refuse if improvement is below threshold
+        # Rule 4: a parent at 0 CER leaves no relative improvement to measure
         if parent_mean_cer == 0.0:
             return Err(
-                PromotionRefused("parent mean CER is 0 — cannot compute relative improvement")
+                PromotionRefused(
+                    "parent mean CER is 0 — cannot compute relative improvement",
+                    RefusalReason.PARENT_CER_ZERO,
+                )
             )
 
+        # Rule 5: refuse if improvement is below threshold
         improvement_pct = (parent_mean_cer - candidate_mean_cer) / parent_mean_cer * 100.0
         if improvement_pct < self._min_improvement_pct:
             return Err(
@@ -99,7 +110,8 @@ class BeatsParentOnHeldOut:
                     f"improvement {improvement_pct:.2f}% is below "
                     f"minimum {self._min_improvement_pct}% "
                     f"(parent CER: {parent_mean_cer:.4f}, "
-                    f"candidate CER: {candidate_mean_cer:.4f})"
+                    f"candidate CER: {candidate_mean_cer:.4f})",
+                    RefusalReason.BELOW_THRESHOLD,
                 )
             )
 

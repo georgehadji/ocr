@@ -17,3 +17,21 @@ def test_script_router_uses_script_rule_and_default() -> None:
 
     assert router.route(ancient_line, context) == (ancient,)
     assert router.route(unknown_line, context) == (fallback,)
+
+
+def test_engines_lists_each_engine_once_in_routing_order() -> None:
+    kraken = NamedEngine("kraken")
+    tesseract = NamedEngine("tesseract")
+    vlm = NamedEngine("vlm")
+    router = ScriptRouter(
+        {Script.ANCIENT: (kraken, tesseract), Script.POLYTONIC: (kraken, tesseract, vlm)},
+        default=(tesseract,),
+    )
+
+    assert router.engines() == (kraken, tesseract, vlm)
+
+
+def test_engines_includes_a_default_no_script_routes_to() -> None:
+    only_default = NamedEngine("tesseract")
+
+    assert ScriptRouter({}, default=(only_default,)).engines() == (only_default,)

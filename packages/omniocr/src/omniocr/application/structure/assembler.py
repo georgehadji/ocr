@@ -18,6 +18,8 @@ from omniocr.application.structure.running_heads import detect as detect_running
 from omniocr.domain.errors import LayoutError
 from omniocr.domain.models import (
     DocumentStructure,
+    JoinSeparator,
+    JoinVerdict,
     LineJoin,
     OCRLine,
     OCRParagraph,
@@ -152,13 +154,13 @@ class DocumentAssembler:
                     join_decision = self.dehyphenator.join(first, second)
                     if join_decision is not None:
                         joins.append(join_decision)
-                        if join_decision.separator == "":
+                        if join_decision.separator is JoinSeparator.DROPPED:
                             # dropped hyphen
                             first_stripped = text.rstrip()
                             text = first_stripped[:-1] + second.text.lstrip()
 
                             # If it was unverified, also emit a Suggestion
-                            if join_decision.verdict == "unverified":
+                            if join_decision.verdict is JoinVerdict.UNVERIFIED:
                                 extracted = extract_join_candidates(first.text, second.text)
                                 A, B, hyphen_char = (
                                     extracted if extracted is not None else ("", "", "")
@@ -207,49 +209,40 @@ class DocumentAssembler:
 
 
 def unjoin(paragraph: OCRParagraph) -> tuple[str, ...]:
-    """Reconstruct the original line texts from paragraph.text and paragraph.joins."""
-    if not paragraph.lines:
-        return ()
-    # If we have the original lines, we can exactly reconstruct the text of each line
-    # by reversing the joins.
-    # Let's map each join by first_line_id
+    """Reconstruct the original line texts from paragraph.text and paragraph.joins.
+
+    ``assemble`` strips the whitespace at every boundary and drops a hyphen only
+    for ``JoinSeparator.DROPPED``. Each line's contribution to ``paragraph.text``
+    is therefore its text without the leading whitespace (unless it is the first
+    line), without the trailing whitespace (unless it is the last) and without a
+    dropped hyphen; a plain wrap also adds one joining space. The stripped
+    whitespace and the dropped hyphen are put back from the line and its join.
+    """
+    lines = paragraph.lines
     joins = {j.first_line_id: j for j in paragraph.joins}
+    para_text = paragraph.text
+    last = len(lines) - 1
 
     reconstructed: list[str] = []
     text_ptr = 0
-    para_text = paragraph.text
-
-    for idx, line in enumerate(paragraph.lines):
-        if idx == len(paragraph.lines) - 1:
-            # Last line gets the rest of paragraph.text
-            reconstructed.append(para_text[text_ptr:])
-            break
-
-        # Check if there is a join at this boundary
-        j = joins.get(line.id)
-        if j is not None:
-            # We need to find where the next line starts in para_text.
-            # Next line's text starts after first line's text.
-            # If j.separator == "" (hyphen dropped):
-            # first ends with j.removed, and next starts with the next line's
-            # text, left-stripped.
-            #
-            # The joined text is therefore: A + that stripped next-line text,
-            # where line.text originally was: A + j.removed.
-            # So the length of A is: len(line.text) - 1.
-            # Only that length is needed here, so the next line itself is not
-            # read — it is recovered on the following iteration.
-            A_len = len(line.text) - 1
-            line_reconstructed = para_text[text_ptr : text_ptr + A_len] + j.removed
-            reconstructed.append(line_reconstructed)
-            text_ptr += A_len
+    for idx, line in enumerate(lines):
+        if idx == last:
+            # The last line gets the rest of paragraph.text.
+            chunk = para_text[text_ptr:]
         else:
-            # Plain wrap (joined by space)
-            # Find the space that separates line.text and next line
-            # It should be exactly at len(line.text) if we lstrip/rstrip carefully,
-            # but let's just take len(line.text)
-            line_reconstructed = para_text[text_ptr : text_ptr + len(line.text)]
-            reconstructed.append(line_reconstructed)
-            text_ptr += len(line.text) + 1  # skip the joining space
+            join = joins.get(line.id)
+            dropped = join is not None and join.separator is JoinSeparator.DROPPED
+            kept = line.text if idx == 0 else line.text.lstrip()
+            kept = kept.rstrip()
+            kept = kept[:-1] if dropped else kept
+            chunk = para_text[text_ptr : text_ptr + len(kept)]
+            # A kept hyphen stays in the text and a dropped one is restored below;
+            # only a plain wrap skips the space that joined the two lines.
+            text_ptr += len(kept) + (0 if join is not None else 1)
+            if join is not None and dropped:
+                chunk += join.removed
+        lead = line.text[: len(line.text) - len(line.text.lstrip())] if idx else ""
+        trail = line.text[len(line.text.rstrip()) :] if idx != last else ""
+        reconstructed.append(lead + chunk + trail)
 
     return tuple(reconstructed)

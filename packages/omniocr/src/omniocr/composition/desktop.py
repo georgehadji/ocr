@@ -45,25 +45,15 @@ from omniocr.infrastructure.vlm import DEFAULT_MAX_EDGE_PX as DEFAULT_VLM_MAX_ED
 from omniocr.infrastructure.vlm import DEFAULT_MODEL as DEFAULT_VLM_MODEL
 from omniocr.infrastructure.unlimited_ocr import DEFAULT_MODEL as DEFAULT_UNLIMITED_OCR_MODEL
 
+# None of these three imports a third-party package at module scope (Calamari
+# runs in a subprocess, the VLM engines speak HTTP), so they cannot fail.
+from omniocr.infrastructure.calamari import CalamariEngine
+from omniocr.infrastructure.unlimited_ocr import UnlimitedOCREngine
+from omniocr.infrastructure.vlm import VLMEngine
+
 # The scripts the ensemble routes to Kraken and the opt-in voters; every other
 # script falls through to Tesseract alone.
 ENSEMBLE_SCRIPTS = (Script.ANCIENT, Script.BYZANTINE, Script.POLYTONIC)
-
-# VLM and Calamari are optional extras; import failures gracefully disable them.
-try:
-    from omniocr.infrastructure.calamari import CalamariEngine  # noqa: F811
-
-    _CALAMARI_AVAILABLE = True
-except ImportError:
-    _CALAMARI_AVAILABLE = False
-
-try:
-    from omniocr.infrastructure.unlimited_ocr import UnlimitedOCREngine
-    from omniocr.infrastructure.vlm import VLMEngine  # noqa: F811
-
-    _VLM_AVAILABLE = True
-except ImportError:
-    _VLM_AVAILABLE = False
 
 
 def _verify_against_manifest(model_path: Path) -> None:
@@ -310,4 +300,7 @@ class _TesseractRouter:
         self._engine = engine
 
     def route(self, line: OCRLine, context: TenantContext) -> tuple[TesseractEngine, ...]:
+        return (self._engine,)
+
+    def engines(self) -> tuple[TesseractEngine, ...]:
         return (self._engine,)

@@ -32,6 +32,62 @@ def test_settings_load_boolean_limits_and_secret_from_environment() -> None:
     assert "secret" not in repr(settings)
 
 
+@pytest.mark.parametrize(
+    "settings",
+    [
+        Settings(),
+        Settings(enable_vlm=True, vlm_api_key="k"),
+        Settings(enable_vlm=True, unlimited_ocr_url="http://gpu:8000/v1"),
+    ],
+)
+def test_a_consistent_engine_set_has_no_problems(settings: Settings) -> None:
+    assert settings.problems() == ()
+
+
+def test_vlm_switched_on_with_nothing_to_call_is_a_problem() -> None:
+    (problem,) = Settings(enable_vlm=True).problems()
+
+    assert "OMNIOCR_ENABLE_VLM" in problem
+    assert "OMNIOCR_VLM_API_KEY" in problem
+
+
+@pytest.mark.parametrize(
+    "settings, name",
+    [
+        (Settings(vlm_api_key="k"), "OMNIOCR_VLM_API_KEY"),
+        (Settings(unlimited_ocr_url="http://gpu:8000/v1"), "OMNIOCR_UNLIMITED_OCR_URL"),
+    ],
+)
+def test_a_vlm_setting_given_while_vlm_is_off_is_a_problem(settings: Settings, name: str) -> None:
+    (problem,) = settings.problems()
+
+    assert name in problem
+    assert "OMNIOCR_ENABLE_VLM" in problem
+
+
+def test_a_problem_never_quotes_the_key() -> None:
+    assert "hunter2" not in " ".join(Settings(vlm_api_key="hunter2").problems())
+
+
+def test_an_illegal_combination_is_logged_not_raised(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        settings = Settings(enable_vlm=True)
+
+    assert settings.enable_vlm
+    assert [r.getMessage() for r in caplog.records] == list(settings.problems())
+
+
+def test_a_consistent_engine_set_logs_nothing(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        Settings()
+
+    assert caplog.records == []
+
+
 def test_settings_reject_invalid_values() -> None:
     with pytest.raises(ValueError, match="boolean"):
         Settings.from_env({"OMNIOCR_ENABLE_VLM": "maybe"})

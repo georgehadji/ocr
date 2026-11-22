@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 import os
 from collections.abc import Mapping
 from pathlib import Path
+
+_LOG = logging.getLogger("omniocr.config")
 
 _DEFAULT_APP_NAME = "omniocr"
 _DEFAULT_DESKTOP_MODE = True
@@ -76,6 +79,35 @@ class Settings:
             raise ValueError("job_timeout_s and result_ttl_s must be positive")
         if self.max_workers < 1:
             raise ValueError("max_workers must be at least 1")
+        # Warn, never raise: an existing environment that carries one of these
+        # combinations has been running, and refusing to start would break it.
+        for problem in self.problems():
+            _LOG.warning(problem)
+
+    def problems(self) -> tuple[str, ...]:
+        """Combinations that are accepted but do not do what they appear to.
+
+        The VLM voters (a cloud API key, an Unlimited-OCR server) run only when
+        ``enable_vlm`` is on, so the switch and what it enables must agree.
+        Messages name the setting, never its value: a key must not reach a log.
+        """
+        has_voter = bool(self.vlm_api_key) or bool(self.unlimited_ocr_url)
+        found: list[str] = []
+        if self.enable_vlm and not has_voter:
+            found.append(
+                "OMNIOCR_ENABLE_VLM is on but neither OMNIOCR_VLM_API_KEY nor "
+                "OMNIOCR_UNLIMITED_OCR_URL is set: no VLM voter will run"
+            )
+        if not self.enable_vlm:
+            if self.vlm_api_key:
+                found.append(
+                    "OMNIOCR_VLM_API_KEY is set but OMNIOCR_ENABLE_VLM is off: it is ignored"
+                )
+            if self.unlimited_ocr_url:
+                found.append(
+                    "OMNIOCR_UNLIMITED_OCR_URL is set but OMNIOCR_ENABLE_VLM is off: it is ignored"
+                )
+        return tuple(found)
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Settings":

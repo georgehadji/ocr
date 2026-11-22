@@ -24,6 +24,7 @@ import os
 import shutil
 import subprocess  # nosec B404 - fixed argv, no shell, used only to query tesseract
 import sys
+from enum import IntEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
@@ -37,6 +38,7 @@ from omniocr.infrastructure.model_manifest import (
 from omniocr.domain.models import (
     DocumentPage,
     DocumentStructure,
+    FailureKind,
     OCRLine,
     Script,
     TenantContext,
@@ -48,14 +50,20 @@ if TYPE_CHECKING:
     from omniocr.application.metrics import RegressionBaseline
     from omniocr.application.pipeline import PipelineOrchestrator
 
-# Exit codes. Stable contract for scripted callers — do not renumber.
-EXIT_OK = 0
-EXIT_FAILURE = 1  # pipeline or export failed
-EXIT_USAGE = 2  # argparse default for bad arguments
-EXIT_ENVIRONMENT = 3  # a required engine/model/dependency is missing
 
-# ``PageFailure.error_type`` the pipeline gives a page that produced no lines.
-_EMPTY_PAGE = "EmptyPage"
+# Exit codes. Stable contract for scripted callers — do not renumber.
+class ExitCode(IntEnum):
+    OK = 0
+    FAILURE = 1  # pipeline or export failed
+    USAGE = 2  # argparse default for bad arguments
+    ENVIRONMENT = 3  # a required engine/model/dependency is missing
+
+
+# The names scripts and tests already import; same members, same numbers.
+EXIT_OK = ExitCode.OK
+EXIT_FAILURE = ExitCode.FAILURE
+EXIT_USAGE = ExitCode.USAGE
+EXIT_ENVIRONMENT = ExitCode.ENVIRONMENT
 
 # Re-exported from the module that owns the layout, not redefined here.
 _MODELS_DIR = MODELS_DIR
@@ -420,9 +428,19 @@ def _build_pipeline(args: argparse.Namespace, exporter: IExporter) -> PipelineOr
 # --------------------------------------------------------------------------
 
 
+def _settings_problems() -> list[str]:
+    """What is wrong with the ``OMNIOCR_*`` settings the servers would start with."""
+    from omniocr.infrastructure.config import Settings
+
+    try:
+        return list(Settings.from_env().problems())
+    except ValueError as exc:  # an unreadable value: say so rather than crash the check
+        return [str(exc)]
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     env = _environment()
-    problems = _environment_problems(env)
+    problems = [*_environment_problems(env), *_settings_problems()]
     payload = {"ok": not problems, "problems": problems, **env}
 
     if args.json:
@@ -611,13 +629,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # run_iteratively streams pages so progress is visible and --max-pages can
     # stop early; a per-page failure is captured on the page, not raised.
     pages: list[DocumentPage] = []
-    failures: list[dict[str, Any]] = []
+    failures: list[dict[str, str | int]] = []
     for number, page in orchestrator.run_iteratively(payload, context):
         pages.append(page)
         for failure in page.failures:
-            failures.append(
-                {"page": number, "type": failure.error_type, "message": failure.message}
-            )
+            entry: dict[str, str | int] = {
+                "page": number,
+                "type": failure.error_type,
+                "message": failure.message,
+            }
+            if failure.stage is not None:  # additive: absent when the stage is unknown
+                entry["stage"] = str(failure.stage)
+            failures.append(entry)
         # Progress always goes to stderr, including under --json: stdout stays
         # machine-clean either way, and an unattended caller processing a long
         # book needs to see that it is still making progress.
@@ -661,13 +684,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # it must not fail the run on its own. It is still listed (JSON and stderr),
     # and a run that read nothing at all fails: that is a wrong model or script,
     # not a book.
-    empty_pages = [f["page"] for f in failures if f["type"] == _EMPTY_PAGE]
-    real_failures = [f for f in failures if f["type"] != _EMPTY_PAGE]
+    empty_pages = [f["page"] for f in failures if f["type"] == FailureKind.EMPTY_PAGE]
+    real_failures = [f for f in failures if f["type"] != FailureKind.EMPTY_PAGE]
     ok = not real_failures and len(empty_pages) < len(pages)
     if args.json:
+        from omniocr.infrastructure.engine_report import describe_engines
+
         _emit_json(
             {
                 "ok": ok,
+                "engines": describe_engines(getattr(orchestrator, "engines", tuple)()),
                 "input": str(source),
                 "output": str(out),
                 "format": fmt,

@@ -9,6 +9,38 @@ tracked under `[Unreleased]` until `v0.2.0` is cut per
 
 ## [Unreleased]
 
+### Added — the implicit state machines are explicit (PR #43)
+
+Lifecycles that lived in scattered strings and flags are each a `StrEnum` plus a transition table
+(`domain/state.py`); `docs/STATE_MACHINES.md` is generated from them and `scripts/gen_state_docs.py
+--check` is a CI gate. Plan and per-machine notes: `docs/STATE_MACHINES_PLAN.md`. Every wire and file
+value is unchanged; changes to JSON are additive.
+
+- **OCR job**: `/ocr/status/{job_id}` gains `reason` (client-safe, includes the failing stage) and
+  `pages_total` / `pages_failed`; a `done` job whose result file is gone reports `result missing`.
+- **Review session** (desktop): a dirty badge, a confirm before New session discards edits, and the
+  page is restored on reload.
+- **Pages and events**: `PageFailure.stage` records where a page failed; failure kinds and event
+  names are enums. `run --json` failures carry `stage` when known.
+- **Training**: a run ends as `promoted`, `refused`, `no_corrections` or `no_samples`, and a failed
+  run can no longer corrupt the model registry. `scripts/train_kraken.py` gains `--json` (one object,
+  also for usage errors and crashes) and `--strict-exit` (exit 4 refused, 5 nothing to train; without
+  it both still exit 0).
+- **Hyphenation and suggestions**: join verdicts and suggestion kinds are typed. `unjoin` now
+  restores a kept hyphen and the whitespace around a line exactly.
+- **Infra visibility**: the circuit breaker logs `state_transition` and exposes `state`; Kraken
+  reports `device_fallback`; `omniocr run --json` gains `engines` (`name`, `device`, `breaker`);
+  `Settings.problems()` flags a VLM switch that disagrees with its key or URL, logged as warnings
+  (never raised) and listed by `omniocr doctor`, which now reports an unreadable `OMNIOCR_*` value as a
+  problem instead of crashing.
+
+### Fixed — review findings on the state-machine work
+
+The desktop review UI no longer prints the first characters of the VLM API key (it says "VLM
+enabled"). A queue that matches `IJobQueue` without subclassing it is served from its `state` when it
+has no `status`. The unused `_CALAMARI_AVAILABLE` / `_VLM_AVAILABLE` import guards are gone; the
+imports cannot fail.
+
 ### Added — page workers on the server and cloud editions
 
 `OMNIOCR_MAX_WORKERS` (default 1, so nothing changes unless it is set) now reaches the pipeline

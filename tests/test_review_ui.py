@@ -149,3 +149,115 @@ def test_angle_brackets_in_ocr_text_are_escaped_not_parsed_as_html() -> None:
 
     assert any("&lt;τὸν&gt;" in block.value for block in app.markdown)
     assert not any("<τὸν>" in block.value for block in app.markdown)
+
+
+def _click(app: AppTest, label: str) -> AppTest:
+    return next(b for b in app.sidebar.button if b.label == label).click().run()
+
+
+def _labels(app: AppTest) -> list[str]:
+    return [b.label for b in app.sidebar.button]
+
+
+def test_new_session_with_unsaved_edits_asks_before_discarding() -> None:
+    app = _app(edit_mode=False)
+    app.text_area(key=f"ta_{_LINE_ID}").set_value("typed").run()
+    assert app.session_state["dirty"] is True
+
+    app = _click(app, "🔄 New session")
+
+    assert app.session_state["edited_lines"] == {_LINE_ID: "typed"}
+    assert {"Discard", "Keep"} <= set(_labels(app))
+
+    app = _click(app, "Keep")
+    assert app.session_state["edited_lines"] == {_LINE_ID: "typed"}
+    assert app.session_state["confirm_new"] is False
+
+
+def test_new_session_discard_clears_everything() -> None:
+    app = _app(edit_mode=False)
+    app.text_area(key=f"ta_{_LINE_ID}").set_value("typed").run()
+
+    app = _click(_click(app, "🔄 New session"), "Discard")
+
+    assert app.session_state["review_document"] is None
+    assert app.session_state["edited_lines"] == {}
+
+
+def test_new_session_without_edits_resets_at_once() -> None:
+    app = _click(_app(edit_mode=False), "🔄 New session")
+
+    assert app.session_state["review_document"] is None
+
+
+def test_saving_clears_the_unsaved_marker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app = _app(edit_mode=False)
+    app.session_state["file_bytes"] = b"pdf"
+    app.text_area(key=f"ta_{_LINE_ID}").set_value("typed").run()
+
+    app = _click(app, "💾 Save session")
+
+    assert app.session_state["dirty"] is False
+
+
+def test_saving_withdraws_a_pending_new_session_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Once the work is saved, there is nothing for the prompt to warn about."""
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app = _app(edit_mode=False)
+    app.text_area(key=f"ta_{_LINE_ID}").set_value("typed").run()
+
+    app = _click(_click(app, "🔄 New session"), "💾 Save session").run()
+
+    assert app.session_state["confirm_new"] is False
+    assert "Discard" not in _labels(app)
+    assert app.session_state["review_document"] is not None
+
+
+def test_committing_saves_the_session_so_a_reload_cannot_commit_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``committed_lines`` lives in the session file; left unsaved, a reload forgets it."""
+    import json
+
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".omniocr").mkdir()
+    app = _app(edit_mode=False)
+    app.text_area(key=f"ta_{_LINE_ID}").set_value("typed").run()
+
+    app = _click(app, "📚 Commit corrections for training")
+
+    (saved,) = (tmp_path / ".omniocr" / "sessions").glob("*.json")
+    assert json.loads(saved.read_text(encoding="utf-8"))["committed_lines"] == {_LINE_ID: "typed"}
+    assert app.session_state["dirty"] is False
+
+
+def test_committing_twice_appends_the_line_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The store is append-only, so a repeat click must not add a duplicate row."""
+    import sqlite3
+
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".omniocr").mkdir()
+    app = _app(edit_mode=False)
+    app.text_area(key=f"ta_{_LINE_ID}").set_value("typed").run()
+    commit = "📚 Commit corrections for training"
+
+    app = _click(_click(app, commit), commit)
+
+    with sqlite3.connect(tmp_path / ".omniocr" / "corrections.db") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM corrections").fetchone() == (1,)
+    assert app.session_state["committed_lines"] == {_LINE_ID: "typed"}
+    assert any("Nothing new to commit" in i.value for i in app.sidebar.info)
+
+    app.text_area(key=f"ta_{_LINE_ID}").set_value("typed again").run()
+    _click(app, commit)
+    with sqlite3.connect(tmp_path / ".omniocr" / "corrections.db") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM corrections").fetchone() == (2,)

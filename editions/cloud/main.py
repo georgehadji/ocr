@@ -22,4 +22,4 @@ from editions.common.api import create_app
 
 configure_logging("omniocr-cloud")
 
-app = create_app("OmniOCR Cloud", CeleryJobQueue(celery_app), settings)
+app = create_app("OmniOCR Cloud", CeleryJobQueue(celery_app, settings.upload_dir), settings)

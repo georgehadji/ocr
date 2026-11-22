@@ -91,7 +91,8 @@ def test_a_failed_export_raises_and_leaves_no_result(tmp_path: Path) -> None:
     out = tmp_path / "job.md"
     pipeline = _Pipeline(export_result=Err(ExportError("disk full")))
 
-    with pytest.raises(RuntimeError, match="disk full"):
+    # The message reaches the API client: the error class, never its raw text.
+    with pytest.raises(RuntimeError, match=r"^export failed \(ExportError\)$"):
         run_job(upload, out, pipeline, CONTEXT)  # type: ignore[arg-type]
 
     assert not out.exists()
@@ -103,7 +104,7 @@ def test_a_failed_run_raises(tmp_path: Path) -> None:
     upload.write_bytes(b"png")
     pipeline = _Pipeline(run_result=Err(ExportError("no engine")))
 
-    with pytest.raises(RuntimeError, match="no engine"):
+    with pytest.raises(RuntimeError, match=r"^the document could not be read \(ExportError\)$"):
         run_job(upload, tmp_path / "job.md", pipeline, CONTEXT)  # type: ignore[arg-type]
 
 

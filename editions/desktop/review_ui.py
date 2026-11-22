@@ -17,7 +17,7 @@ import html
 import io
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import streamlit as st
 from PIL import Image
@@ -38,12 +38,16 @@ from omniocr.infrastructure.exporters import MarkdownExporter
 from omniocr.infrastructure.logging import configure_logging
 from omniocr.infrastructure.review import (
     ReviewLine,
+    ReviewPhase,
     UndoLog,
     build_review_document,
     group_suggestions_by_reason,
     line_view_html,
     page_images,
+    pending_commit,
     persist_reviewed_lines,
+    read_session,
+    review_phase,
 )
 
 # Initialize structured logging for the edition.
@@ -186,6 +190,7 @@ def _save_session(file_name: str, file_data: bytes) -> None:
         "current_page": st.session_state.current_page,
         "ground_truth_lines": dict(st.session_state.ground_truth_lines),
         "edited_lines": dict(st.session_state.edited_lines),
+        "committed_lines": dict(st.session_state.committed_lines),
     }
     (SESSION_DIR / f"{fhash}.json").write_text(
         json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -212,7 +217,11 @@ _DEFAULTS: list[tuple[str, Any]] = [
     ("edited_lines", {}),
     ("file_bytes", b""),
     ("file_name", ""),
-    ("saved", False),
+    ("dirty", False),  # reviewed lines changed since the last save
+    ("committed_lines", {}),  # line_id → text already appended to the corrections store
+    ("ocr_error", None),  # why recognition failed, until the reviewer retries
+    ("ocr_failed_upload", None),  # file_id of the upload that raised `ocr_error`
+    ("confirm_new", False),  # "New session" is waiting for the reviewer to confirm
     ("decoded_images", {}),  # page_number → PIL.Image cache for fast navigation
     ("undo_log", UndoLog()),
 ]
@@ -235,7 +244,11 @@ def _set_line(store: str, line_id: str, value: str | None) -> None:
     ``store`` names the session dict. Every write goes through here, so
     "Undo last action" reverses the true last write.
     """
-    st.session_state.undo_log.set(_stores(), store, line_id, value)
+    log = st.session_state.undo_log
+    logged = len(log)
+    log.set(_stores(), store, line_id, value)
+    if len(log) != logged:  # a write that changed nothing leaves the session clean
+        st.session_state.dirty = True
 
 
 def _forget_widgets(line_id: str) -> None:
@@ -354,12 +367,36 @@ def _render_line_view(line: ReviewLine, display: str) -> None:
 st.sidebar.title("OmniOCR Review")
 st.sidebar.caption("Scholarly correction interface")
 
-if st.sidebar.button("🔄 New session", help="Clear all state and start fresh"):
+
+def _reset_session() -> None:
     # `state_key`, not `key`: at module scope this would rebind the `key` the
     # defaults loop above uses, the same global-reuse trap as `page`.
     for state_key in list(st.session_state.keys()):
         del st.session_state[state_key]
     st.rerun()
+
+
+if st.sidebar.button("🔄 New session", help="Clear all state and start fresh"):
+    if st.session_state.dirty:
+        st.session_state.confirm_new = True
+    else:
+        _reset_session()
+
+if st.session_state.confirm_new and not st.session_state.dirty:
+    # Saved since the prompt was raised: there is nothing left for it to warn about.
+    st.session_state.confirm_new = False
+
+if st.session_state.confirm_new:
+    st.sidebar.warning("Unsaved changes will be lost.")
+    discard_col, keep_col = st.sidebar.columns(2)
+    if discard_col.button("Discard", key="new_discard"):
+        _reset_session()
+    if keep_col.button("Keep", key="new_keep"):
+        st.session_state.confirm_new = False
+        st.rerun()
+
+if st.session_state.dirty:
+    st.sidebar.caption("● Unsaved changes")
 
 uploaded_file = st.sidebar.file_uploader(
     "Upload a PDF or image",
@@ -369,7 +406,37 @@ uploaded_file = st.sidebar.file_uploader(
 
 # ---------- Pipeline execution ----------
 
-if uploaded_file is not None and st.session_state.review_document is None:
+upload_id = uploaded_file.file_id if uploaded_file is not None else None
+
+
+def _fail_ocr(reason: str) -> NoReturn:
+    """Record why recognition failed, for the upload that failed, and show it."""
+    st.session_state.ocr_error = reason
+    st.session_state.ocr_failed_upload = upload_id
+    st.rerun()
+
+
+phase = review_phase(
+    document_loaded=st.session_state.review_document is not None,
+    upload_present=uploaded_file is not None,
+    ocr_error=st.session_state.ocr_error,
+    failed_upload=st.session_state.ocr_failed_upload,
+    upload_id=upload_id,
+)
+
+if phase is not ReviewPhase.OCR_FAILED and st.session_state.ocr_error is not None:
+    # The upload was removed or replaced: its failure no longer applies.
+    st.session_state.ocr_error = None
+    st.session_state.ocr_failed_upload = None
+
+if phase is ReviewPhase.OCR_FAILED:
+    st.error(f"OCR failed: {st.session_state.ocr_error}")
+    if st.button("🔁 Retry OCR"):
+        st.session_state.ocr_error = None
+        st.session_state.ocr_failed_upload = None
+        st.rerun()
+
+if uploaded_file is not None and phase is ReviewPhase.OCR_RUNNING:
     pdf_bytes = uploaded_file.read()
     file_name = uploaded_file.name
     st.session_state.file_bytes = pdf_bytes
@@ -378,59 +445,71 @@ if uploaded_file is not None and st.session_state.review_document is None:
     # Check for saved session
     session = _load_session(pdf_bytes)
     if session:
-        st.session_state.ground_truth_lines = session.get("ground_truth_lines", {})
-        st.session_state.edited_lines = session.get("edited_lines", {})
-        st.sidebar.success(
-            f"Restored session with {len(session['ground_truth_lines'])} corrections"
-        )
+        restored = read_session(session)
+        st.session_state.ground_truth_lines = restored.ground_truth_lines
+        st.session_state.edited_lines = restored.edited_lines
+        st.session_state.committed_lines = restored.committed_lines
+        st.session_state.current_page = restored.current_page
+        st.sidebar.success(f"Restored session with {len(restored.ground_truth_lines)} corrections")
 
-    with st.spinner("Initializing OCR pipeline…") if not session else st.spinner():
-        cfg = Settings.from_env()
-        # Built by the shared composition root, never wired here. Hand-wiring
-        # this UI previously left it with no recognition engine at all in the
-        # default path, and — with VLM enabled — routed to the VLM alone with
-        # no box-grounded engine to reconcile against, breaking the
-        # faithfulness rule the rest of the system enforces.
-        try:
-            vlm_key = cfg.vlm_api_key if (cfg.enable_vlm and cfg.vlm_api_key) else None
-            pipeline = create_ensemble_pipeline(
-                tesseract_language=cfg.tesseract_language,
-                kraken_model_path=cfg.kraken_model_path,
-                script=Script.POLYTONIC,
-                exporter=MarkdownExporter(),
-                vlm_api_key=vlm_key,
-                unlimited_ocr_url=cfg.unlimited_ocr_url if cfg.enable_vlm else None,
+    # Any failure becomes a state the reviewer can see and retry. Left to raise,
+    # the next rerun would start the whole run again with no word of why it stopped.
+    try:
+        with st.spinner("Initializing OCR pipeline…") if not session else st.spinner():
+            cfg = Settings.from_env()
+            # Built by the shared composition root, never wired here. Hand-wiring
+            # this UI previously left it with no recognition engine at all in the
+            # default path, and — with VLM enabled — routed to the VLM alone with
+            # no box-grounded engine to reconcile against, breaking the
+            # faithfulness rule the rest of the system enforces.
+            try:
+                vlm_key = cfg.vlm_api_key if (cfg.enable_vlm and cfg.vlm_api_key) else None
+                pipeline = create_ensemble_pipeline(
+                    tesseract_language=cfg.tesseract_language,
+                    kraken_model_path=cfg.kraken_model_path,
+                    script=Script.POLYTONIC,
+                    exporter=MarkdownExporter(),
+                    vlm_api_key=vlm_key,
+                    unlimited_ocr_url=cfg.unlimited_ocr_url if cfg.enable_vlm else None,
+                )
+            except ImportError as exc:
+                _fail_ocr(
+                    f"Missing dependency: {exc}. Install: pip install -e '.[pdf,kraken,opencv]'"
+                )
+
+            if cfg.enable_vlm and cfg.vlm_api_key:
+                # Never any part of the key: a screenshot of the sidebar is shared.
+                st.sidebar.info("VLM enabled")
+            ctx = TenantContext("desktop", "reviewer", "desktop")
+            total = pipeline.count_pages(pdf_bytes)
+            progress = st.sidebar.progress(0, f"OCR in progress — 0/{total} pages")
+            pages: list[DocumentPage] = []
+
+            # `ocr_page`, not `page`: this is a Streamlit script, so every binding
+            # here is a module global. Reusing `page` made the pipeline's
+            # `DocumentPage` and the review pane's `ReviewPage` share one name —
+            # two types with different line objects (`OCRLine.id` vs
+            # `ReviewLine.line_id`) reachable through the same variable.
+            for page_num, ocr_page in pipeline.run_iteratively(pdf_bytes, ctx):
+                pages.append(ocr_page)
+                if ocr_page.failures:
+                    st.sidebar.warning(f"Page {page_num}: {ocr_page.failures[0].describe()}")
+                progress.progress(page_num / total, f"OCR in progress — {page_num}/{total} pages")
+
+            progress.progress(1.0, "Complete — building review document")
+
+            # Build review document from pipeline output
+            doc_struct = DocumentStructure(pages=tuple(pages))
+            review_doc = build_review_document(doc_struct, page_images(pdf_bytes))
+            st.session_state.review_document = review_doc
+            # A restored page may no longer exist (file re-exported shorter).
+            st.session_state.current_page = min(
+                st.session_state.current_page, max(len(review_doc.pages) - 1, 0)
             )
-        except ImportError as exc:
-            st.error(f"Missing dependency: {exc}. Install: pip install -e '.[pdf,kraken,opencv]'")
-            st.stop()
-
-        if cfg.enable_vlm and cfg.vlm_api_key:
-            st.sidebar.info(f"VLM enabled: {cfg.vlm_api_key[:12]}…")
-        ctx = TenantContext("desktop", "reviewer", "desktop")
-        total = pipeline.count_pages(pdf_bytes)
-        progress = st.sidebar.progress(0, f"OCR in progress — 0/{total} pages")
-        pages: list[DocumentPage] = []
-
-        # `ocr_page`, not `page`: this is a Streamlit script, so every binding
-        # here is a module global. Reusing `page` made the pipeline's
-        # `DocumentPage` and the review pane's `ReviewPage` share one name —
-        # two types with different line objects (`OCRLine.id` vs
-        # `ReviewLine.line_id`) reachable through the same variable.
-        for page_num, ocr_page in pipeline.run_iteratively(pdf_bytes, ctx):
-            pages.append(ocr_page)
-            if ocr_page.failures:
-                st.sidebar.warning(f"Page {page_num} failed: {ocr_page.failures[0].message}")
-            progress.progress(page_num / total, f"OCR in progress — {page_num}/{total} pages")
-
-        progress.progress(1.0, "Complete — building review document")
-
-        # Build review document from pipeline output
-        doc_struct = DocumentStructure(pages=tuple(pages))
-        st.session_state.review_document = build_review_document(doc_struct, page_images(pdf_bytes))
-        st.session_state.current_page = 0
-        progress.empty()
-        st.rerun()
+            progress.empty()
+            st.rerun()
+    except Exception as exc:
+        _fail_ocr(f"{type(exc).__name__}: {exc}")
 
 # ---------- Review UI ----------
 
@@ -530,6 +609,7 @@ if st.session_state.review_document is not None:
         st.session_state.ground_truth_lines.clear()
         st.session_state.edited_lines.clear()
         st.session_state.undo_log.clear()
+        st.session_state.dirty = True
         for p in doc.pages:
             for line_ in p.lines:
                 _forget_widgets(line_.line_id)
@@ -539,6 +619,8 @@ if st.session_state.review_document is not None:
     st.sidebar.divider()
     if st.sidebar.button("💾 Save session", use_container_width=True):
         _save_session(file_name, file_bytes)
+        st.session_state.dirty = False
+        st.session_state.confirm_new = False
         st.sidebar.success("Session saved")
 
     # Session state and the JSON session file are UI scratch space; the
@@ -549,19 +631,32 @@ if st.session_state.review_document is not None:
     # undid, and every one of those would become a training row.
     if st.sidebar.button("📚 Commit corrections for training", use_container_width=True):
         reviewed = {**st.session_state.edited_lines, **st.session_state.ground_truth_lines}
+        # The store is append-only, so a second click on the same text would add
+        # the same rows again. Send only what changed since the last commit.
+        fresh = pending_commit(reviewed, st.session_state.committed_lines)
         if not reviewed:
             st.sidebar.warning("No reviewed lines to commit")
+        elif not fresh:
+            st.sidebar.info("Nothing new to commit")
         else:
             outcome = persist_reviewed_lines(
                 store=SqliteCorrectionStore(_CORRECTIONS_DB),
                 document=doc,
-                reviewed_text=reviewed,
+                reviewed_text=fresh,
                 corrected_by=_reviewer_id(),
             )
             if isinstance(outcome, Err):
                 st.sidebar.error(f"Could not commit corrections: {outcome.error}")
             else:
-                st.sidebar.success(f"Committed {outcome.value} corrections for training")
+                st.session_state.committed_lines.update(fresh)
+                # Saved at once: `committed_lines` survives a reload only in the
+                # session file, and a reload that forgot it would commit the same
+                # rows again. This also saves the edits, which were just committed.
+                _save_session(file_name, file_bytes)
+                st.session_state.dirty = False
+                st.sidebar.success(
+                    f"Committed {outcome.value} corrections for training; session saved"
+                )
     if st.sidebar.button("↩ Undo last action", disabled=not len(st.session_state.undo_log)):
         undone = st.session_state.undo_log.undo(_stores())
         if undone is not None:
@@ -569,6 +664,7 @@ if st.session_state.review_document is not None:
             # back on the next run, undoing the undo. Drop its state so it is
             # rebuilt from the restored text.
             _forget_widgets(undone.key)
+            st.session_state.dirty = True
         st.rerun()
 
     # --- Polytonic keyboard ---
@@ -803,7 +899,7 @@ if st.session_state.review_document is not None:
         with text_col:
             st.subheader(f"Page {page.number}")
             for f in page.failures:
-                st.error(f"Failed: {f.message}")
+                st.error(f.describe())
 
             for line in page.lines:
                 display = _final_text(line)
@@ -857,5 +953,5 @@ if st.session_state.review_document is not None:
                         cer = character_error_rate(orig, text)
                         st.write(f"**{lid[:20]}**: {text} *(CER: {cer:.3f})*")
 
-else:
+elif phase is ReviewPhase.EMPTY:
     st.info("Upload a PDF or image to begin review")
