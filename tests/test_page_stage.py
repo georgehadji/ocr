@@ -180,7 +180,14 @@ def test_failure_kinds_keep_their_wire_strings() -> None:
 
 
 def test_event_types_keep_their_wire_strings() -> None:
-    assert [str(e) for e in EventType] == ["page_completed", "page_failed", "model_promoted"]
+    assert [str(e) for e in EventType] == [
+        "page_completed",
+        "page_failed",
+        "model_promoted",
+        "training_refused",
+        "training_no_corrections",
+        "training_no_samples",
+    ]
 
 
 def test_pipeline_stages_name_the_stages_in_order() -> None:

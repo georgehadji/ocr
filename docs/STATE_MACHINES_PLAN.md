@@ -371,6 +371,19 @@ Each block: **target model → fix → UX / DX / AX gain → tests → files**.
 - **Files:** `domain/training.py`, `application/{training_orchestrator,promotion}.py`,
   `infrastructure/{model_registry,ketos_trainer}.py`, `scripts/train_kraken.py`.
 
+> **Phase 4 outcome — differences from the plan above.** `RefusalReason` lives in
+> `domain/errors.py` beside `PromotionRefused` (which gains an optional `reason`), so
+> `domain/training.py` can import both without a cycle. `SplitName` stays `(str, Enum)`;
+> the policy now compares `evaluated_on` to `SplitName.TEST` instead of the literal
+> `"test"`. Events are one `TrainingEvent` dataclass (formerly a class defined inside the
+> method) with three new `EventType`s: `training_refused`, `training_no_corrections`,
+> `training_no_samples`. **Behaviour changes to know about:** `train_kraken.py` now exits
+> 4 when a candidate is refused (it used to exit 0) and 5 when there was nothing to train
+> on (also 0 before); a missing base model or pages directory exits 3 (was 1); `--json`
+> is new. A damaged `promoted.json` now makes `register` return an error and leave the file
+> untouched; reads still treat it as "no promoted model". `KetosTrainer` clears
+> `ketos_out/` before each run.
+
 ### 4.6 M11 + M12 — Text-structure decisions (🟠/🟡, Phase 5)
 
 - `JoinVerdict(StrEnum)` and `JoinSeparator(StrEnum)` (`""`, `"-"`, `" "`);

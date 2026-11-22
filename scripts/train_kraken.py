@@ -14,12 +14,15 @@ Requires: ``kraken``, ``Pillow``, (optional) ``mlflow``.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from enum import IntEnum
 from pathlib import Path
 
 from omniocr.composition import create_training_pipeline
 from omniocr.domain.models import ModelRef, Script
 from omniocr.domain.result import Err
+from omniocr.domain.training import TrainingOutcome, TrainingReport
 from omniocr.infrastructure.model_manifest import resolve_kraken_model
 from omniocr.infrastructure.models import sha256_file
 
@@ -106,6 +109,13 @@ def _parse_args() -> argparse.Namespace:
         default="cli-user",
         help="Default corrected_by for any corrections added",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print one JSON object on stdout describing how the run ended "
+        "(exit codes: 0 promoted, 1 failed, 2 usage, 3 environment, "
+        "4 not promoted, 5 nothing to train on)",
+    )
     return parser.parse_args()
 
 
@@ -121,7 +131,68 @@ def _load_page_images(pages_dir: Path) -> dict[int, bytes]:
     return images
 
 
-def main() -> None:
+class TrainExit(IntEnum):
+    """Exit codes, so a caller can branch on how the run ended.
+
+    0-3 mean what they mean for the ``omniocr`` CLI; 4 and 5 are the two ways a
+    run can finish cleanly without producing a model.
+    """
+
+    PROMOTED = 0
+    FAILURE = 1  # training itself failed
+    USAGE = 2  # argparse default for bad arguments
+    ENVIRONMENT = 3  # a model or directory the run needs is missing
+    NOT_PROMOTED = 4  # trained, but the candidate did not beat its parent
+    NOTHING_TO_TRAIN = 5  # no accepted corrections, or none made a training line
+
+
+_BY_OUTCOME = {
+    TrainingOutcome.PROMOTED: TrainExit.PROMOTED,
+    TrainingOutcome.REFUSED: TrainExit.NOT_PROMOTED,
+    TrainingOutcome.NO_CORRECTIONS: TrainExit.NOTHING_TO_TRAIN,
+    TrainingOutcome.NO_SAMPLES: TrainExit.NOTHING_TO_TRAIN,
+}
+_ERRORS = {TrainExit.FAILURE, TrainExit.ENVIRONMENT}
+
+
+def _emit(
+    args: argparse.Namespace, code: TrainExit, outcome: str, message: str, **fields: object
+) -> TrainExit:
+    """Say how the run ended: one JSON object on stdout with ``--json``, else plain text."""
+    if args.json:
+        record = {"outcome": outcome, "exit_code": int(code), "message": message, **fields}
+        print(json.dumps(record, ensure_ascii=False))
+    else:
+        print(message, file=sys.stderr if code in _ERRORS else sys.stdout)
+    return code
+
+
+def _describe(report: TrainingReport) -> tuple[str, dict[str, object]]:
+    """The message and the extra JSON fields for a finished run."""
+    if report.promoted is not None:
+        promoted = report.promoted
+        return (
+            f"Model promoted! Improvement: {promoted.improvement_pct:+.2f}%\n"
+            f"Model hash: {promoted.model_ref.model_hash}\n"
+            f"Model path: {promoted.model_ref.model_name}",
+            {
+                "improvement_pct": promoted.improvement_pct,
+                "model_hash": promoted.model_ref.model_hash,
+                "model_path": promoted.model_ref.model_name,
+            },
+        )
+    if report.refusal is not None:
+        reason = report.refusal.reason
+        return (
+            f"Not promoted: {report.refusal}",
+            {"reason": None if reason is None else str(reason)},
+        )
+    if report.outcome is TrainingOutcome.NO_CORRECTIONS:
+        return "Nothing to train on: no accepted corrections.", {}
+    return "Nothing to train on: every correction was filtered out of the sample set.", {}
+
+
+def main() -> int:
     args = _parse_args()
 
     # Validate inputs
@@ -129,15 +200,24 @@ def main() -> None:
         try:
             args.base_model = Path(resolve_kraken_model(script=Script(args.script)))
         except FileNotFoundError as exc:
-            sys.exit(str(exc))
+            return _emit(args, TrainExit.ENVIRONMENT, "error", str(exc))
     if not args.base_model.is_file():
-        sys.exit(f"Base model not found: {args.base_model}")
+        return _emit(
+            args, TrainExit.ENVIRONMENT, "error", f"Base model not found: {args.base_model}"
+        )
 
     if not args.pages_dir.is_dir():
-        sys.exit(f"Pages directory not found: {args.pages_dir}")
+        return _emit(
+            args, TrainExit.ENVIRONMENT, "error", f"Pages directory not found: {args.pages_dir}"
+        )
     page_images = _load_page_images(args.pages_dir)
     if not page_images:
-        sys.exit(f"No page images named <page number>.<ext> in {args.pages_dir}")
+        return _emit(
+            args,
+            TrainExit.ENVIRONMENT,
+            "error",
+            f"No page images named <page number>.<ext> in {args.pages_dir}",
+        )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -173,17 +253,13 @@ def main() -> None:
     )
 
     if isinstance(result, Err):
-        sys.exit(f"Training failed: {result.error}")
+        return _emit(args, TrainExit.FAILURE, "error", f"Training failed: {result.error}")
 
-    promoted = result.value
-    if promoted is None:
-        print("Training completed but candidate did not meet promotion criteria.")
-        print("Check logs for details.")
-    else:
-        print(f"Model promoted! Improvement: {promoted.improvement_pct:+.2f}%")
-        print(f"Model hash: {promoted.model_ref.model_hash}")
-        print(f"Model path: {promoted.model_ref.model_name}")
+    message, fields = _describe(result.value)
+    return _emit(
+        args, _BY_OUTCOME[result.value.outcome], str(result.value.outcome), message, **fields
+    )
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

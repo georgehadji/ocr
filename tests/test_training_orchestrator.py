@@ -139,8 +139,8 @@ def test_training_runs_end_to_end_and_promotes_a_candidate_that_beats_its_parent
 
     result = _run(_orchestrator(tmp_path, True, calls, evaluator), tmp_path)
 
-    assert result.is_ok() and result.value is not None
-    assert result.value.checkpoint == tmp_path / "candidate.mlmodel"
+    assert result.is_ok() and result.value.promoted is not None
+    assert result.value.promoted.checkpoint == tmp_path / "candidate.mlmodel"
     # Both the candidate and the parent were built from their own weights.
     assert calls == [tmp_path / "candidate.mlmodel", tmp_path / "parent.mlmodel"]
 
@@ -150,7 +150,8 @@ def test_a_candidate_that_does_not_beat_its_parent_is_not_promoted(tmp_path: Pat
 
     result = _run(_orchestrator(tmp_path, False, [], evaluator), tmp_path)
 
-    assert result.is_ok() and result.value is None
+    assert result.is_ok() and result.value.promoted is None
+    assert result.value.outcome == "refused"
 
 
 def test_without_an_evaluation_corpus_training_refuses_to_start(tmp_path: Path) -> None:

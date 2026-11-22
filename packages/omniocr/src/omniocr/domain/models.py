@@ -215,6 +215,9 @@ class EventType(StrEnum):
     PAGE_COMPLETED = "page_completed"
     PAGE_FAILED = "page_failed"
     MODEL_PROMOTED = "model_promoted"
+    TRAINING_REFUSED = "training_refused"
+    TRAINING_NO_CORRECTIONS = "training_no_corrections"
+    TRAINING_NO_SAMPLES = "training_no_samples"
 
 
 @dataclass(frozen=True, slots=True)

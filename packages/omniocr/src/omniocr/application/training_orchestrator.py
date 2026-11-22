@@ -9,6 +9,7 @@ short-circuits with a typed error rather than raising.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from collections.abc import Callable
 from pathlib import Path
@@ -22,7 +23,7 @@ from omniocr.application.promotion import PromotionPolicy
 from omniocr.domain.errors import TrainingError
 from omniocr.domain.models import EventType, ModelRef
 from omniocr.domain.result import Err, Ok, Result
-from omniocr.domain.training import PromotedModel
+from omniocr.domain.training import TrainingOutcome, TrainingReport
 from omniocr.ports.interfaces import (
     ICorrectionStore,
     IEventBus,
@@ -41,6 +42,17 @@ _LOG = logging.getLogger("omniocr.training")
 # supplies it, so the orchestrator never names an engine: the candidate and its
 # parent are evaluated by the same real engine, only the weights differ.
 CheckpointEngineFactory = Callable[[Path], IOCREngine]
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingEvent:
+    """What a training run reports to the event bus. One per outcome."""
+
+    event_type: EventType
+    run_id: str
+    model_hash: str = ""  # promoted runs only
+    improvement_pct: float = 0.0  # promoted runs only
+    detail: str = ""  # a refusal's message
 
 
 class TrainingOrchestrator:
@@ -81,7 +93,7 @@ class TrainingOrchestrator:
         output_dir: Path,
         hyperparameters: Mapping[str, str] | None = None,
         spec: SampleSpecification | None = None,
-    ) -> Result[PromotedModel | None, TrainingError]:
+    ) -> Result[TrainingReport, TrainingError]:
         """Run the full training pipeline.
 
         Args:
@@ -94,9 +106,9 @@ class TrainingOrchestrator:
             spec: Sample eligibility specification.
 
         Returns:
-            A promoted model if training succeeded and the candidate beat its
-            parent, ``None`` if the candidate was refused promotion (with a
-            logged reason), or an error.
+            A ``TrainingReport`` saying how the run ended (nothing to learn
+            from, no usable samples, a refused candidate with its reason, or a
+            promoted model), or an error. Every outcome is also published.
         """
         # No held-out corpus means no evaluation, and a candidate that cannot
         # be evaluated can never be promoted: refuse before spending the
@@ -115,7 +127,8 @@ class TrainingOrchestrator:
         corrections = self._correction_store.all_accepted()
         if not corrections:
             _LOG.warning("no accepted corrections available for training")
-            return Ok(None)
+            self._publish(EventType.TRAINING_NO_CORRECTIONS, run_id)
+            return Ok(TrainingReport(TrainingOutcome.NO_CORRECTIONS))
 
         _LOG.info("training_start (%s) with %d corrections", run_id, len(corrections))
 
@@ -133,7 +146,8 @@ class TrainingOrchestrator:
 
         if not samples:
             _LOG.warning("no training samples after filtering")
-            return Ok(None)
+            self._publish(EventType.TRAINING_NO_SAMPLES, run_id)
+            return Ok(TrainingReport(TrainingOutcome.NO_SAMPLES))
 
         # Stage 3: Export training data to trainer format
         export_result = self._exporter.export(samples, output_dir / "training_data")
@@ -187,7 +201,8 @@ class TrainingOrchestrator:
                 run_id,
                 str(decision.error),
             )
-            return Ok(None)
+            self._publish(EventType.TRAINING_REFUSED, run_id, detail=str(decision.error))
+            return Ok(TrainingReport(TrainingOutcome.REFUSED, refusal=decision.error))
 
         promoted = decision.value
 
@@ -202,26 +217,27 @@ class TrainingOrchestrator:
             promoted.improvement_pct,
         )
 
+        self._publish(
+            EventType.MODEL_PROMOTED,
+            run_id,
+            model_hash=promoted.model_ref.model_hash,
+            improvement_pct=promoted.improvement_pct,
+        )
+        return Ok(TrainingReport(TrainingOutcome.PROMOTED, promoted=promoted))
+
+    def _publish(
+        self,
+        event_type: EventType,
+        run_id: str,
+        *,
+        model_hash: str = "",
+        improvement_pct: float = 0.0,
+        detail: str = "",
+    ) -> None:
         if self._event_bus is not None:
-            from dataclasses import dataclass
-
-            @dataclass(frozen=True)
-            class _PromotionEvent:
-                event_type: EventType
-                run_id: str
-                model_hash: str
-                improvement_pct: float
-
             self._event_bus.publish(
-                _PromotionEvent(
-                    event_type=EventType.MODEL_PROMOTED,
-                    run_id=run_id,
-                    model_hash=promoted.model_ref.model_hash,
-                    improvement_pct=promoted.improvement_pct,
-                )
+                TrainingEvent(event_type, run_id, model_hash, improvement_pct, detail)
             )
 
-        return Ok(promoted)
 
-
-__all__ = ["CheckpointEngineFactory", "TrainingOrchestrator"]
+__all__ = ["CheckpointEngineFactory", "TrainingEvent", "TrainingOrchestrator"]

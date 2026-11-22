@@ -1,5 +1,17 @@
 from __future__ import annotations
 
+from enum import StrEnum
+
+
+class RefusalReason(StrEnum):
+    """Why a candidate model was not promoted. The strings are a frozen contract."""
+
+    WRONG_SPLIT = "wrong_split"
+    TOO_FEW_SAMPLES = "too_few_samples"
+    SCRIPT_REGRESSED = "script_regressed"
+    BELOW_THRESHOLD = "below_threshold"
+    PARENT_CER_ZERO = "parent_cer_zero"
+
 
 class PipelineError(Exception):
     """Base class for OCR pipeline errors."""
@@ -30,7 +42,15 @@ class TrainingError(PipelineError):
 
 
 class PromotionRefused(TrainingError):
-    """A model candidate did not meet the promotion criteria."""
+    """A model candidate did not meet the promotion criteria.
+
+    ``reason`` names the rule that refused it, so a caller can branch on it
+    instead of parsing the message; ``None`` for a refusal built without one.
+    """
+
+    def __init__(self, message: str, reason: RefusalReason | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 class CorrectionStoreError(TrainingError):
